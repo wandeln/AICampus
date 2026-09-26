@@ -703,7 +703,9 @@
     }
   }
 
-  document.getElementById("ws-test-solution-btn").addEventListener("click", wsTestRunStart);
+  // Button existiert nur bei gespeicherter Aufgabe (sonst kein Testlauf)
+  const wsTestSolutionBtn = document.getElementById("ws-test-solution-btn");
+  if (wsTestSolutionBtn) wsTestSolutionBtn.addEventListener("click", wsTestRunStart);
   document.getElementById("ws-test-run-stop-btn").addEventListener("click", wsTestRunStop);
 
   // ─── Datei-Baum + Editor (gemeinsame Komponente workspace.js) ──
