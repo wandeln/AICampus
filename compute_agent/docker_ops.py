@@ -720,6 +720,7 @@ def remove_workspace(key: str) -> None:
         _docker("rm", "-f", c, timeout=60, check=False)
     _docker("volume", "rm", volume_name(key), check=False)
     remove_ws_network(key)
+    _PORT_CONFIRMED.pop(key, None)  # frischer Container = frische Bestätigung
 
 
 def stop_container_only(key: str) -> None:
@@ -728,6 +729,7 @@ def stop_container_only(key: str) -> None:
         clean_phantom_mounts(key)  # Mount-Point-Reste VOR dem Rm räumen
         _docker("rm", "-f", container_name(key), timeout=60, check=False)
         remove_ws_network(key)
+    _PORT_CONFIRMED.pop(key, None)  # frischer Container = frische Bestätigung
 
 
 def stop_container_soft(key: str) -> None:
@@ -739,7 +741,8 @@ def stop_container_soft(key: str) -> None:
     aufräumen kann. Der Idle-Reaper entfernt ihn nach IDLE_TIMEOUT.
     Volume bleibt erhalten (in beiden Fällen)."""
     if container_state(key) in ("running", "created"):
-        _docker("stop", container_name(key), timeout=60, check=False)
+        _docker("stop", container_name(key), timeout=60)
+    _PORT_CONFIRMED.pop(key, None)  # Prozesse tot = Bestätigung veraltet
 
 
 def list_workspaces() -> list[dict]:
@@ -970,18 +973,24 @@ def exec_sync(key: str, command: str, working_dir: str = "/workspace",
 # ── Port-Erkennung / -Kill (Preview) ──────────────────────────────
 
 # Einmaliger Scan im Container: erst die LISTEN-Sockets aus
-# /proc/net/tcp{,6} (Inode + Port-HEX), dann der fd-Walk
-# (PID → Inode). Kein procps/ss nötig (fehlen in slim-Images);
+# /proc/net/tcp{,6} (Inode + Port-HEX + Bind-Adresse-HEX), dann der
+# fd-Walk (PID → Inode). Kein procps/ss nötig (fehlen in slim-Images);
 # mawk hat kein strtonum → Port-HEX kommt nach Python.
-# 0B00007F = 127.0.0.11 (little-endian): Docker-Built-in-DNS — der
-# Daemon injiziert dort (bei User-Defined-Netzwerken, z. B. unsere
-# isolierten Internet-Netze) ephemere Loopback-Listener in den
-# Container-Netns, die keinem Container-Prozess gehören → aussortieren
-# (sowieso unerreichbar via 127.0.0.1-Preview-Relay).
+#
+# Die Bind-Adresse fliegt mit, weil der Preview-Relay IMMER
+# 127.0.0.1 dialt (s. relay/relay.go): nur Listener, die von dort aus
+# erreichbar sind, sind in der UI sinnvoll — also 0.0.0.0 / 127.0.0.1 /
+# :: (Dual-Stack) bzw. v4-mapped ::ffff:-Formen davon. Listener, die
+# ausschliesslich auf ::1 oder auf die NIC-IP (eth0) gebunden sind,
+# wären in der Liste sichtbar, aber per Preview NICHT antwortbar —
+# ebenso der Docker-Built-in-DNS (127.0.0.11, von dem der Daemon bei
+# User-Defined-Netzwerken Listener in den Container-Netns injiziert).
+# Gefiltert wird in _port_scan per Adress-Whitelist (little-endian-
+# HEX, s. _loopback_reachable).
 _PORT_SCAN_SCRIPT = (
     'echo "L"; '
     'awk \'FNR>1 && $4=="0A" {split($2,a,":"); '
-    'if (a[1]!="0B00007F") print $10" "a[2]}\' '
+    'print $10" "a[2]" "a[1]}\' '
     '/proc/net/tcp /proc/net/tcp6 2>/dev/null; '
     'echo "P"; '
     'for f in /proc/[0-9]*/fd/*; do '
@@ -994,10 +1003,37 @@ _PORT_SCAN_SCRIPT = (
 )
 
 
-def _port_scan(key: str) -> dict[int, set[str]]:
-    """Alle LISTEN-Ports des Containers: {port: {pid, …}}.
+# /proc-Adressen sind little-endian: 127.0.0.1 → „0100007F“,
+# 127.0.0.11 (Docker-DNS) → „0B00007F“, 172.18.0.2 → „020012AC“.
+_REACHABLE_V4 = ("00000000", "0100007F")  # 0.0.0.0, 127.0.0.1
 
-    Sammelt ALLE PIDs, die den Socket-Inode halten (früher nur der erste).
+
+def _loopback_reachable(addr: str) -> bool:
+    """HEX-Bind-Adresse aus /proc/net/tcp{,6} → per 127.0.0.1 erreichbar?
+
+    True nur für die Adressen, an die der Preview-Relay (127.0.0.1) auch
+    wirklich connecten kann: v4-Wildcard, 127.0.0.1, v6-Wildcard
+    (Dual-Stack) sowie die seltenen expliziten v4-mapped-Binds
+    ::ffff:0.0.0.0 / ::ffff:127.0.0.1. ::1, NIC-IPs und 127.0.0.11
+    fallen raus → werden in der UI nicht gelistet.
+    """
+    a = addr.upper()
+    if len(a) == 8:
+        return a in _REACHABLE_V4
+    if len(a) == 32:
+        if a == "0" * 32:  # :: (Dual-Stack, v4-mapped-Connects angenommen)
+            return True
+        if a[16:24] == "FFFF0000":  # ::ffff:a.b.c.d → v4-Teil prüfen
+            return a[24:32] in _REACHABLE_V4
+    return False
+
+
+def _port_scan(key: str) -> dict[int, set[str]]:
+    """Vom Preview-Relay erreichbare LISTEN-Ports: {port: {pid, …}}.
+
+    Sammelt ALLE PIDs, die den Socket-Inode halten (früher nur der
+    erste). Listener auf Bind-Adressen, an die 127.0.0.1 nicht
+    connecten kann (::1, NIC-IP, Docker-DNS), bleiben ausgeblendet.
     """
     _ensure_running(key)
     code, out_b, _err, _ = _run_capped(
@@ -1013,17 +1049,19 @@ def _port_scan(key: str) -> dict[int, set[str]]:
             section = line
             continue
         parts = line.split()
-        if len(parts) != 2:
-            continue
         if section == "L":
-            ino, port_hex = parts
+            if len(parts) != 3:
+                continue
+            ino, port_hex, addr = parts
             try:
                 port = int(port_hex, 16)
             except ValueError:
                 continue
-            if 0 < port <= 65535:
+            if 0 < port <= 65535 and _loopback_reachable(addr):
                 listeners.append((ino, port))
         elif section == "P":
+            if len(parts) != 2:
+                continue
             pid, ino = parts
             pids_by_ino.setdefault(ino, set()).add(pid)
     ports: dict[int, set[str]] = {}
@@ -1032,13 +1070,31 @@ def _port_scan(key: str) -> dict[int, set[str]]:
     return ports
 
 
-def list_workspace_ports(key: str) -> list[dict]:
-    """Im Container lauschende Ports: [{port, pid}] (sortiert, dedupliziert).
+# Anti-Flacker-Debounce (s. list_workspace_ports): letzter Scan je Key.
+# Wird in remove_workspace/stop_container_only geleert (frischer
+# Container = frische Bestätigung).
+_PORT_CONFIRMED: dict[str, dict[int, set[str]]] = {}
 
+
+def list_workspace_ports(key: str) -> list[dict]:
+    """Im Container lauschende, BESTÄTIGTE Ports: [{port, pid}] (sortiert).
+
+    Bestätigt = in zwei aufeinanderfolgenden Scans gesehen (UI-Poll ist
+    ~8 s): echte Web-Dienste sind über Scans hinweg stabil und erscheinen
+    einen Poll später; kurzlebige Helfer-Listener (z. B. ephemale
+    localhost-Ports, die ML-Tools um ihren Hauptprozess aufmachen) wären
+    sonst als „Ghost-Port" in der UI sichtbar, bis der Prozess stirbt —
+    der Preview-Klick darauf endet dann in „connection refused".
     Funktioniert auch bei network=none (Loopback existiert immer).
     """
-    return [{"port": port, "pid": min(pids) if pids else None}
-            for port, pids in sorted(_port_scan(key).items())]
+    ports = _port_scan(key)
+    prev = _PORT_CONFIRMED.get(key)
+    _PORT_CONFIRMED[key] = ports
+    if prev is None:
+        return []  # erster Scan: alles erst in Bestätigung
+    confirmed = {p: pids for p, pids in ports.items() if p in prev}
+    return [{"port": p, "pid": min(pids) if pids else None}
+            for p, pids in sorted(confirmed.items())]
 
 
 # Wie runs._TREE_KILL, aber Signal-Parameter (15/9): rekursiv den
