@@ -113,9 +113,9 @@ def _up_headers(headers, *, upgrade: bool) -> list[tuple[str, str]]:
 
     Weg: host/cookie (→ _sanitize_cookie, separat wieder an),
     Connection/Keep-Alive/TE (von build_request_head neu gesetzt),
-    Proxy-Header. Bei `upgrade=True`: sec-websocket-* mitnehmen +
-    `Connection: Upgrade`/`Upgrade: websocket` setzen (build_request_head
-    erkennt das Upgrade am Connection-Header).
+    Proxy-Header, sec-websocket-extensions (s. u.). Bei `upgrade=True`:
+    sec-websocket-* mitnehmen + `Connection: Upgrade`/`Upgrade: websocket`
+    setzen (build_request_head erkennt das Upgrade am Connection-Header).
     """
     out: list[tuple[str, str]] = []
     ws: dict[str, str] = {}
@@ -128,6 +128,16 @@ def _up_headers(headers, *, upgrade: bool) -> list[tuple[str, str]]:
         if n in ("sec-websocket-key", "sec-websocket-version",
                  "sec-websocket-protocol"):
             ws[n] = value
+            continue
+        if n == "sec-websocket-extensions":
+            # NIE an den Ziel-Server weitergeben: permessage-deflate wird
+            # hier nicht durchproxiert (Browser-Seite intern bei Uvicorn,
+            # Agent-Leiste hier roh). Würde ein deflate-fähiges Ziel (z. B.
+            # marimo/websockets) es verhandeln, komprimierte es seine
+            # Frames — die gingen hier als Plaintext durch → binärer Müll
+            # im Browser (JSON.parse-Fehler). Ziele ohne Deflate
+            # (Jupyter/Tornado) ignorieren es, deshalb trat es nur bei
+            # Marimo auf.
             continue
         out.append((n, value))
     if upgrade:
@@ -435,6 +445,8 @@ class _FrameReader:
             return None
         fin = bool(b0 & 0x80)
         op = b0 & 0x0F
+        if b0 & 0x70:
+            raise ValueError("RSV-Bits gesetzt (WS-Extension nicht unterstützt)")
         if b1 & 0x80:
             raise ValueError("Masked Frame von Server erwartet")
         n = b1 & 0x7F
@@ -820,7 +832,8 @@ async def preview_ws(task_id: int, rest: str, websocket: WebSocket):
                     buf = bytearray()
                     cur = None
         except Exception:
-            pass
+            logger.warning("Preview-WS: Agent-Pump beendet (Fehler)",
+                           exc_info=True)
         # EOF ohne Close-Frame
         try:
             await websocket.close(code=1001)
