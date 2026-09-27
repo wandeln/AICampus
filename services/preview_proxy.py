@@ -340,20 +340,35 @@ class PreviewSubdomainMiddleware:
         from services import auth_service
         payload = auth_service.decode_access_token(
             _cookie_value(cookie, "access_token"))
-        if not payload or payload.get("sub") != user_id:
-            if scope["type"] == "http":
-                await _error_page(
-                    403, "Zugriff verweigert.",
-                    "Öffne die Aufgabe in AICampus — der Link ist nur für "
-                    "deine eigene Sitzung gültig.")(scope, receive, send)
-            else:
-                await StarletteWebSocket(scope, receive, send).close(code=1008)
-            return
+        unauth = not payload or payload.get("sub") != user_id
+        if unauth:
+            # Browser (v. a. Chrome) laden das PWA-Manifest OHNE
+            # Cookies (Manifest-Fetch mit credentials: omit, s.
+            # w3c/manifest#776 / Chromium 40734972). Ohne Ausnahme
+            # spült jede App mit Manifest (z. B. Marimo) die Konsole
+            # mit 403s. Das Manifest ist öffentliche App-Metadaten
+            # (Name/Icons, keine Workspace-Daten) → der Label-User
+            # (HMAC-verifiziert) dient als Identität; die
+            # Task/Course-Checks in _resolve bleiben erhalten.
+            manifest_fetch = (
+                scope["type"] == "http" and path == "/manifest.json"
+                and scope.get("method") in ("GET", "HEAD"))
+            if not manifest_fetch:
+                if scope["type"] == "http":
+                    await _error_page(
+                        403, "Zugriff verweigert.",
+                        "Öffne die Aufgabe in AICampus — der Link ist nur "
+                        "für deine eigene Sitzung gültig.")(scope, receive, send)
+                else:
+                    await StarletteWebSocket(scope, receive,
+                                             send).close(code=1008)
+                return
 
         rest = f"{port}/{path.lstrip('/')}"
         if scope["type"] == "http":
-            response = await preview_http(task_id, rest,
-                                          Request(scope, receive))
+            response = await preview_http(
+                task_id, rest, Request(scope, receive),
+                trusted_user_id=user_id if unauth else None)
             await response(scope, receive, send)
         else:
             await preview_ws(task_id, rest,
@@ -504,8 +519,14 @@ class _ChunkedDecoder:
 
 # ── Auth + Routing (sync, läuft im Executor) ──────────────────────
 
-def _resolve_sync(task_id: int, token: str):
+def _resolve_sync(task_id: int, token: str,
+                  trusted_user_id: int | None = None):
     """Cookie-Auth + Task/Course-Check + Agent-Pick.
+
+    trusted_user_id ersetzt die Cookie-Auth durch den Label-User
+    (HMAC-verifizierte Subdomain) — nur für Cookie-freie Browser-
+    Fetches ohne Datencharakter (PWA-Manifest, s. Middleware). Die
+    Task/Course-Mitgliedschaft wird auch dann geprüft.
 
     Liefert (agent_url, agent_key, workspace_key, user_id);
     None = degraded (503); wirft _AuthError bei 4xx.
@@ -515,10 +536,13 @@ def _resolve_sync(task_id: int, token: str):
     from services import auth_service
     from services.workspace_service import workspace_key, workspace_service
 
-    payload = auth_service.decode_access_token(token) if token else None
-    if not payload:
-        raise _AuthError(401, "Nicht authentifiziert.")
-    user_id = payload.get("sub")
+    if trusted_user_id is not None:
+        user_id = trusted_user_id
+    else:
+        payload = auth_service.decode_access_token(token) if token else None
+        if not payload:
+            raise _AuthError(401, "Nicht authentifiziert.")
+        user_id = payload.get("sub")
     if not user_id:
         raise _AuthError(401, "Ungültiges Token.")
     with Session(engine) as session:
@@ -549,11 +573,14 @@ def _resolve_sync(task_id: int, token: str):
         return (agent["url"], agent.get("key") or "", key, user.id)
 
 
-async def _resolve(task_id: int, token: str):
+async def _resolve(task_id: int, token: str,
+                   trusted_user_id: int | None = None):
     """_resolve_sync im Executor (DB) mit Timeout."""
     loop = asyncio.get_running_loop()
     return await asyncio.wait_for(
-        loop.run_in_executor(None, _resolve_sync, task_id, token), timeout=20)
+        loop.run_in_executor(
+            None, _resolve_sync, task_id, token, trusted_user_id),
+        timeout=20)
 
 
 # ── Routes ────────────────────────────────────────────────────────
@@ -562,15 +589,21 @@ async def _resolve(task_id: int, token: str):
     "/preview/{task_id}/{rest:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
 )
-async def preview_http(task_id: int, rest: str, request: Request):
-    """HTTP-Preview: streamt Request/Response zum Agent-Preview-Server."""
+async def preview_http(task_id: int, rest: str, request: Request,
+                       trusted_user_id: int | None = None):
+    """HTTP-Preview: streamt Request/Response zum Agent-Preview-Server.
+
+    trusted_user_id: nur vom Subdomain-Middleware gesetzt (Cookie-freie
+    PWA-Manifest-Fetches, s. dort).
+    """
     port, up_path = _parse_preview_path(rest, request.url.query)
     if port is None:
         return _json(400, "Ungültiger Port.")
 
     try:
         ctx = await _resolve(task_id, _cookie_value(
-            request.headers.get("cookie", ""), "access_token"))
+            request.headers.get("cookie", ""), "access_token"),
+            trusted_user_id=trusted_user_id)
     except _AuthError as e:
         return _json(e.status, e.message)
     except Exception:
