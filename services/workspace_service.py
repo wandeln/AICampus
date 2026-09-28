@@ -752,6 +752,16 @@ class WorkspaceService:
         ).all()
 
     @staticmethod
+    def get_task_file(session: Session, task: Task,
+                      path: str) -> Optional[TaskWorkspaceFile]:
+        return session.exec(
+            select(TaskWorkspaceFile).where(
+                TaskWorkspaceFile.task_id == task.id,
+                TaskWorkspaceFile.path == path,
+            )
+        ).first()
+
+    @staticmethod
     def order_map(session: Session, task: Task) -> dict[str, int]:
         """Anzeige-Reihenfolge (path → sort_order) für Ordner und
         [init]-Artefakte (task_workspace_orders)."""
@@ -1096,10 +1106,14 @@ class WorkspaceService:
         return resolved["image"]
 
     def init_build(self, session: Session, task: Task,
-                   agent: Optional[dict] = None) -> dict:
+                   agent: Optional[dict] = None,
+                   force: bool = False) -> dict:
         """Task-Image (.init.sh-Build) auf dem Agenten bauen (idempotent
         über den init-Hash: gleicher Hash + vorhandenes Image → sofort
         ready).
+
+        force=True: Idempotenz überspringen — Skript läuft komplett neu,
+        alte Init-Artefakte werden gelöscht + neu erzeugt (Cleansweep).
 
         Ohne .init.sh/.init_hidden.sh: verwaiste Task-Images entfernen
         (kein Task-Image mehr nötig) → Status „none“.
@@ -1141,6 +1155,7 @@ class WorkspaceService:
             init_b64=init_b64,
             init_private_b64=init_private_b64,
             folders=sorted(folder_paths),
+            force=force,
         )
         result["agent"] = agent["name"]
         return result
@@ -1177,10 +1192,15 @@ class WorkspaceService:
         result["agent"] = agent["name"]
         return result
 
-    def on_task_saved(self, session: Session, task: Task) -> dict:
+    def on_task_saved(self, session: Session, task: Task,
+                      force: bool = False) -> dict:
         """Task-Save-Seiteneffekte: Image-Spec + Assets + Init-Build auf
         ALLE Engines des Pools (damit der erste Student auf einem fertigen
         Node landet). Fehler werden pro Agent gesammelt, nicht geworfen.
+
+        force=True (manuelles „Sync & Init“): Init-Build wird erzwungen —
+        das Skript läuft komplett neu, die alten Init-Artefakte werden
+        gelöscht und neu erzeugt.
 
         Persistiert den Per-Agenten-Status als JSON in
         Task.workspace_assets_status: {agent_url: {assets, task_image,
@@ -1220,7 +1240,8 @@ class WorkspaceService:
             except ComputeAgentError as e:
                 a_status["assets"] = {"status": "failed", "error": e.message}
             try:
-                a_status["task_image"] = self.init_build(session, task, agent)
+                a_status["task_image"] = self.init_build(
+                    session, task, agent, force=force)
             except ComputeAgentError as e:
                 a_status["task_image"] = {"status": "failed", "error": e.message}
             results["assets"].append(dict(a_status))

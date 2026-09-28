@@ -47,6 +47,8 @@
                 <button type="button" id="ws-tree-refresh-btn" title="Aktualisieren" class="ws-tree-btn">⟳</button>
                 <button type="button" id="ws-new-file-btn" title="Neue Datei in der Wurzel anlegen" class="ws-tree-btn">＋ 📄</button>
                 <button type="button" id="ws-new-folder-btn" title="Neuen Ordner in der Wurzel anlegen" class="ws-tree-btn">＋ 📁</button>
+                <button type="button" id="ws-upload-btn" title="Dateien hochladen (mehrere möglich) — alternativ per Drag & Drop auf einen Ordner" class="ws-tree-btn">⬆</button>
+                <button type="button" id="ws-upload-folder-btn" title="Ordner hochladen (inkl. Ordner-Struktur)" class="ws-tree-btn">📁⬆</button>
                 <span id="ws-save-state" class="ml-auto text-[10px] text-gray-400 truncate"></span>
                 <button type="button" id="ws-fullscreen-btn" title="Vollbild" class="ws-tree-btn">⛶</button>
               </div>
@@ -218,6 +220,7 @@
     canCreate: true,
     canDelete: true,
     canMove: true,
+    canUpload: true,
     canReorder: true,  // nur lokal (localStorage) — eigene Ansicht
     localOrderKey: "wsorder-" + {{ current_user.id }} + "-" + {{ task.id }},
     allowBulk: true,  // editierbare Ordner umbenennen/löschen (dirOpGate)
@@ -385,6 +388,7 @@
 
   function setWsToolbarEnabled(enabled) {
     ["submit-btn", "ws-new-file-btn", "ws-new-folder-btn",
+     "ws-upload-btn", "ws-upload-folder-btn",
      "ws-tree-refresh-btn", "ws-reset-btn", "ws-new-terminal-btn"].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = !enabled;
@@ -946,6 +950,10 @@
   document.getElementById("ws-tree-refresh-btn").addEventListener("click", () => wsUI.refresh());
   document.getElementById("ws-new-file-btn").addEventListener("click", () => wsUI.newFileIn(""));
   document.getElementById("ws-new-folder-btn").addEventListener("click", () => wsUI.newFolderIn(""));
+  // Upload: mehrere Dateien / kompletter Ordner (mit Struktur);
+  // alternativ Dateien/Ordner per Drag & Drop auf einen Ordner im Baum.
+  document.getElementById("ws-upload-btn").addEventListener("click", () => wsUI.uploadTo("", "files"));
+  document.getElementById("ws-upload-folder-btn").addEventListener("click", () => wsUI.uploadTo("", "folders"));
   document.getElementById("ws-reset-btn").addEventListener("click", wsResetWorkspace);
   document.getElementById("ws-toggle-btn").addEventListener("click", wsToggleWorkspace);
   document.getElementById("ws-new-terminal-btn").addEventListener("click", (e) => {

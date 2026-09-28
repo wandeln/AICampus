@@ -141,7 +141,8 @@
           <button type="button" id="ws-files-refresh-btn" title="Aktualisieren" class="ws-tree-btn">⟳</button>
           <button type="button" id="ws-files-new-btn" title="Neue Datei in der Wurzel anlegen" class="ws-tree-btn">＋ 📄</button>
           <button type="button" id="ws-files-new-folder-btn" title="Neuen Ordner in der Wurzel anlegen" class="ws-tree-btn">＋ 📁</button>
-          <button type="button" id="ws-files-upload-btn" title="Datei hochladen (Dataset / Binär)" class="ws-tree-btn">⬆</button>
+          <button type="button" id="ws-files-upload-btn" title="Dateien hochladen (mehrere möglich) — alternativ per Drag & Drop auf einen Ordner" class="ws-tree-btn">⬆</button>
+          <button type="button" id="ws-files-upload-folder-btn" title="Ordner hochladen (inkl. Ordner-Struktur)" class="ws-tree-btn">📁⬆</button>
           <span id="ws-file-save-state" class="ml-auto text-[10px] text-gray-400 truncate"></span>
           <button type="button" id="ws-files-fullscreen-btn" title="Vollbild" class="ws-tree-btn">⛶</button>
         </div>
@@ -166,7 +167,6 @@
         </div>
       </div>
     </div>
-    <input type="file" id="ws-files-upload-input" class="hidden">
 
 
     {% if task and task.id and task.task_type == 'workspace' %}
@@ -727,12 +727,13 @@
     allowBulk: true,
     canReorder: true,
     canSetAccess: true,
+    canUpload: true,
     folderMove: true,
     folderApi: true,  // Ordner on-disk + in der DB verwalten (anlegen/
                       // verschieben/löschen — auch leere bleiben nach
                       // Reload sichtbar, z. B. für .solution/)
     saveStateEl: document.getElementById("ws-file-save-state"),
-    emptyMsg: "(noch keine Dateien — mit „＋ 📄“, „＋ 📁“ oder „⬆“ in der Tree-Toolbar beginnen)",
+    emptyMsg: "(noch keine Dateien — mit „＋ 📄“, „＋ 📁“, „⬆“ in der Tree-Toolbar oder Dateien/Ordner per Drag & Drop hierher ziehen)",
     noTaskMsg: "Erst die Aufgabe erstellen (speichern) — danach können Dateien hier gepflegt werden.",
     moveGate: (src, dst) => {
       if (wsUI.isInitPath(src) || wsUI.isInitPath(dst))
@@ -765,21 +766,22 @@
     wsUI.newFolderIn("");
   });
 
+  // Upload: mehrere Dateien / kompletter Ordner (mit Struktur);
+  // Zielpfad/-ordner wird bei Bedarf gefragt, alternativ Dateien/
+  // Ordner per Drag & Drop direkt auf einen Ordner im Baum ziehen.
   document.getElementById("ws-files-upload-btn").addEventListener("click", () => {
     if (!WS_TASK_ID) {
       showToast("Erst die Aufgabe speichern.", "warning");
       return;
     }
-    document.getElementById("ws-files-upload-input").click();
+    wsUI.uploadTo("", "files");
   });
-  document.getElementById("ws-files-upload-input").addEventListener("change", async (e) => {
-    const file = e.target.files[0];
-    e.target.value = "";
-    if (!file) return;
-    const defaultPath = "data/" + file.name;
-    const path = prompt("Zielpfad für den Upload (Vorschlag: " + defaultPath + ")", defaultPath);
-    if (!path || !path.trim()) return;
-    await wsUI.uploadFile(file, path.trim());
+  document.getElementById("ws-files-upload-folder-btn").addEventListener("click", () => {
+    if (!WS_TASK_ID) {
+      showToast("Erst die Aufgabe speichern.", "warning");
+      return;
+    }
+    wsUI.uploadTo("", "folders");
   });
 
   // ─── LLM-Generierung: Hooks für die AI-Box im Base-Template ───

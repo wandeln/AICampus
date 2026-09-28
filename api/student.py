@@ -13,7 +13,7 @@ from typing import Optional
 from urllib.parse import quote
 
 import websockets
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, WebSocket
 from fastapi.responses import JSONResponse
 from sqlmodel import Session, SQLModel, select
 from starlette.websockets import WebSocketDisconnect
@@ -1655,6 +1655,35 @@ async def workspace_create_file(
     if not isinstance(content, str):
         raise HTTPException(422, "Feld 'content' muss ein String sein.")
     data = content.encode("utf-8")
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(413, "Datei zu groß (max. 50 MB).")
+    try:
+        result = await asyncio.to_thread(client.write_file, key, p, data)
+    except ComputeAgentError as e:
+        raise _agent_http(e)
+    return {"ok": True, "path": p, "size": result.get("size")}
+
+
+@router.post("/tasks/{task_id}/workspace/upload")
+async def workspace_upload_file(
+    task_id: int,
+    file: UploadFile = File(...),
+    path: str = Form(...),
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Binary-Upload (Datasete etc.) in den eigenen Container.
+
+    Mehrfach-Upload (Dateien/Ordner) läuft client-seitig als mehrere
+    Einzel-Requests; der Zielpfad trägt die Ordner-Struktur und wird
+    anlegen inkl. Eltern-Verzeichnissen (docker-exec mkdir -p).
+    """
+    task = await _load_ws_task(task_id, session, user)
+    client = _ws_client_or_error(session, task)
+    key = _ws_key(task, user)
+    p = _safe_ws_path(path)
+    _ws_require_writable(session, task, p)
+    data = await file.read()
     if len(data) > MAX_FILE_BYTES:
         raise HTTPException(413, "Datei zu groß (max. 50 MB).")
     try:

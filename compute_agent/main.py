@@ -625,36 +625,48 @@ def assets_sync(course: int, task: int, body: dict,
     _op(payload, f"task:{course}:{task}")
     files = body.get("files") or []
     folders = [str(d).strip() for d in (body.get("folders") or []) if str(d).strip()]
-    for d in folders:
-        try:
-            docker_ops.ensure_asset_dir(course, task, d)
-        except docker_ops.DockerError as e:
-            raise HTTPException(status_code=getattr(e, "status", 422),
-                                detail=f"{d}: {e}") from e
-    results = []
-    for f in files:
-        path = str(f.get("path", ""))
-        try:
-            data = base64.b64decode(f.get("content_b64") or "")
-            size = docker_ops.write_asset_file(course, task, path, data)
-            results.append({"path": path, "status": "ready", "size": size})
-        except docker_ops.DockerError as e:
-            raise HTTPException(status_code=getattr(e, "status", 422),
-                                detail=f"{path}: {e}") from e
-    removed = []
-    if body.get("delete_missing"):
-        if docker_ops.init_build_running(course, task):
-            # Purge würde Init-Artefakte im shared Asset-Dir löschen, BEVOR
-            # der Build das Manifest (den Purge-Schutz) geschrieben hat —
-            # inkl. laufender Downloads (leere Ziel-Ordner werden
-            # mit-rasirt → z. B. FileNotFoundError in Download-Skripten).
-            # Der nächste Sync nach dem Build räumt dann auf.
-            logger.info("Asset-Purge übersprungen (Init-Build läuft): %s/%s",
-                        course, task)
-        else:
-            removed = docker_ops.purge_missing_assets(
-                course, task, [r["path"] for r in results],
-                keep_dirs=folders)
+    # Task-Lock während der Schreibphase: ohne Sperre könnte ein laufender
+    # Init-Build die sync-ten Dateien in sein After-Snapshot einfangen
+    # (→ fälschlich als Init-Artefakt im Manifest, s. asset_sync_lock).
+    # Der Sync wartet dann auf den Build (Build-Budget ≤ INIT_TIMEOUT).
+    with docker_ops.asset_sync_lock(course, task):
+        for d in folders:
+            try:
+                docker_ops.ensure_asset_dir(course, task, d)
+            except docker_ops.DockerError as e:
+                raise HTTPException(status_code=getattr(e, "status", 422),
+                                    detail=f"{d}: {e}") from e
+        results = []
+        for f in files:
+            path = str(f.get("path", ""))
+            try:
+                data = base64.b64decode(f.get("content_b64") or "")
+                size = docker_ops.write_asset_file(course, task, path, data)
+                results.append({"path": path, "status": "ready", "size": size})
+            except docker_ops.DockerError as e:
+                raise HTTPException(status_code=getattr(e, "status", 422),
+                                    detail=f"{path}: {e}") from e
+        if body.get("delete_missing"):
+            # Sync-Sidecar: exakt die aktuell gesyncten Task-Dateien
+            # (Vollspiegel) — der Init-Build-Cleansweep nutzt das, um
+            # Task-Dateien von Init-Artefakten zu unterscheiden.
+            docker_ops.write_task_files(
+                docker_ops.asset_dir(course, task),
+                [r["path"] for r in results])
+        removed = []
+        if body.get("delete_missing"):
+            if docker_ops.init_build_running(course, task):
+                # Purge würde Init-Artefakte im shared Asset-Dir löschen,
+                # BEVOR der Build das Manifest (den Purge-Schutz) geschrieben
+                # hat — inkl. laufender Downloads (leere Ziel-Ordner werden
+                # mit-rasirt → z. B. FileNotFoundError in Download-Skripten).
+                # Der nächste Sync nach dem Build räumt dann auf.
+                logger.info("Asset-Purge übersprungen (Init-Build läuft): %s/%s",
+                            course, task)
+            else:
+                removed = docker_ops.purge_missing_assets(
+                    course, task, [r["path"] for r in results],
+                    keep_dirs=folders)
     return {"status": "ready", "files": results, "removed": removed}
 
 
@@ -664,6 +676,19 @@ def assets_list(course: int, task: int,
                 payload: dict = Depends(auth.verify_token)) -> dict:
     _op(payload, f"task:{course}:{task}")
     return {"files": docker_ops.list_assets(course, task)}
+
+
+@app.delete("/tasks/{course}/{task}/init-artifact")
+@_translate
+def init_artifact_remove(course: int, task: int, body: dict,
+                         payload: dict = Depends(auth.verify_token)) -> dict:
+    """Manifest-Eintrag (shared/seed/private) + Datei entfernen — für
+    Task-Dateien, die der Asset-Sync fälschlich als Init-Artefakt
+    registriert hat (Race: Upload während laufendem Build). Der nächste
+    Init-Build schreibt das Manifest neu."""
+    _op(payload, f"task:{course}:{task}")
+    path = str((body or {}).get("path") or "")
+    return docker_ops.remove_init_artifact(course, task, path)
 
 
 @app.delete("/assets/{course}/{task}")
@@ -767,12 +792,14 @@ def init_build(course: int, task: int, body: dict,
     """Task-Image-Build starten (idempotent: vorhanden → ready).
 
     Body: {image, init_hash, deadline?, readonly_paths?, hidden_paths?,
-    init_b64?, init_private_b64?, folders?} — image ist die aufgelöste
-    Spec-Image-Referenz, init_hash = Backend-Hash (Format: 12 Hex-Zeichen),
-    readonly/hidden = Top-Level-🔒/👤-Pfade (rw-Mounts im Build),
-    init_b64/init_private_b64 = 👤-Skripte .init.sh/.init_hidden.sh
-    (werden in .private/ persistiert), folders = Ordner-Pfade der Aufgabe
-    (werden in den Build-Quellen angelegt).
+    init_b64?, init_private_b64?, folders?, force?} — image ist die
+    aufgelöste Spec-Image-Referenz, init_hash = Backend-Hash (Format:
+    12 Hex-Zeichen), readonly/hidden = Top-Level-🔒/👤-Pfade (rw-Mounts
+    im Build), init_b64/init_private_b64 = 👤-Skripte .init.sh/.init_
+    hidden.sh (werden in .private/ persistiert), folders = Ordner-Pfade
+    der Aufgabe (werden in den Build-Quellen angelegt), force = Build
+    erzwingen (überspringt die Idempotenz-Prüfung, Skript läuft komplett
+    neu, alte Init-Artefakte werden gelöscht + neu erzeugt).
     """
     _op(payload, f"task:{course}:{task}")
     image = str(body.get("image") or "")
@@ -796,7 +823,8 @@ def init_build(course: int, task: int, body: dict,
         init_private_b64 = str(init_private_b64)
     return docker_ops.start_init_build(
         course, task, init_hash, image, body.get("deadline"),
-        readonly_paths, hidden_paths, init_b64, init_private_b64, folders)
+        readonly_paths, hidden_paths, init_b64, init_private_b64, folders,
+        force=bool(body.get("force")))
 
 
 @app.get("/tasks/{course}/{task}/init-status")

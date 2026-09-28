@@ -211,10 +211,14 @@ def _check_image_spec(session: Session, course_id: int, name: str | None) -> str
     return name or None
 
 
-def _schedule_workspace_sync(task_id: int) -> None:
+def _schedule_workspace_sync(task_id: int, force: bool = False) -> None:
     """Task-Save-Seiteneffekte (Asset-Sync + Init-Build) im Hintergrund —
     eigener Session-Thread, damit die Antwort nicht auf den Agent wartet.
-    Starke Thread-Referenzen, damit nichts weg-GC'd wird."""
+    Starke Thread-Referenzen, damit nichts weg-GC'd wird.
+
+    force=True (manuelles „Sync & Init“): Init-Build wird erzwungen —
+    .init.sh läuft komplett neu, die alten Init-Artefakte werden zuerst
+    gelöscht und dann neu erzeugt (Manifest = exakt dieses Ergebnis)."""
 
     def _work() -> None:
         try:
@@ -240,7 +244,8 @@ def _schedule_workspace_sync(task_id: int) -> None:
                         except Exception:  # noqa: BLE001
                             pass
                     try:
-                        workspace_service.on_task_saved(bg_session, task)
+                        workspace_service.on_task_saved(
+                            bg_session, task, force=force)
                     except Exception as e:  # noqa: BLE001 — Status liegt in workspace_assets_status
                         logger.warning("Workspace-Sync (task %s) fehlgeschlagen: %s", task_id, e)
         finally:
@@ -1775,29 +1780,67 @@ def _require_workspace_task(task: Task) -> None:
         raise HTTPException(400, "Keine Workspace-Aufgabe.")
 
 
-def _init_artifact_lookup(session: Session, task: Task) -> dict[str, dict]:
-    """Init-Artefakte (Manifest vom Agenten) als Map {path: {scope, size, is_binary}}.
-
-    Agent nicht erreichbar (oder kein Init) → {} — die UI zeigt dann
-    einfach keine [init]-Einträge (degradierter Modus, wie ohne Agenten).
+def _init_artifact_data(session: Session, task: Task) -> dict | None:
+    """Roh-Response des Agenten ({files: [...], dirs: [...]}) — Manifest
+    vom ersten erreichbaren Pool-Agenten. None: kein Init oder Agent
+    nicht erreichbar (degradierter Modus: UI zeigt keine [init]-Einträge).
     """
     from services.compute_client import ComputeAgentError
     if not task_has_init(task):
-        return {}
+        return None
     for agent in _task_pool_agents(session, task):
         try:
-            data = workspace_service.client_for(agent).init_artifacts(
+            return workspace_service.client_for(agent).init_artifacts(
                 task.course_id, task.id, "all")
         except ComputeAgentError:
             continue
-        out: dict[str, dict] = {}
-        for e in data.get("files", []):
-            p = str(e.get("path") or "")
-            if p:
-                out[p] = {"scope": e.get("scope"), "size": e.get("size", 0),
-                          "is_binary": bool(e.get("is_binary"))}
-        return out
-    return {}
+    return None
+
+
+def _init_artifact_lookup(session: Session, task: Task) -> dict[str, dict]:
+    """Init-Artefakt-DATEIEN (Manifest) als Map
+    {path: {scope, size, is_binary}}."""
+    out: dict[str, dict] = {}
+    for e in (_init_artifact_data(session, task) or {}).get("files", []):
+        p = str(e.get("path") or "")
+        if p:
+            out[p] = {"scope": e.get("scope"), "size": e.get("size", 0),
+                      "is_binary": bool(e.get("is_binary"))}
+    return out
+
+
+def _init_dir_lookup(session: Session, task: Task) -> dict[str, str]:
+    """Init-ORDNER (Manifest-Vor-/Nach-Diff des letzten Builds) als Map
+    {path: scope} — exakt die Ordner, die .init.sh angelegt hat
+    (inkl. leerer)."""
+    out: dict[str, str] = {}
+    for e in (_init_artifact_data(session, task) or {}).get("dirs", []):
+        p = str(e.get("path") or "")
+        if p:
+            out[p] = str(e.get("scope") or "")
+    return out
+
+
+def _drop_init_artifact_entries(session: Session, task: Task,
+                                paths: list[str]) -> None:
+    """Init-Manifest-Einträge auf ALLEN Pool-Agenten entfernen (bestrebt).
+
+    Heilt getarnte Task-Dateien: ein Upload, der während eines laufenden
+    Init-Builds sync-te wurde, ist fälschlich im Manifest gelandet — der
+    Eintrag (und die Datei auf dem Agenten) wird hier entfernt. Der
+    nächste Init-Build schreibt das Manifest neu; vom .init.sh wirklich
+    erzeugte Dateien entstehen beim Rebuild erneut.
+    """
+    from services.compute_client import ComputeAgentError
+    for p in paths:
+        for agent in _task_pool_agents(session, task):
+            try:
+                workspace_service.client_for(agent).remove_init_artifact(
+                    task.course_id, task.id, p)
+            except ComputeAgentError:
+                # 404 = auf diesem Agenten nicht gelistet; Agent
+                # unerreichbar = degradierter Modus (wie Lookup).
+                pass
 
 
 def _reject_init_artifact(session: Session, task: Task, path: str) -> None:
@@ -1806,10 +1849,36 @@ def _reject_init_artifact(session: Session, task: Task, path: str) -> None:
     Init-Artefakte (Ergebnisse von .init.sh/.init_hidden.sh) liegen auf dem
     Agenten und entstehen nur per neuem Init-Build — sie sind im
     Tutor-Dateibaum virtuell und read-only.
+
+    Ausnahme: echte Task-Dateien (DB-Row am selben Pfad). Ein
+    Manifest-Eintrag dazu ist ein Sync/Build-Race-Artefakt (Upload während
+    laufendem Build) — der Eintrag wird entfernt und die Mutation läuft
+    normal durch (der nächste Init-Build schreibt das Manifest neu).
     """
-    if path in _init_artifact_lookup(session, task):
+    if path not in _init_artifact_lookup(session, task):
+        return
+    if workspace_service.get_task_file(session, task, path) is None:
         raise HTTPException(
             403, "Init-Artefakt ist read-only (per neuem Init-Build neu erzeugen).")
+    _drop_init_artifact_entries(session, task, [path])
+
+
+def _reject_init_dir(session: Session, task: Task, p: str) -> None:
+    """Mutationen an/in Init-Ordnern ablehnen (read-only): Datei/Ordner
+    anlegen, hinein verschieben, löschen, Zugriffs-Klasse ändern.
+    Init-Ordner = Manifest-Einträge aus dem Vor-/Nach-Diff des letzten
+    Builds — exakt die Ordner, die .init.sh angelegt hat (eine explizite
+    Tutor-Zeile dazu kann nicht entstehen: Anlegen ist hier blockt,
+    und der Build zählt nur Ordner, die vorher nicht existierten)."""
+    init_dirs = _init_dir_lookup(session, task)
+    if not init_dirs:
+        return
+    q = str(p)
+    while q:
+        if q in init_dirs:
+            raise HTTPException(
+                403, "Init-Artefakt ist read-only (per neuem Init-Build neu erzeugen).")
+        q = q.rsplit("/", 1)[0] if "/" in q else ""
 
 
 def _assert_path_free(session: Session, task: Task, p: str) -> None:
@@ -1852,6 +1921,21 @@ def _init_artifact_entries(session: Session, task: Task,
             "init": True,
             "updated_at": None,
         })
+    return out
+
+
+def _init_dir_entries(session: Session, task: Task) -> list[dict]:
+    """Init-Ordner (Manifest) als virtuelle [init]-Zeilen im Ordner-Baum
+    — Access erbt den Ziel-Ordner (Store): shared→🔒, seed→✏️ (Root =
+    editierbar), private→👤. Explizite Tutor-Zeilen gewinnen (dann kein
+    init-Flag → editierbar)."""
+    fm = workspace_service.folder_map(session, task)
+    out = []
+    for p, scope in sorted(_init_dir_lookup(session, task).items()):
+        if p in fm:
+            continue
+        acc = _INIT_ACCESS_BY_SCOPE.get(scope, "readonly")
+        out.append({"path": p, "access": acc, "own": None, "init": True})
     return out
 
 
@@ -1917,6 +2001,7 @@ async def list_workspace_files(
         "access": effective_folder_access(p, fm),
         "own": fm.get(p),
     } for p in sorted(fm)]
+    out_folders.extend(_init_dir_entries(session, task))
     # no-store: nach Moves/Deletes darf der Browser keine gecachte (alte)
     # Liste zeigen, sonst wirken Dateien scheinbar „dupliziert“.
     return JSONResponse(
@@ -2008,6 +2093,7 @@ async def create_workspace_file(
         raise HTTPException(422, "Feld 'path' fehlt.")
     p = _safe_task_path(str(body["path"]))
     _reject_init_artifact(session, task, p)
+    _reject_init_dir(session, task, p)
     _assert_path_free(session, task, p)
     content = body.get("content") or ""
     if not isinstance(content, str):
@@ -2037,9 +2123,17 @@ async def move_workspace_file(
     src = _safe_task_path(str(body.get("src") or ""))
     dst = _safe_task_path(str(body.get("dst") or ""))
     arts = _init_artifact_lookup(session, task)
-    if src in arts or dst in arts:
-        raise HTTPException(
-            403, "Init-Artefakt ist read-only (per neuem Init-Build neu erzeugen).")
+    blocked = [q for q in (src, dst) if q in arts]
+    if blocked:
+        real = {f.path for f in workspace_service.task_files(session, task)}
+        _drop_init_artifact_entries(session, task,
+                                    [q for q in blocked if q in real])
+        if any(q not in real for q in blocked):
+            raise HTTPException(
+                403, "Init-Artefakt ist read-only (per neuem Init-Build neu erzeugen).")
+    # DB-Datei in einen Init-Ordner zu verschieben würde ihn zu einem
+    # gemischten (editierbaren) Ordner machen → blocken.
+    _reject_init_dir(session, task, dst)
     try:
         row = workspace_service.move_task_file(session, task, src, dst)
     except ValueError as e:
@@ -2091,6 +2185,7 @@ async def upload_workspace_file(
     _require_workspace_task(task)
     p = _safe_task_path(path)
     _reject_init_artifact(session, task, p)
+    _reject_init_dir(session, task, p)
     _assert_path_free(session, task, p)
     data = await file.read()
     if len(data) > MAX_WORKSPACE_TOTAL_BYTES:
@@ -2137,6 +2232,10 @@ async def set_workspace_access(
     body = await request.json()
     p = _safe_task_path(str(body.get("path") or ""))
     _reject_init_artifact(session, task, p)
+    if body.get("is_folder"):
+        # Klasse setzen legt eine explizite Zeile an → der Init-Ordner
+        # wäre nicht mehr read-only.
+        _reject_init_dir(session, task, p)
     access = body.get("access")
     if access not in (None, "readonly", "hidden"):
         raise HTTPException(422,
@@ -2167,9 +2266,20 @@ async def move_workspace_folder(
     src = _safe_task_path(str(body.get("src") or ""))
     dst = _safe_task_path(str(body.get("dst") or ""))
     arts = _init_artifact_lookup(session, task)
-    if src in arts or dst in arts:
-        raise HTTPException(
-            403, "Init-Artefakt ist read-only (per neuem Init-Build neu erzeugen).")
+    blocked = [a for a in arts if a == src or a.startswith(src + "/")]
+    if blocked:
+        # Race-Geister (Task-Dateien, die fälschlich im Manifest sind):
+        # Einträge entfernen; echte Init-Artefakte bleiben read-only.
+        real = {f.path for f in workspace_service.task_files(session, task)}
+        _drop_init_artifact_entries(
+            session, task, [q for q in blocked if q in real])
+        if any(q not in real for q in blocked):
+            raise HTTPException(
+                403, "Enthält Init-Artefakte — diese sind read-only "
+                     "(per neuem Init-Build neu erzeugen).")
+    # Ziel in/an einen Init-Ordner → blocken (Deckung mit delete: ein
+    # Init-Ordner hat Artefakte im Subtree und wird oben schon blockt).
+    _reject_init_dir(session, task, dst)
     try:
         workspace_service.move_folder(session, task, src, dst)
     except ValueError as e:
@@ -2193,6 +2303,7 @@ async def create_workspace_folder(
     body = await request.json()
     p = _safe_task_path(str(body.get("path") or ""))
     _reject_init_artifact(session, task, p)
+    _reject_init_dir(session, task, p)
     try:
         workspace_service.create_task_folder(session, task, p)
     except ValueError as e:
@@ -2213,11 +2324,19 @@ async def delete_workspace_folder(
     task = await _load_workspace_task(task_id, session, user)
     _require_workspace_task(task)
     p = _safe_task_path(path)
+    _reject_init_dir(session, task, p)
     arts = _init_artifact_lookup(session, task)
-    if any(a == p or a.startswith(p + "/") for a in arts):
-        raise HTTPException(
-            403, "Enthält Init-Artefakte — diese sind read-only "
-                 "(per neuem Init-Build neu erzeugen).")
+    blocked = [a for a in arts if a == p or a.startswith(p + "/")]
+    if blocked:
+        # Race-Geister (Task-Dateien, die fälschlich im Manifest sind):
+        # Einträge entfernen; echte Init-Artefakte bleiben read-only.
+        real = {f.path for f in workspace_service.task_files(session, task)}
+        _drop_init_artifact_entries(
+            session, task, [q for q in blocked if q in real])
+        if any(q not in real for q in blocked):
+            raise HTTPException(
+                403, "Enthält Init-Artefakte — diese sind read-only "
+                     "(per neuem Init-Build neu erzeugen).")
     try:
         workspace_service.delete_task_folder(session, task, p)
     except ValueError as e:
@@ -2232,15 +2351,21 @@ async def sync_workspace(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Asset-Sync + Init-Build manuell anstoßen (Retry-Button).
+    """Asset-Sync + Init-Build erzwungen neu ausführen (Sync-&-Init-Button).
+
+    Im Gegensatz zum automatischen Sync bei Task-Save (idempotent über
+    den init-Hash) wird der Init-Build hier erzwungen: .init.sh läuft
+    komplett neu, die alten Init-Artefakte werden zuerst gelöscht und
+    dann neu erzeugt (Manifest = exakt das Ergebnis dieses Laufs).
+    Achtung: Downloads im Skript werden bei einem Force-Run wiederholt.
 
     Läuft im Hintergrund; der Status ist danach in
     task.workspace_assets_status (per GET /tasks/{id} pollen).
     """
     task = await _load_workspace_task(task_id, session, user)
     _require_workspace_task(task)
-    _schedule_workspace_sync(task.id)
-    return {"ok": True, "message": "Sync gestartet."}
+    _schedule_workspace_sync(task.id, force=True)
+    return {"ok": True, "message": "Sync & Init gestartet."}
 
 
 @router.post("/tasks/{task_id}/workspace/init")
@@ -2249,15 +2374,16 @@ async def workspace_init_build(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Task-Image (.init.sh) (neu) bauen — Force-Rebuild-Button.
+    """Task-Image (.init.sh) erzwungen neu bauen — Force-Rebuild-Button.
 
-    Der Init-Build ist über den init-Hash idempotent; ein echter Rebuild
-    passiert, wenn .init.sh oder das Image sich geändert haben. Läuft
-    wie der Sync im Hintergrund (on_task_saved → init_build je Agent).
+    Der Init-Build ist normalerweise über den init-Hash idempotent;
+    hier wird er erzwungen (Skript läuft komplett neu, alte Init-
+    Artefakte werden gelöscht + neu erzeugt). Läuft wie der Sync im
+    Hintergrund (on_task_saved → init_build je Agent).
     """
     task = await _load_workspace_task(task_id, session, user)
     _require_workspace_task(task)
-    _schedule_workspace_sync(task.id)
+    _schedule_workspace_sync(task.id, force=True)
     return {"ok": True, "message": "Init-Build gestartet."}
 
 

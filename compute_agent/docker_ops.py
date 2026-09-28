@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -1558,9 +1559,16 @@ def all_workspace_mem_usage() -> dict[str, int]:
 # Student-Volumes werden davon gepopuliert), .init_alias/ = Marker-Dateien
 # für Init-Builds ohne Image-Änderung (ersetzen die alten Alias-Tags auf
 # dem Basis-Image, s. task_image_alias). .init_tmp_* = Build-Temp.
-RESERVED_ASSET_DIRS = (".private", ".seeds", ".init_alias")
+RESERVED_ASSET_DIRS = (".private", ".seeds", ".init_alias", ".init_backup")
 INIT_TMP_PREFIX = ".init_tmp_"
 INIT_MANIFEST_NAME = ".init_manifest.json"
+# Sync-Sidecar: Task-Dateien des letzten (Vollspiegel-)Syncs — der
+# Build-Cleansweep nutzt sie, um Task-Dateien von Init-Artefakten zu
+# unterscheiden. Dot-File → fällt durch Snapshots/Purge durch.
+TASK_FILES_NAME = ".task_files.json"
+# Backup der alten Init-Artefakte (vom Cleansweep verlagert; Rollback
+# stellt sie her, Erfolg wird verworfen).
+INIT_BACKUP_NAME = ".init_backup"
 
 
 def _is_reserved_asset_part(part: str) -> bool:
@@ -1694,9 +1702,13 @@ def purge_missing_assets(course: int, task: int, keep_paths: list[str],
     base = asset_dir(course, task)
     if not base.is_dir():
         return []
-    keep = set(keep_paths) | _read_init_manifest(base)["shared"]
+    man = _read_init_manifest(base)
+    keep = set(keep_paths) | man["shared"]
     keep = {k for k in keep if not k.endswith("/")}
     keep_dirs = {d.strip().strip("/") for d in (keep_dirs or []) if d.strip()}
+    # Init-Ordner (Manifest) bleiben auch leer — sie sind nur per
+    # neuem Init-Build zu ändern.
+    keep_dirs |= man["shared_dirs"]
     removed: list[str] = []
     for p in sorted(_iter_asset_files(base)):
         rel = str(p.relative_to(base))
@@ -1759,6 +1771,24 @@ def _init_task_lock(course: int, task: int) -> threading.Lock:
             l = threading.Lock()
             INIT_TASK_LOCKS[(course, task)] = l
         return l
+
+
+@contextmanager
+def asset_sync_lock(course: int, task: int):
+    """Task-Lock für Asset-Sync-Schreibzugriffe (assets_sync-Endpoint).
+
+    Dieselbe Sperre wie der Init-Build (tlock): der Sync wartet, bis ein
+    laufender Build das Before-/After-Snapshot-Fenster verlassen hat.
+    Ohne Sperre könnte eine sync-te User-Datei zwischen die Snapshots
+    landen und fälschlich als Init-Artefakt (shared) ins Manifest
+    geraten — oder vom Build-Rollback als „neue Datei" gelöscht werden.
+    """
+    l = _init_task_lock(course, task)
+    l.acquire()
+    try:
+        yield
+    finally:
+        l.release()
 
 
 def task_image_ref(course: int, task: int, init_hash: str) -> str:
@@ -1827,10 +1857,13 @@ def task_has_init(course: int, task: int) -> bool:
 
 
 def _read_init_manifest(base: Path) -> dict:
-    """Init-Manifest {shared, seed, private} (Pfad-Sets; leer bei Fehler).
+    """Init-Manifest (Pfad-Sets; leer bei Fehler).
 
-    shared/seed/private = relative Pfade je Store (Asset-Dir / .seeds/ /
-    .private/). Schützt Init-Artefakte vor dem Sync-Purge."""
+    shared/seed/private = relative DATEI-Pfade je Store (Asset-Dir /
+    .seeds/ / .private/); shared_dirs/seed_dirs/private_dirs =
+    relative ORDNER-Pfade (Vor-/Nach-Diff des Builds: exakt die
+    Ordner, die .init.sh angelegt hat — inkl. leerer). Schützt
+    Init-Artefakte vor dem Sync-Purge, read-only im Tutor-Baum."""
     m = base / INIT_MANIFEST_NAME
     try:
         data = json.loads(m.read_text(encoding="utf-8"))
@@ -1839,15 +1872,175 @@ def _read_init_manifest(base: Path) -> dict:
             for k in ("shared", "seed", "private"):
                 out[k] = {str(x) for x in (data.get(k) or [])
                           if isinstance(x, str)}
+                out[k + "_dirs"] = {str(x) for x in (data.get(k + "_dirs") or [])
+                                    if isinstance(x, str)}
             return out
     except Exception:
         pass
-    return {"shared": set(), "seed": set(), "private": set()}
+    return {"shared": set(), "seed": set(), "private": set(),
+            "shared_dirs": set(), "seed_dirs": set(),
+            "private_dirs": set()}
 
 
 def _asset_file_snapshot(base: Path) -> set[str]:
     """Aktuelle (nicht reservierte) Asset-Dateien (relativ zum Asset-Dir)."""
     return {str(p.relative_to(base)) for p in _iter_asset_files(base)}
+
+
+def _asset_file_snapshot_meta(base: Path) -> dict[str, tuple[int, int]]:
+    """Asset-Dateien → (size, mtime_ns), relativ zum Asset-Dir."""
+    out: dict[str, tuple[int, int]] = {}
+    for p in _iter_asset_files(base):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        out[str(p.relative_to(base))] = (st.st_size, st.st_mtime_ns)
+    return out
+
+
+def _asset_dir_snapshot(base: Path) -> set[str]:
+    """Asset-Ordner (ohne reservierte + Dot-Ordner), relativ zum
+    Asset-Dir — spiegelt die Datei-Semantik von _iter_asset_files."""
+    out: set[str] = set()
+    if not base.is_dir():
+        return out
+    for root, dirs, _files in os.walk(base):
+        rel_root = Path(root).relative_to(base)
+        if rel_root.parts and _is_reserved_asset_part(rel_root.parts[0]):
+            continue
+        dirs[:] = [d for d in dirs
+                   if not _is_reserved_asset_part(d)
+                   and not d.startswith(".")]
+        for d in dirs:
+            out.add(str(rel_root / d))
+    return out
+
+
+def _dir_snapshot(d: Path) -> set[str]:
+    """Alle Ordner unter d (relativ zu d, inkl. Dot-Ordner); leer,
+    wenn d fehlt — für die .seeds/.private-Regionen (spiegelt die
+    Datei-Semantik von _dir_file_snapshot)."""
+    out: set[str] = set()
+    if not d.is_dir():
+        return out
+    for p in d.rglob("*"):
+        if p.is_dir():
+            out.add(str(p.relative_to(d)))
+    return out
+
+
+def read_task_files(base: Path) -> set[str]:
+    """Task-Dateien des letzten Asset-Syncs (Sidecar .task_files.json).
+
+    Der Sync schickt immer den Vollspiegel (delete_missing=True) → die
+    Liste ist exakt die aktuell gesyncten (studentensichtbaren) Dateien.
+    """
+    m = base / TASK_FILES_NAME
+    try:
+        data = json.loads(m.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {str(x) for x in data if isinstance(x, str)}
+    except Exception:
+        pass
+    return set()
+
+
+def write_task_files(base: Path, paths: list[str]) -> None:
+    base.mkdir(parents=True, exist_ok=True)
+    (base / TASK_FILES_NAME).write_text(
+        json.dumps(sorted({str(p) for p in paths if str(p).strip()}),
+                   indent=1, ensure_ascii=False),
+        encoding="utf-8")
+
+
+def _prepare_init_cleansweep(base: Path) -> tuple[dict, Path | None]:
+    """VOR dem Build: alte Init-Artefakte löschen (mit Backup).
+
+    Manifest-Semantik: exakt das Ergebnis DIESES Builds — Artefakte
+    früherer Builds, die nicht mehr erzeugt werden, müssen verschwinden.
+    Das ist nur bestimmbar, wenn sie vor dem .init.sh-Lauf weg sind
+    (sonst sind „nicht mehr erzeugt“ und „deterministisch neu erzeugt“
+    am Dateisystem nicht unterscheidbar). Task-Dateien (Sync-Sidecar)
+    bleiben unberührt. Läuft unter der Task-Lock (kein anderer Writer).
+
+    Liefert (altes Manifest, Backup-Verzeichnis oder None).
+    """
+    old = _read_init_manifest(base)
+    stores = {"shared": base, "seed": base / ".seeds",
+              "private": base / ".private"}
+    task_files = read_task_files(base)
+    backup = base / INIT_BACKUP_NAME
+    moved = 0
+    for scope in ("shared", "seed", "private"):
+        store = stores[scope]
+        for rel in sorted(old.get(scope) or ()):
+            target = store / rel
+            if scope == "shared" and rel in task_files:
+                continue  # seltene Pfad-Kollision: Task-Datei gewinnt
+            if not target.is_file():
+                continue
+            dst = backup / scope / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(target), str(dst))
+            moved += 1
+    # Init-Ordner: leer → weg (der Build erzeugt sie ggf. neu),
+    # nicht leer (Task-/Fremd-Dateien überlebt den Datei-Cleansweep)
+    # → unangetastet lassen, die Daten dürfen nicht mit-rasirt werden.
+    # Kinder zuerst, damit Eltern nach dem Räumen ihrer Kinder leer
+    # sind und mit wegfallen.
+    for scope in ("shared", "seed", "private"):
+        store = stores[scope]
+        for rel in sorted(old.get(f"{scope}_dirs") or (),
+                          key=len, reverse=True):
+            target = store / rel
+            if not target.is_dir():
+                continue
+            try:
+                if not any(target.iterdir()):
+                    shutil.rmtree(target, ignore_errors=True)
+            except OSError:
+                pass
+    if moved == 0:
+        if backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+        return old, None
+    return old, backup
+
+
+def _restore_init_backup(base: Path, backup: Path | None,
+                         old_manifest: dict | None) -> None:
+    """Rollback: alte Artefakte (Backup) + altes Manifest wiederherstellen."""
+    if backup and backup.is_dir():
+        stores = {"shared": base, "seed": base / ".seeds",
+                  "private": base / ".private"}
+        for scope, store in stores.items():
+            src_root = backup / scope
+            if not src_root.is_dir():
+                continue
+            for p in sorted(src_root.rglob("*")):
+                if not p.is_file():
+                    continue
+                dst = store / p.relative_to(src_root)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if not dst.exists():
+                    shutil.move(str(p), str(dst))
+        shutil.rmtree(backup, ignore_errors=True)
+    if old_manifest is not None:
+        # Alte Init-Ordner wieder anlegen (die Datei-Restellung oben
+        # bringt nur Dateien zurück) → exakter Vor-Build-Zustand.
+        stores = {"shared": base, "seed": base / ".seeds",
+                  "private": base / ".private"}
+        for scope, store in stores.items():
+            for rel in sorted(old_manifest.get(f"{scope}_dirs") or ()):
+                try:
+                    (store / rel).mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    pass
+        (base / INIT_MANIFEST_NAME).write_text(
+            json.dumps({k: sorted(v) for k, v in old_manifest.items()},
+                       indent=1, ensure_ascii=False),
+            encoding="utf-8")
 
 
 def _dir_file_snapshot(d: Path) -> set[str]:
@@ -1874,10 +2067,13 @@ def _prune_empty_dirs(base: Path, live: set[str] | None = None) -> None:
 
 
 def _cleanup_init_writes(base: Path, before_shared: set[str],
-                         before_private: set[str], tmp: Path) -> None:
+                         before_private: set[str], tmp: Path,
+                         backup: Path | None = None,
+                         old_manifest: dict | None = None) -> None:
     """Init-Schreiben eines fehlgeschlagenen/abgebrochenen Builds
     zurückrollen (neu angelegte Dateien in shared + private Region,
-    Temp-Dir, geleerte Ordner)."""
+    Temp-Dir, geleerte Ordner) + Vor-Build-Zustand wiederherstellen
+    (Cleansweep-Backup der alten Artefakte, altes Manifest)."""
     priv_dir = base / ".private"
     for p in sorted(_iter_asset_files(base),
                     key=lambda x: len(str(x)), reverse=True):
@@ -1895,6 +2091,7 @@ def _cleanup_init_writes(base: Path, before_shared: set[str],
     except (ValueError, OSError):
         live = set()
     _prune_empty_dirs(base, live)
+    _restore_init_backup(base, backup, old_manifest)
 
 
 def _set_init_status(id_key: str, status: str,
@@ -2018,7 +2215,19 @@ def _do_init_build_core(id_key: str, course: int, task: int, init_hash: str,
     priv_dir = base / ".private"
     tmp = _init_tmp_dir(course, task, init_hash)
 
-    before_shared = _asset_file_snapshot(base)
+    # Task-Lock VOR dem Before-Snapshot: der Asset-Sync hält dieselbe
+    # Sperre während seiner Schreibphase (asset_sync_lock) — so kann
+    # keine sync-te User-Datei zwischen Before- und After-Snapshot
+    # landen und fälschlich als Init-Artefakt (shared) ins Manifest
+    # geraten (Rollback-Fall: als „neue Datei" gelöscht werden).
+    tlock = _init_task_lock(course, task)
+    tlock.acquire()
+    # Cleansweep: alte Init-Artefakte weg (mit Backup) → Manifest =
+    # exakt das Ergebnis DIESES Builds (s. _prepare_init_cleansweep).
+    # Läuft unter der Task-Lock → kein Sync-Race beim Verschieben.
+    old_manifest, backup = _prepare_init_cleansweep(base)
+    before_meta = _asset_file_snapshot_meta(base)
+    before_shared = set(before_meta)
     before_private = _dir_file_snapshot(priv_dir)
     with INIT_BUILDS_LOCK:
         b = INIT_BUILDS.get(id_key)
@@ -2027,8 +2236,8 @@ def _do_init_build_core(id_key: str, course: int, task: int, init_hash: str,
             b["_before_private"] = before_private
             b["_tmp"] = str(tmp)
             b["_p1_created"] = False
-    tlock = _init_task_lock(course, task)
-    tlock.acquire()
+            b["_backup"] = str(backup) if backup else None
+            b["_old_manifest"] = old_manifest
     _docker("rm", "-f", name, check=False, timeout=60)
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True, exist_ok=True)
@@ -2061,6 +2270,14 @@ def _do_init_build_core(id_key: str, course: int, task: int, init_hash: str,
         src = base / rp
         if not src.exists():
             src.mkdir(parents=True, exist_ok=True)
+
+    # Ordner-Before-Snapshots NACH dem Vorlegen der Ordner-Struktur
+    # (Tutor-Layout) + der Mount-Quellen: nur Ordner, die .init.sh
+    # SELBST anlegt, landen als [init]-Ordner im Manifest (Diff zum
+    # After-Snapshot) — das Tutor-Layout zählt nicht dazu.
+    before_dirs = _asset_dir_snapshot(base)
+    before_tmp_dirs = _dir_snapshot(tmp)
+    before_priv_dirs = _dir_snapshot(priv_dir)
 
     # Gemeinsames Zeitbudget für beide Phasen
     deadline_ts = time.time() + config.INIT_TIMEOUT
@@ -2164,6 +2381,9 @@ def _do_init_build_core(id_key: str, course: int, task: int, init_hash: str,
                 id_key, "none",
                 log_tail=".init.sh/.init_hidden.sh nicht mehr vorhanden — "
                          "Build abgebrochen.")
+            # Vor-Build-Zustand wiederherstellen (Cleansweep wurde schon
+            # durchgeführt) → keine Artefakte verloren.
+            _restore_init_backup(base, backup, old_manifest)
             return
 
         # ── Phase 1: .init.sh (public: darf in ✏️+🔒, NICHT in 👤) ──
@@ -2221,27 +2441,29 @@ def _do_init_build_core(id_key: str, course: int, task: int, init_hash: str,
                 "Basis-Image.)")
 
         # ── Artefakte sammeln + Manifest schreiben ──
-        # Manifest = IST-Zustand der Stores, NICHT nur die Schreib-Diffs
-        # dieses Builds: eine überschriebene Bestandsdatei (gleicher Pfad,
-        # z. B. aus einem früheren Build mit anderer Access-Config) würde
-        # per after−before-Diff aus dem Manifest fallen und damit
-        # unsichtbar im [init]-Baum + unge schützt im Sync-Purge werden.
-        after_shared = _asset_file_snapshot(base)
+        # Manifest = exakt das Ergebnis DIESES Builds: alte Artefakte
+        # wurden vorab gecleanswept (s. _prepare_init_cleansweep) →
+        # alles, was jetzt neu/verändert ist, stammt aus diesem Lauf,
+        # und was nicht mehr erzeugt wurde, ist weg.
+        after_meta = _asset_file_snapshot_meta(base)
         after_private = _dir_file_snapshot(priv_dir)
-        old_manifest = _read_init_manifest(base)
+        after_dirs = _asset_dir_snapshot(base)
+        after_priv_dirs = _dir_snapshot(priv_dir)
         mount_paths = list(readonly_paths) + list(hidden_paths)
         # ✏️-Schreiber = Temp-Dir-Inhalt (minus Skripten; Mount-Overlays
         # existieren dort physisch nicht — Filter als Absicherung).
         seed: set[str] = set()
+        seed_dirs: set[str] = set()
         for p in tmp.rglob("*"):
-            if not p.is_file():
-                continue
             rel = str(p.relative_to(tmp))
-            if rel in (".init.sh", ".init_hidden.sh"):
-                continue
             if any(rel == m or rel.startswith(m + "/") for m in mount_paths):
                 continue
-            seed.add(rel)
+            if p.is_file():
+                if rel in (".init.sh", ".init_hidden.sh"):
+                    continue
+                seed.add(rel)
+            elif p.is_dir():
+                seed_dirs.add(rel)
         seeds_dir = base / ".seeds"
         seeds_dir.mkdir(parents=True, exist_ok=True)
         for rel in sorted(seed):
@@ -2249,36 +2471,53 @@ def _do_init_build_core(id_key: str, course: int, task: int, init_hash: str,
             dst = seeds_dir / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dst))
+        # Leere Seed-Ordner ebenfalls anlegen (exist_ok: Ordner mit
+        # Dateien sind oben mit-entstanden) → .seeds spiegelt die
+        # Init-Struktur exakt, auch für leere Verzeichnisse.
+        for rel in sorted(seed_dirs):
+            (seeds_dir / rel).mkdir(parents=True, exist_ok=True)
         # .seeds = exakt das Ergebnis dieses Builds: ältere Seeds früherer
         # Builds löschen (sie würden sonst weiterhin in frische Student-
         # Volumes wandern, ohne im Baum sichtbar zu sein).
         for rel in sorted(_dir_file_snapshot(seeds_dir) - seed):
             (seeds_dir / rel).unlink(missing_ok=True)
-        # private = Voll-Snapshot: die private Region nimmt ausschließlich
-        # Init-Artefakte auf (die Skript-Quellen .init.sh/.init_hidden.sh
-        # sind KEINE Artefakte — sie kommen per Init-Request vom Backend).
-        private = sorted(p for p in after_private
-                         if p not in (".init.sh", ".init_hidden.sh"))
-        # shared = alte Einträge (noch auf Disk) + neue Schreib-Ergebnisse
-        # (das Asset-Dir hält daneben die sync-ten User-Dateien → kein
-        # Voll-Snapshot möglich).
-        shared = sorted({p for p in old_manifest.get("shared", set())
-                         if (base / p).is_file()}
-                        | (after_shared - before_shared))
+        # private = Schreib-Diff: alte Artefakte wurden gecleanswept, die
+        # Skript-Quellen .init.sh/.init_hidden.sh sind im Before-Snapshot
+        # (persistiert VOR dem Build) → Diff = exakt die neuen Artefakte.
+        private = sorted(after_private - before_private)
+        # shared = neu/verändert seit dem Before-Snapshot (nach dem
+        # Cleansweep): unveränderte Task-Dateien des Syncs fallen raus,
+        # überschriebene Task-Dateien (Pfad-Kollision) gewinnt init →
+        # read-only.
+        shared = sorted(p for p, m in after_meta.items()
+                        if before_meta.get(p) != m)
+        # [init]-Ordner = Vor-/Nach-Diff je Store: exakt die Ordner,
+        # die .init.sh angelegt hat (inkl. leerer). Access erbt den
+        # Ziel-Ordner (Store): shared→🔒, seed→✏️ (Root), private→👤.
+        shared_dirs = sorted(after_dirs - before_dirs)
+        seed_dirs = sorted(seed_dirs - before_tmp_dirs)
+        private_dirs = sorted(after_priv_dirs - before_priv_dirs)
         manifest = {
             "shared": shared,
             "seed": sorted(seed),
             "private": private,
+            "shared_dirs": shared_dirs,
+            "seed_dirs": seed_dirs,
+            "private_dirs": private_dirs,
         }
         (base / INIT_MANIFEST_NAME).write_text(
             json.dumps(manifest, indent=1, ensure_ascii=False),
             encoding="utf-8")
+        # Build erfolgreich → Cleansweep-Backup verwerfen.
+        if backup is not None:
+            shutil.rmtree(backup, ignore_errors=True)
         _set_init_status(id_key, "ready",
                          log_tail=("\n".join(phase_logs))[-4000:])
     except Exception as e:  # noqa: BLE001 — Build-Thread darf nie sterben
         # Rollback: neue Dateien in shared + private Region, Temp-Dir,
-        # Phase-1-Zwischen-Image.
-        _cleanup_init_writes(base, before_shared, before_private, tmp)
+        # Phase-1-Zwischen-Image, Cleansweep-Backup + altes Manifest.
+        _cleanup_init_writes(base, before_shared, before_private, tmp,
+                             backup=backup, old_manifest=old_manifest)
         with INIT_BUILDS_LOCK:
             b = INIT_BUILDS.get(id_key)
             if b is not None and b.get("_p1_created"):
@@ -2324,13 +2563,20 @@ def start_init_build(course: int, task: int, init_hash: str, image: str,
                      hidden_paths: list[str] | None = None,
                      init_b64: str | None = None,
                      init_private_b64: str | None = None,
-                     folders: list[str] | None = None) -> dict:
-    """Task-Image-Build starten (idempotent: vorhanden → ready)."""
+                     folders: list[str] | None = None,
+                     force: bool = False) -> dict:
+    """Task-Image-Build starten (idempotent: vorhanden → ready).
+
+    force=True überspringt die Existenzprüfung (manuelles „Sync & Init“):
+    das Skript läuft komplett neu und die alten Init-Artefakte werden
+    gelöscht + neu erzeugt (Cleansweep im Build-Kern).
+    """
     _persist_init_scripts(course, task, init_b64, init_private_b64)
     if not task_has_init(course, task):
         return {"status": "none"}
     ref = task_image_ref(course, task, init_hash)
-    if image_exists(ref) or task_image_alias(course, task, init_hash):
+    if not force and (
+            image_exists(ref) or task_image_alias(course, task, init_hash)):
         return {"status": "ready", "ref": ref}
     id_key = _init_id(course, task, init_hash)
     with INIT_BUILDS_LOCK:
@@ -2381,11 +2627,13 @@ _ARTIFACT_FILE_MAX_BYTES = 5 * 1024 * 1024
 
 
 def init_artifacts(course: int, task: int, scope: str = "all") -> dict:
-    """Init-Artefakte je Scope (shared|seed|private|all) — aus dem Manifest,
-    Größen von der Disk.
+    """Init-Artefakte je Scope (shared|seed|private|all) — aus dem
+    Manifest, Größen von der Disk.
 
     Pfade sind Workspace-relativ (der Ziel-Pfad im Tutor-/Grading-Baum):
     shared → asset_dir/<path>, seed → .seeds/<path>, private → .private/<path>.
+    Liefert {files: [...], dirs: [...]} — dirs = Ordner, die .init.sh
+    im letzten Build angelegt hat (Manifest-Vor-/Nach-Diff, inkl. leerer).
     """
     if scope not in ("shared", "seed", "private", "all"):
         raise DockerError("scope muss shared|seed|private|all sein", 400)
@@ -2395,6 +2643,7 @@ def init_artifacts(course: int, task: int, scope: str = "all") -> dict:
     stores = {"shared": base, "seed": base / ".seeds",
               "private": base / ".private"}
     files = []
+    dirs = []
     for sc in scopes:
         for rel in sorted(manifest.get(sc, set())):
             if any(x in ("", ".", "..") for x in rel.split("/")):
@@ -2413,7 +2662,14 @@ def init_artifacts(course: int, task: int, scope: str = "all") -> dict:
                 "is_binary": b"\x00" in head,
                 "scope": sc,
             })
-    return {"files": files}
+        for rel in sorted(manifest.get(f"{sc}_dirs", set())):
+            if any(x in ("", ".", "..") for x in rel.split("/")):
+                continue
+            p = stores[sc] / rel
+            if not p.is_dir():
+                continue
+            dirs.append({"path": rel, "scope": sc})
+    return {"files": files, "dirs": dirs}
 
 
 def init_artifact_file(course: int, task: int, scope: str,
@@ -2436,6 +2692,45 @@ def init_artifact_file(course: int, task: int, scope: str,
     if size > _ARTIFACT_FILE_MAX_BYTES:
         raise DockerError("Datei zu groß (max. 5 MB)", 413)
     return size, target.read_bytes()
+
+
+def remove_init_artifact(course: int, task: int, relpath: str) -> dict:
+    """Manifest-Eintrag (shared/seed/private) + Datei entfernen.
+
+    Heilung für getarnte Task-Dateien: ein Upload, der während eines
+    laufenden Init-Builds sync-te wurde, ist fälschlich im Manifest
+    gelandet (After-Snapshot hat die sync-te Datei erfasst). Der nächste
+    Init-Build schreibt das Manifest neu; Dateien, die .init.sh wirklich
+    erzeugt, entstehen beim Rebuild erneut (und werden neu gelistet).
+    """
+    p_rel = str(relpath or "").replace("\\", "/").lstrip("/")
+    if not p_rel or any(x in ("", "..") for x in p_rel.split("/")):
+        raise DockerError("Ungültiger Dateipfad", 400)
+    base = asset_dir(course, task)
+    m = base / INIT_MANIFEST_NAME
+    try:
+        data = json.loads(m.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    stores = {"shared": base, "seed": base / ".seeds",
+              "private": base / ".private"}
+    removed = []
+    for scope, store in stores.items():
+        entries = data.get(scope) or []
+        if p_rel in entries:
+            data[scope] = [x for x in entries if x != p_rel]
+            target = store / p_rel
+            _check_under(base, target)
+            target.unlink(missing_ok=True)
+            removed.append(scope)
+    if not removed:
+        raise DockerError("Pfad ist nicht als Init-Artefakt gelistet", 404)
+    m.parent.mkdir(parents=True, exist_ok=True)
+    m.write_text(json.dumps(data, indent=1, ensure_ascii=False),
+                 encoding="utf-8")
+    return {"ok": True, "removed": removed}
 
 
 def seed_volume(key: str, course: int, task: int) -> int:
@@ -2479,6 +2774,8 @@ def stop_init_build(course: int, task: int, init_hash: str) -> dict:
         before_shared = b.get("_before_shared") if b else None
         before_private = b.get("_before_private") if b else None
         tmp_s = b.get("_tmp") if b else None
+        backup_s = b.get("_backup") if b else None
+        old_manifest = b.get("_old_manifest") if b else None
         p1_created = bool(b and b.get("_p1_created"))
     if not building:
         return {"ok": False, "message": "Kein Init-Build aktiv"}
@@ -2489,7 +2786,10 @@ def stop_init_build(course: int, task: int, init_hash: str) -> dict:
                 check=False, timeout=60)
     if isinstance(before_shared, set) and isinstance(before_private, set):
         tmp = Path(tmp_s) if tmp_s else _init_tmp_dir(course, task, init_hash)
-        _cleanup_init_writes(base, before_shared, before_private, tmp)
+        _cleanup_init_writes(
+            base, before_shared, before_private, tmp,
+            backup=Path(backup_s) if backup_s else None,
+            old_manifest=old_manifest)
     _set_init_status(id_key, "failed", error="Build manuell abgebrochen")
     return {"ok": True}
 

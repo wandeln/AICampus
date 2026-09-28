@@ -244,9 +244,12 @@ class ComputeClient:
         body: dict = {"files": files, "delete_missing": delete_missing}
         if folders:
             body["folders"] = folders
+        # Timeout > INIT_TIMEOUT: der Agent hält während eines laufenden
+        # Init-Builds die Task-Lock und der Sync wartet darauf, bevor er
+        # schreibt (Manifest-Race-Schutz, s. docker_ops.asset_sync_lock).
         resp = self._request("POST", f"/assets/{course}/{task}",
                              op=f"task:{course}:{task}", task_id=task,
-                             json_body=body, timeout=1800)
+                             json_body=body, timeout=3600)
         return resp.json()
 
     def list_assets(self, course: int, task: int) -> list[dict]:
@@ -254,13 +257,22 @@ class ComputeClient:
                              op=f"task:{course}:{task}", task_id=task)
         return resp.json()["files"]
 
+    def remove_init_artifact(self, course: int, task: int, path: str) -> dict:
+        """Getarnten Manifest-Eintrag (Task-Datei fälschlich als
+        Init-Artefakt gelistet) + Datei auf dem Agenten entfernen."""
+        resp = self._request("DELETE", f"/tasks/{course}/{task}/init-artifact",
+                             op=f"task:{course}:{task}", task_id=task,
+                             json_body={"path": path}, timeout=60)
+        return resp.json()
+
     def init_build(self, course: int, task: int, image: str,
                    init_hash: str, deadline: str | None = None,
                    readonly_paths: list[str] | None = None,
                    hidden_paths: list[str] | None = None,
                    init_b64: str | None = None,
                    init_private_b64: str | None = None,
-                   folders: list[str] | None = None) -> dict:
+                   folders: list[str] | None = None,
+                   force: bool = False) -> dict:
         """Task-Image-Build (2-Phasen: .init.sh + .init_hidden.sh) starten;
         startet nur den Background-Build → kurzer Timeout.
 
@@ -285,6 +297,8 @@ class ComputeClient:
             body["init_private_b64"] = init_private_b64
         if folders:
             body["folders"] = folders
+        if force:
+            body["force"] = True
         resp = self._request("POST", f"/tasks/{course}/{task}/init-build",
                              op=f"task:{course}:{task}", task_id=task,
                              json_body=body, timeout=60)

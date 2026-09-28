@@ -203,6 +203,9 @@
   //   allowMain             ⭐-Marker + Main-Datei setzbar (Kontextmenü)
   //   readOnlyCheck         fn(path) -> bool
   //   canCreate / canDelete / canMove / allowBulk   boolesche Rechte
+  //   canUpload             Upload: Kontextmenü-Items „Dateien/Ordner
+  //                         hochladen“ + Drag & Drop von Dateien/Ordnern
+  //                         aus dem OS direkt auf den Dateibaum
   //   canReorder            Drag & Drop ändert die Reihenfolge (Dateien + Ordner)
   //   localOrderKey         localStorage-Key für die LOKALE Reihenfolge
   //                         (Student: eigene Ansicht, pro User+Task); Tutor:
@@ -228,6 +231,7 @@
       mainFile = "", allowMain = false,
       readOnlyCheck = () => false,
       canCreate = false, canDelete = false, canMove = false, allowBulk = false,
+      canUpload = false,
       canReorder = false, canSetAccess = false, folderMove = false,
       folderApi = false,
       localOrderKey = null,
@@ -292,9 +296,27 @@
     //    für Ordner/Probe-Pfade) ────────────────────────────────────
     // [init]-Erkennung: das Backend flaggt Init-Artefakte (init: true) —
     // sie liegen am realen Pfad und sind read-only.
+    // [init]-Ordner: Manifest-Eintrag aus dem Vor-/Nach-Diff des letzten
+    // Init-Builds (state.folders-Zeile mit init-Flag) — exakt die Ordner,
+    // die .init.sh angelegt hat (auch leere). Explizite Tutor-Zeilen
+    // gewinnen (dann kein init-Flag → editierbar).
+    function isInitDir(path) {
+      path = String(path || "");
+      if (!path) return false;
+      return state.folders.some(fd => fd.path === path && fd.init);
+    }
+    // Auch für Pfade, die IN einem [init]-Ordner liegen: neue
+    // Dateien/Ordner (Anlegen/Upload) oder Move-Ziele — der Pfad
+    // existiert noch nicht, aber ein Vorfahr-Ordner ist [init].
     function isInitPath(path) {
       const f = state.files.find(x => x.path === String(path || ""));
-      return !!(f && f.init);
+      if (f) return !!f.init;
+      let q = String(path || "");
+      while (q) {
+        if (isInitDir(q)) return true;
+        q = q.includes("/") ? q.slice(0, q.lastIndexOf("/")) : "";
+      }
+      return false;
     }
     function ancestorRank(path) {
       let rank = 0;
@@ -555,6 +577,7 @@
     // verschiebbar. Student: zusätzlich nur effektiv editierbare.
     function canDragDir(dir) {
       if (!canMove) return false;
+      if (isInitDir(dir)) return false;  // .init.sh-Ergebnis: read-only
       const hasContent = state.files.some(f => f.path.startsWith(dir + "/")) ||
         state.folders.some(fd => fd.path === dir || fd.path.startsWith(dir + "/"));
       if (!hasContent) return false;
@@ -887,6 +910,16 @@
       // geöffneten Ordnern) oder — wenn sortierbar und im selben Ordner —
       // vor/nach der Datei einsortieren (obere/halbe Zeile = davor, untere = danach).
       div.ondragover = e => {
+        if (externalFileDrag(e)) {
+          // Externer File-Drag: Upload in den Ordner dieser Datei.
+          if (!uploadGate(dirOf(path))) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = "copy";
+          treeEl.classList.remove("ws-tree-droproot");
+          div.classList.add("ws-drop-ok");
+          return;
+        }
         if (!state.dragPath) return;
         if (!state.dragMulti && state.dragPath === path) return;
         const src = state.dragPath;
@@ -947,6 +980,20 @@
       };
       div.ondragleave = () => div.classList.remove("ws-drop-ok", "ws-drop-before", "ws-drop-after");
       div.ondrop = e => {
+        if (externalFileDrag(e)) {
+          e.preventDefault();
+          e.stopPropagation();
+          clearDropMarks();
+          const dt = e.dataTransfer;
+          collectDroppedFiles(dt).then(entries => {
+            if (entries.length) return uploadEntries(entries, dirOf(path), { noPrompt: true });
+            toast("Keine Dateien zum Hochladen erkannt.", "warning");
+          }).catch(err => {
+            console.error(err);
+            toast("Upload fehlgeschlagen: " + (err && err.message ? err.message : err), "error");
+          });
+          return;
+        }
         if (!state.dragPath) return;
         const multi = state.dragMulti;
         if (!multi && state.dragPath === path) return;
@@ -974,22 +1021,28 @@
 
     function dirRow(name, path, depth) {
       const div = document.createElement("div");
+      const isInit = isInitDir(path);
       const acc = effectiveAccess(path);
       const accDef = ACCESS[acc] || ACCESS.edit;
       const open = !state.collapsed.has(path);
       // Jeder Ordner ist per Handle ziehbar (Reihenfolge = immer erlaubt;
       // Moves blockt der Drop-Gate mit Fehlermeldung, nicht der Handle).
-      const dirDraggable = !!(canMove || canReorder);
+      // [init]-Ordner (.init.sh-Ergebnisse) sind read-only → kein Drag.
+      const dirDraggable = !isInit && !!(canMove || canReorder);
       div.className = "ws-row ws-row-dir px-1 py-1.5 flex items-center gap-1 text-gray-500 hover:bg-gray-100 rounded cursor-pointer";
       // Handle bleibt linksbündig; die Tiefe-Einrückung sitzt am Icon.
       div.style.paddingLeft = "2px";
       div.dataset.path = path;
-      div.title = acc !== "edit" ? accDef.label : "";
+      div.title = isInit
+        ? ".init.sh-Ergebnis — read-only (wird per neuem Init-Build neu erzeugt)"
+        : (acc !== "edit" ? accDef.label : "");
       div.innerHTML =
         '<span class="ws-drag' + (dirDraggable ? "" : " ws-drag-off") + '"' +
         (dirDraggable ? ' title="Ziehen: Ordner verschieben / sortieren"' : "") + ">⠿</span>" +
         '<span class="shrink-0"' + (depth ? ' style="margin-left:' + (depth * 14) + 'px"' : "") + '>' + (open ? "📂" : "📁") + "</span>" +
-        '<span title="' + esc(accDef.label) + '">' + accDef.icon + "</span>" +
+        (isInit
+          ? '<span title=".init.sh-Ergebnis — read-only">📦</span>'
+          : '<span title="' + esc(accDef.label) + '">' + accDef.icon + "</span>") +
         '<span class="truncate flex-1">' + esc(name) + "/</span>";
       div.onclick = () => {
         clearSelection();
@@ -1020,6 +1073,16 @@
       }
       // Drop-Target (Ordner) — für Datei- UND Ordner-Drags
       div.ondragover = e => {
+        if (externalFileDrag(e)) {
+          // Externer File-Drag: Upload direkt in diesen Ordner.
+          if (!uploadGate(path)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = "copy";
+          treeEl.classList.remove("ws-tree-droproot");
+          div.classList.add("ws-drop-ok");
+          return;
+        }
         if (!state.dragPath) return;
         const src = state.dragPath;
         if (src === path) return;
@@ -1050,6 +1113,18 @@
       div.ondrop = e => {
         e.preventDefault();
         e.stopPropagation();
+        if (externalFileDrag(e)) {
+          clearDropMarks();
+          const dtx = e.dataTransfer;
+          collectDroppedFiles(dtx).then(entries => {
+            if (entries.length) return uploadEntries(entries, path, { noPrompt: true });
+            else toast("Keine Dateien zum Hochladen erkannt.", "warning");
+          }).catch(err => {
+            console.error(err);
+            toast("Upload fehlgeschlagen: " + (err && err.message ? err.message : err), "error");
+          });
+          return;
+        }
         const src = state.dragPath;
         const dt = state.dragType;
         const multi = state.dragMulti;
@@ -1084,6 +1159,16 @@
     // (leerer Bereich, Zeilen ohne gültiges Ziel) — so lässt sich auch
     // zuverlässig aus Ordner in die Wurzel ziehen.
     treeEl.ondragover = e => {
+      if (externalFileDrag(e)) {
+        // Upload in die Wurzel (leerer Bereich). Über einer Zeile
+        // entscheidet die Zeile selbst: akzeptiert → stopPropagation,
+        // abgelehnt (read-only) → kein preventDefault → kein Drop.
+        if (e.target && e.target.closest && e.target.closest(".ws-row")) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        treeEl.classList.add("ws-tree-droproot");
+        return;
+      }
       if (!state.dragPath) return;
       const src = state.dragPath;
       const gate = state.dragType === "dir" ? dropGateDir(src, "")
@@ -1104,6 +1189,18 @@
     };
     treeEl.ondrop = e => {
       e.preventDefault();
+      if (externalFileDrag(e)) {
+        clearDropMarks();
+        const dtx = e.dataTransfer;
+        collectDroppedFiles(dtx).then(entries => {
+          if (entries.length) return uploadEntries(entries, "", { noPrompt: true });
+          toast("Keine Dateien zum Hochladen erkannt.", "warning");
+        }).catch(err => {
+          console.error(err);
+          toast("Upload fehlgeschlagen: " + (err && err.message ? err.message : err), "error");
+        });
+        return;
+      }
       const src = state.dragPath;
       const dt = state.dragType;
       const multi = state.dragMulti;
@@ -1331,12 +1428,23 @@
     function showDirMenu(e, dirPath) {
       e.preventDefault();
       e.stopPropagation();
+      if (isInitDir(dirPath)) {
+        // .init.sh-Ergebnis: read-only, nichts weiter zu verwalten.
+        showCtxMenu(e.clientX, e.clientY, [
+          { label: "📦 .init.sh-Ergebnis — read-only", header: true }]);
+        return;
+      }
       const items = [];
       // Anlegen nur in editierbaren Bereichen (Tutor: überall — sein
       // readOnlyCheck deckt nur Init-Pfade ab).
       if (canCreate && (canSetAccess || effectiveAccess(dirPath) === "edit")) {
         items.push({ label: "＋ Neue Datei …", fn: () => newFileIn(dirPath) });
         items.push({ label: "＋ Neuer Ordner …", fn: () => newFolderIn(dirPath) });
+      }
+      if (canUpload && uploadGate(dirPath)) {
+        if (items.length) items.push({ sep: true });
+        items.push({ label: "📤 Dateien hochladen …", fn: () => uploadTo(dirPath, "files") });
+        items.push({ label: "📤 Ordner hochladen …", fn: () => uploadTo(dirPath, "folders") });
       }
       if (canSetAccess) {
         if (items.length) items.push({ sep: true });
@@ -1673,6 +1781,219 @@
       }
     }
 
+    // ── Upload: mehrere Dateien / komplette Ordner ────────────────
+    // Einträge: [{file: File, relPath: string}] — relPath trägt die
+    // relative Ordner-Struktur (webkitRelativePath vom <input> bzw.
+    // fullPath des Drag-Entry); bei einer einfachen Mehrfachauswahl
+    // ist relPath nur der Dateiname. Zielpfad = Zielordner + relPath.
+    const uploadInputs = {};
+    function uploadPickerInput(kind) {
+      if (!uploadInputs[kind]) {
+        const inp = document.createElement("input");
+        inp.type = "file";
+        inp.className = "hidden";
+        if (kind === "folders") inp.setAttribute("webkitdirectory", "");
+        else inp.multiple = true;
+        document.body.appendChild(inp);
+        uploadInputs[kind] = inp;
+      }
+      return uploadInputs[kind];
+    }
+
+    function entriesFromFileList(list) {
+      const out = [];
+      Array.from(list || []).forEach(f => out.push({
+        file: f,
+        relPath: f.webkitRelativePath || f.name,
+      }));
+      return out;
+    }
+
+    // Drag & Drop: Ordner-Struktur per FileSystemEntry-API rekursiv
+    // sammeln (readEntries liefert max. 100 Einträge pro Batch).
+    function collectEntry(entry, out) {
+      if (entry.isFile) {
+        return new Promise(resolve => {
+          entry.file(f => {
+            out.push({ file: f, relPath: entry.fullPath.replace(/^\/+/, "") || f.name });
+            resolve();
+          }, () => resolve());
+        });
+      }
+      if (entry.isDirectory) {
+        const kids = [];
+        return new Promise(resolve => {
+          const reader = entry.createReader();
+          const readBatch = () => reader.readEntries(bs => {
+            kids.push.apply(kids, bs);
+            if (bs.length) readBatch();
+            else resolve();
+          }, () => resolve());
+          readBatch();
+        }).then(() => Promise.all(kids.map(k => collectEntry(k, out))));
+      }
+      return Promise.resolve();
+    }
+
+    function collectDroppedFiles(dataTransfer) {
+      let items = [];
+      try { items.push.apply(items, dataTransfer.items || []); } catch (err) { /* ignore */ }
+      items = items.filter(it => it && it.kind === "file");
+      if (!items.length) {
+        // Fallback ohne items-API: webkitRelativePath (Chromium/Firefox)
+        const files = dataTransfer.files || [];
+        return Promise.resolve(Array.from(files).map(f => ({
+          file: f, relPath: f.webkitRelativePath || f.name,
+        })));
+      }
+      const out = [];
+      const jobs = items.map(it => {
+        let entry = null;
+        try { entry = it.webkitGetAsEntry ? it.webkitGetAsEntry() : null; }
+        catch (err) { entry = null; }
+        if (!entry) {
+          // Kein lesbares Entry (defekter Drag-Eintrag) → flache Datei.
+          const f = it.getAsFile ? it.getAsFile() : null;
+          if (f) out.push({ file: f, relPath: f.name });
+          return Promise.resolve();
+        }
+        return collectEntry(entry, out);
+      });
+      return Promise.all(jobs).then(() => out);
+    }
+
+    // Externer Drag (Dateien/Ordner aus dem OS) statt interner Move:
+    // interne Drags tragen text/plain + state.dragPath, externe „Files“.
+    function externalFileDrag(e) {
+      if (state.dragPath || !e.dataTransfer) return false;
+      const types = e.dataTransfer.types;
+      if (!types) return false;
+      try {
+        for (let i = 0; i < types.length; i++) {
+          if (types[i] === "Files") return true;
+        }
+      } catch (err) { /* ignore */ }
+      return false;
+    }
+
+    // Upload-Ziel-Gate: read-only/versteckte Bereiche + Tutor-Init-Pfade
+    // nicht; Tutoren (canSetAccess) dürfen sonst überall (Zugriffs-
+    // Klassen bestimmen nur die Studenten-Sicht).
+    function uploadGate(dir) {
+      if (readOnlyCheck(dir)) return false;
+      return canSetAccess || effectiveAccess(dir) === "edit";
+    }
+
+    async function uploadEntries(entries, targetDir, opts) {
+      if (!apiBase) {
+        toast(noTaskMsg || "Upload derzeit nicht verfügbar.", "error");
+        return;
+      }
+      if (!entries || !entries.length) return;
+      opts = opts || {};
+      const hasStructure = entries.some(e => e.relPath && e.relPath !== e.file.name);
+      let gateDir, paths;
+      if (entries.length === 1 && !hasStructure && !opts.noPrompt) {
+        // Einzeldatei ohne Struktur: genauen Zielpfad prompten
+        // (etabliertes Single-File-UX, Vorschlag „data/train.csv“).
+        const f = entries[0].file;
+        const def = (targetDir ? targetDir : "data") + "/" + f.name;
+        const p = prompt("Zielpfad für den Upload (Vorschlag: " + def + ")", def);
+        if (p == null) return;
+        const path = p.trim();
+        if (!path) return;
+        if (!validRelPath(path)) {
+          toast("Ungültiger Pfad (relativ, kein „..“).", "error");
+          return;
+        }
+        paths = [path];
+        gateDir = dirOf(path);
+      } else {
+        // Mehrere Dateien oder Ordner-Struktur: ZielORDNER (vorgegeben
+        // per Kontextmenü/Drag & Drop, sonst prompten; leer = Wurzel).
+        let dir = String(targetDir || "").trim().replace(/\/+$/, "");
+        if (dir === "" && !opts.noPrompt) {
+          const p = prompt("Zielordner für den Upload (leer = Wurzel):", "");
+          if (p == null) return;
+          dir = p.trim().replace(/\/+$/, "");
+        }
+        if (dir && !validRelPath(dir)) {
+          toast("Ungültiger Ordnerpfad (relativ, kein „..“).", "error");
+          return;
+        }
+        gateDir = dir;
+        paths = entries.map(e => {
+          const rel = (e.relPath && e.relPath !== e.file.name) ? e.relPath : e.file.name;
+          return dir ? dir + "/" + rel : rel;
+        });
+      }
+      if (!uploadGate(gateDir || "")) {
+        toast("Dieser Bereich ist read-only — dort kann nichts hochgeladen werden.", "warning");
+        return;
+      }
+      // Konflikte vorab erkennen: existierende Datei/Ordner am Zielpfad
+      // werden übersprungen statt überschrieben (konsistent bei Tutor
+      // UND Student — Überschreiben geht bewusst über „Löschen + neu“).
+      const isConflict = p => state.files.some(f => f.path === p) ||
+                              state.folders.some(f => f.path === p);
+      const skipped = new Set(paths.filter(isConflict));
+      if (skipped.size) {
+        const list = [...skipped].slice(0, 5).map(x => "  • " + x).join("\n") +
+          (skipped.size > 5 ? "\n  …" : "");
+        if (!confirm(skipped.size +
+          (skipped.size === 1 ? " Datei existiert bereits" : " Dateien existieren bereits") +
+          " und werden übersprungen:\n" + list + "\n\nDen Rest jetzt hochladen?")) {
+          return;
+        }
+      }
+      let ok = 0;
+      const errors = [];
+      for (let i = 0; i < paths.length; i++) {
+        const path = paths[i];
+        if (skipped.has(path)) continue;
+        try {
+          const fd = new FormData();
+          fd.append("file", entries[i].file);
+          fd.append("path", path);
+          const res = await fetch(apiBase + "/upload", {
+            method: "POST", credentials: "same-origin", body: fd,
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.detail || res.status);
+          ok++;
+        } catch (err) {
+          errors.push(path + " — " + err.message);
+        }
+      }
+      await refresh();
+      const total = paths.length - skipped.size;
+      const skipMsg = skipped.size
+        ? ", " + skipped.size + " übersprungen (existieren bereits)" : "";
+      if (errors.length) {
+        toast("Upload: " + ok + " von " + total + " Datei(en) geladen" + skipMsg +
+              " — Fehler: " + errors[0] +
+              (errors.length > 1 ? " (\u002b" + (errors.length - 1) + " weitere)" : ""), "error");
+      } else {
+        toast("Upload fertig — " + ok + " Datei(en) geladen" + skipMsg + ".", "success");
+      }
+    }
+
+    // Picker starten: kind = "files" (mehrere Dateien) | "folders"
+    // (kompletter Ordner mit Struktur, webkitdirectory).
+    function uploadTo(targetDir, kind) {
+      if (!apiBase) {
+        toast(noTaskMsg || "Erst die Aufgabe speichern.", "warning");
+        return;
+      }
+      const inp = uploadPickerInput(kind);
+      inp.onchange = () => {
+        const entries = entriesFromFileList(inp.files);
+        inp.value = "";
+        if (entries.length) uploadEntries(entries, targetDir || "");
+      };
+      inp.click();
+    }
+
     // ── Main-Datei ────────────────────────────────────────────────
     function setMainFileState(p) {
       state.mainFile = String(p || "");
@@ -1875,6 +2196,7 @@
     }
 
     async function renameDir(dir) {
+      if (isInitDir(dir)) return;  // .init.sh-Ergebnis: read-only
       const gate = dirOpGate(dir);
       if (!gate.ok) { toast(gate.reason, "warning"); return; }
       const name = dir.split("/").pop();
@@ -1905,6 +2227,7 @@
     }
 
     async function deleteDir(dir) {
+      if (isInitDir(dir)) return;  // .init.sh-Ergebnis: read-only
       const gate = dirOpGate(dir);
       if (!gate.ok) { toast(gate.reason, "warning"); return; }
       const inDir = filesInDir(dir);
@@ -2027,6 +2350,8 @@
       deleteFile,
       moveFile,
       uploadFile,
+      uploadEntries,
+      uploadTo,
       newFileIn,
       newFolderIn,
       getMainFile,
