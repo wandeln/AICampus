@@ -96,18 +96,18 @@ docker compose -f deploy/compose.local.yml up --build -d
 - Danach in der **Admin-Konsole**: LLM-Verbindung testen, Kurs anlegen,
   Mitglieder einladen, optional Compute-Engine registrieren.
 
-### Nativ (ohne Docker)
+### Nativ (ohne Docker, nur Entwicklung)
 
 ```bash
 cd AICampus
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env            # LLM-Endpoint setzen
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Produktiv-Betrieb via systemd + nginx: `aicampus.service` + `nginx.conf`
-liegen im Repo ([Details](docs/installation.md)).
+Produktiv-Betrieb: Docker + nginx (TLS) vor dem Container —
+[docs/installation.md](docs/installation.md).
 
 > **Workspace-Aufgaben** (eigene Container pro Student, GPU) erfordern
 > zusätzlich den Compute-Agent — Installation in
@@ -138,7 +138,7 @@ liegen im Repo ([Details](docs/installation.md)).
 
 | Dokument | Inhalt |
 |---|---|
-| [docs/installation.md](docs/installation.md) | Ausgeführte Installation: Docker, systemd, Compute-Agent, Multi-Server, SSH-Tunnel, GPU, Backups |
+| [docs/installation.md](docs/installation.md) | Ausgeführte Installation: Docker, nginx/HTTPS, Compute-Agent, Multi-Server, SSH-Tunnel, GPU, Backups |
 | [docs/configuration.md](docs/configuration.md) | Alle Konfigurationsoptionen (`.env`), LLM-Setups, LDAP, Preview-Subdomains |
 | [docs/user-guide.md](docs/user-guide.md) | Rollen, Aufgabentypen, Kursmaterial, Medien, Applets, Import, Forum — für Professoren & Tutoren |
 | [docs/architecture.md](docs/architecture.md) | Projektstruktur, Komponenten, Debugging & Logs |

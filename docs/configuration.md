@@ -128,7 +128,7 @@ Erlaubte Python-Module: Standardbibliothek + `matplotlib` (Liste in
 > Admin-Konsole registriert (Name, URL, Key, GPU-Zugang). Eine explizit
 > deklarierte `.env`-Engine erscheint dort als „local"-Engine. Kurse können
 eigene Engines definieren (Kurs → Einstellungen), die die globalen
-> ergänzen. Details: [installation.md](installation.md#4-modus-b--compute-agent-nativ-systemd).
+> ergänzen. Details: [installation.md](installation.md#4-modus-b--multi-server-compute-server--ssh-tunnel).
 
 ## Frontend
 
@@ -165,5 +165,5 @@ Feintuning für den LLM-Wizard — Defaults sind praxistauglich.
 | Variable (Compose-Env) | Wo | Beschreibung |
 |---|---|---|
 | `COMPUTE_AGENT_KEY` | Shell-Export oder `deploy/.env` | Wird in den Agent als `AGENT_KEY` interpoliert — Compose liest `env_file` **nicht** für `${…}`-Interpolation |
-| `ASSET_ROOT_HOST` | `compose.local.yml` | Host-Pfad zum Asset-Verzeichnis (wird aus `${PWD}` gebildet — **Compose vom Repo-Root starten**) |
+| `ASSET_ROOT_HOST` | `compose.local.yml` + `compose.compute-only.yml` | Host-Pfad zum Asset-Verzeichnis (wird aus `${PWD}` gebildet — **Compose vom Repo-Root starten**) |
 | `GPU_ENABLED` / `GPU_MAX_JOBS` / `IDLE_TIMEOUT` | `compose.local.yml` | Agent-GPU-/Queue-Parameter (Default `auto` / `8` / `1200 s`) |

@@ -25,9 +25,6 @@ AICampus/
 ├── config.py                # Zentrale Konfiguration (alle Env-Vars, s. docs/configuration.md)
 ├── .env.example             # Konfigurations-Vorlage
 ├── requirements.txt
-├── aicampus.service         # systemd-Unit (produktiver Native-Betrieb)
-├── nginx.conf               # nginx-Reverse-Proxy (TLS) für Native-Betrieb
-├── deploy.sh                # Deployment-Skript
 ├── migrate_*.py             # Einmal-Migrationen (Altschema → Neu)
 │
 ├── database/
@@ -125,9 +122,8 @@ AICampus/
 │   ├── compose.local.yml    # Docker-Hybrid (App + Agent, eine Maschine)
 │   ├── compose.dev.yml      # Overlay: Live-Code + Auto-Reload
 │   ├── compose.compute-only.yml  # Agent-only-Container (reine Compute-Server)
-│   ├── setup_compute_server.sh   # Compute-Server-Setup (Docker, User, Unit)
-│   ├── aicampus-compute-agent.service / aicampus-compute-tunnel.service
-│   └── compute-agent.env.example
+│   ├── nginx.example.conf        # nginx-Produktivtemplate (TLS vor dem Container)
+│   └── aicampus-compute-tunnel.service  # SSH-Tunnel zu Remote-Compute-Servern
 │
 ├── scripts/                 # Maintenance-/Tooling-Skripte (Migrationen, Relay-Build)
 ├── docs/                    # Diese Dokumentation (+ interne Plan-Docs)
@@ -141,10 +137,7 @@ AICampus/
 
 | Komponente | Log-Quelle |
 |---|---|
-| App (nativ, systemd) | `journalctl -u aicampus -f` |
-| App (nativ, manuell) | `server-output.log` (nohup) bzw. uvicorn-Stdout |
 | App + Agent (Docker) | `docker compose -f deploy/compose.local.yml logs -f <aicampus\|compute-agent>` |
-| Agent (nativ, systemd) | `journalctl -u aicampus-compute-agent -f` |
 | LLM-Tunnel | `journalctl -u aicampus-llm-tunnel -n 50` |
 | Compute-Tunnel | `journalctl -u aicampus-compute-tunnel -n 50` |
 

@@ -1,18 +1,18 @@
 # AICampus — Installation (ausführlich)
 
-Alle Installations- und Betriebsarten im Detail: nativ (systemd), Docker,
-Compute-Agent (lokal/remote, Multi-Server), SSH-Tunnel, GPU, Backups.
+Alle Installations- und Betriebsarten im Detail: Docker (eine Maschine),
+Produktiv-Betrieb mit nginx + HTTPS, Compute-Agent (lokal/remote,
+Multi-Server), SSH-Tunnel, GPU, Backups.
 
 > **Schnellstart** (Docker, eine Maschine) steht in der [README](../README.md).
-> Diese Doku deckt die restlichen Fälle und die Feinkonfiguration ab.
+> Diese Doku deckt den Produktiv-Betrieb und die restlichen Fälle ab.
 
 ## Überblick: Betriebsarten
 
 | Modus | Wo läuft was | Für was |
 |---|---|---|
-| **A. Docker-Hybrid** | AICampus + Agent in einer `docker compose` auf EINER Maschine | MVP, kleine Kurse, kleine Aufgaben |
-| **B. Nativ-Systemd** | AICampus (uvicorn + nginx), Agent als zweite Unit auf demselben Host | Bestehende Produktiv-Installation |
-| **C. Multi-Server** | AICampus + lokaler Agent wie A/B; weitere Agenten auf Compute-Servern (nativ ODER als Docker-Container), verbunden per SSH-Tunnel | GPU-Trainings, Skalierung |
+| **A. Docker** | AICampus + Agent in einer `docker compose` auf EINER Maschine | Standard: MVP, kleine Kurse, kleine Aufgaben |
+| **B. Multi-Server** | AICampus + lokaler Agent wie A; weitere Agenten auf Compute-Servern (als Docker-Container), verbunden per SSH-Tunnel | GPU-Trainings, Skalierung |
 
 Der Compute-Agent spricht immer dieselbe API (`/health`, `/workspaces`,
 `/assets`, `/tasks/{course}/{task}/init-build`, …). AICampus kennt die
@@ -31,48 +31,13 @@ erreichbare Engine degradieren die Views sauber.
 
 ## 1. Voraussetzungen
 
-- Linux (Debian/Ubuntu empfohlen) mit Python 3.11+ (nativ) bzw.
-  Docker + Docker Compose v2 (Docker-Modi).
+- Linux (Debian/Ubuntu empfohlen) mit **Docker + Docker Compose v2**.
 - Ein **OpenAI-kompatibles LLM-Endpoint** ([Konfiguration](configuration.md#llm)).
-- Für Workspace-Aufgaben: Docker auf dem Host des Agents; für GPU:
-  `nvidia-container-toolkit` auf dem Host.
+- Für Workspace-Aufgaben: Docker auf dem Host des Agents (bei Modus A ist
+  das derselbe Host); für GPU: `nvidia-container-toolkit` auf dem Host.
 - (Optional) LDAP-Server für Uni-Accounts.
 
-## 2. Nativ (ohne Docker)
-
-### 2.1 Entwicklungsstart
-
-```bash
-cd AICampus
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env      # LLM-Endpoint, Secrets setzen
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
-
-### 2.2 Produktiv: systemd + nginx
-
-`aicampus.service` und `nginx.conf` liegen im Repo-Root.
-
-```bash
-# Service anpassen (User=, WorkingDirectory=, ExecStart= auf die Installation)
-sudo cp aicampus.service /etc/systemd/system/
-sudo nano /etc/systemd/system/aicampus.service
-
-# nginx: SSL-Terminierung + Reverse-Proxy auf 127.0.0.1:8000
-sudo cp nginx.conf /etc/nginx/sites-available/aicampus
-sudo ln -s /etc/nginx/sites-available/aicampus /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now aicampus
-journalctl -u aicampus -f
-```
-
-Beim **ersten Start** wird bei leerer DB automatisch ein Admin-Account
-angelegt (`admin` / `admin`) — **Passwort nach dem ersten Login ändern**.
-
-## 3. Modus A — Docker-Hybrid (eine Maschine)
+## 2. Docker-Installation (AICampus + Agent, eine Maschine)
 
 ```bash
 # Voraussetzungen: Docker, .env im Repo-Root
@@ -87,7 +52,8 @@ docker compose -f deploy/compose.local.yml logs -f compute-agent   # Agent
 Wichtige Punkte:
 
 - AICampus: `http://<host>:8000` (Port in `compose.local.yml` änderbar;
-  Default bindet auf `127.0.0.1` — für LAN-Zugriff auf `"8000:8000"` ändern).
+  Default bindet auf `127.0.0.1` — für LAN-Zugriff ohne TLS auf
+  `"8000:8000"` ändern, Produktiv-Betrieb s. Abschnitt 3).
 - Agent: nur im Compose-Netz (`http://compute-agent:8700`) + optional
   `127.0.0.1:8700` auf dem Host. In der Engine-Registry für den
   AICampus-Container `http://compute-agent:8700` eintragen (die
@@ -123,40 +89,166 @@ docker compose -f deploy/compose.local.yml -f deploy/compose.dev.yml up -d aicam
 - Zurück zum Normalbetrieb: `docker compose -f deploy/compose.local.yml up -d aicampus`
   (der Container wird ohne Overlay neu angelegt).
 
-## 4. Modus B — Compute-Agent nativ (Systemd)
+### Dev-Start ohne Docker (optional)
 
-Bestehende nativ laufende AICampus-Installation: der Agent läuft als
-zweite Unit auf demselben Host.
+Nur für Entwicklung ohne Docker (z. B. macOS/Windows):
 
 ```bash
-# Als root (REPO-Pfad der Installation, z. B. /home/wandel/Projects/AICampus)
-sudo useradd --system --create-home aicampus
-sudo mkdir -p /etc/aicampus /opt/aicampus/assets
-sudo cp deploy/compute-agent.env.example /etc/aicampus/compute-agent.env
-sudo nano /etc/aicampus/compute-agent.env          # AGENT_KEY == COMPUTE_AGENT_KEY (.env)
-
-# Agent-Venv (oder bestehendes venv/Anaconda nutzen — ExecStart dann anpassen)
-sudo python3 -m venv /opt/aicampus/venv
-sudo /opt/aicampus/venv/bin/pip install -r compute_agent/requirements.txt
-
-# Unit: User= + WorkingDirectory= + ExecStart= auf die Installation anpassen
-sudo cp deploy/aicampus-compute-agent.service /etc/systemd/system/
-sudo nano /etc/systemd/system/aicampus-compute-agent.service
-sudo systemctl daemon-reload && sudo systemctl enable --now aicampus-compute-agent
-sudo journalctl -u aicampus-compute-agent -f
+cd AICampus
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env      # LLM-Endpoint, Secrets setzen
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Der Agent bindet auf `127.0.0.1:8700` → genau die `.env`-Default-URL
-(`COMPUTE_AGENT_URL`), kein Tunnel nötig.
+Ohne Compute-Agent — Text- und Code-Aufgaben sind voll funktionsfähig,
+Workspace-Aufgaben degradieren sauber (s. README).
 
-### Alternative: Agent als Docker-Container (ohne eigene Systemd-Unit)
+## 3. Produktiv-Betrieb: nginx + HTTPS (vor dem Container)
 
-Für reine Compute-Server ohne AICampus-Installation gibt es
-`deploy/compose.compute-only.yml` — der Agent läuft dann als Container,
-verwaltet aber weiterhin den **Host-Docker-Daemon** (docker.sock-Mount):
+Für den Produktiv-Betrieb steht **nginx auf dem Host** vor dem
+AICampus-Container (`127.0.0.1:8000`). nginx übernimmt dabei:
+
+- **TLS-Terminierung** (Let's Encrypt via certbot) + HTTP→HTTPS-Redirect
+- **`/static/` direkt von nginx** — performanter als uvicorn; die App
+  hängt einen Content-Hash (`?v=`) an die Asset-URLs, daher ist
+  1-Jahre-Cache sicher (bei Änderung ändert sich der Hash → Browser
+  holt automatisch die neue Version)
+- **`/media/` + `/avatars/` direkt von nginx** (UUID-Dateinamen) —
+  umgeht den Python/DB-Weg; ohne nginx würden dutzende Bild-Requests
+  pro Medien-Suche den App-Connection-Pool fluten
+- **Preview-Subdomains** (`*.DOMAIN`) für die Workspace-Web-UIs:
+  bewusst ohne `X-Frame-Options` (iframe), `proxy_buffering off` +
+  lange Timeouts (SSE/WebSockets)
+
+### 3.1 Site einrichten
+
+Das Template liegt in [`deploy/nginx.example.conf`](../deploy/nginx.example.conf)
+— dort die Platzhalter `DOMAIN` und `REPO_PATH` ersetzen. `REPO_PATH` ist
+der Pfad zum AICampus-Repo **auf dem Host** (das Verzeichnis mit
+`static/` und `data/`) — nginx serviert `static/` aus dem Repo, nicht aus
+dem Image, daher bei Updates per `git pull` automatisch aktuell.
 
 ```bash
-# Auf dem Compute-Server (beliebiges Linux, beliebiges User-Setup):
+sudo cp deploy/nginx.example.conf /etc/nginx/sites-available/aicampus
+sudo nano /etc/nginx/sites-available/aicampus   # DOMAIN + REPO_PATH ersetzen
+sudo ln -s /etc/nginx/sites-available/aicampus /etc/nginx/sites-enabled/
+sudo nginx -t
+```
+
+### 3.2 Zertifikat ausstellen
+
+**Ohne Preview-Subdomains** (einfachste Variante, HTTP-01 — certbot
+legt die Challenge automatisch über die nginx-Site ab):
+
+```bash
+sudo certbot --nginx -d aicampus.uni.example.edu
+```
+
+**Mit Preview-Subdomains** ist ein **Wildcard-Zertifikat** nötig
+(`*.DOMAIN`) — das geht nur via **DNS-01**, s. Abschnitt 3.3.
+
+Danach — egal welcher Weg:
+
+```bash
+# Zertifikats-Pfad prüfen (certbot zeigt ihn an; weicht er von
+# /etc/letsencrypt/live/DOMAIN/ ab, in der Site anpassen) und:
+sudo nginx -s reload
+```
+
+Certbot erneuert Zertifikate automatisch (systemd-Timer
+`certbot.timer`; `systemctl list-timers | grep certbot` prüfen) —
+**außer** sie wurden per `--manual` ausgestellt, s. 3.3.
+
+### 3.3 Preview-Subdomains: Wildcard-DNS + Zertifikat via DNS-01
+
+**Was das ist:** Jede Workspace-Web-UI (Jupyter, Studenten-Web-Apps,
+noVNC) kann auf einer eigenen Subdomain laufen:
+`https://<task>-<port>-<user>-<h6>.<Basis-Domain>/`. Das Label enthält
+einen aus dem `SECRET_KEY` abgeleiteten 6-Zeichen-Tag (`<h6>`) —
+beliebige Subdomains sind dadurch nicht erratbar. Die Auth bleibt der
+access_token-Cookie (er wird per 60-s-Einmal-Ticket auf die Subdomain
+gesetzt). Aktiviert wird die Funktion mit `PREVIEW_BASE_DOMAIN` im
+`.env` (Details: [configuration.md](configuration.md#server--datenbank));
+ohne sie laufen die Previews same-origin über `/preview/…`, und ihr
+braucht **kein** Wildcard-Zertifikat — dieser Abschnitt betrifft nur
+Betrieb mit Preview-Subdomains.
+
+**Warum Wildcard:** Das Label ist pro Aufgabe/Port/Nutzer dynamisch —
+ein eigenes Zertifikat pro Preview-App ist unmöglich (Dynamik +
+Let's-Encrypt-Rate-Limits). Ein einzelnes `*.DOMAIN`-Zertifikat deckt
+alle ab. Achtung: `*.DOMAIN` deckt die Basis-Domain **selbst nicht** ab
+→ das Zertifikat braucht beide Namen (`-d DOMAIN -d *.DOMAIN`).
+
+**Warum DNS-01:** Let's Encrypt stellt Wildcard-Zertifikate nur über
+die **DNS-01-Challenge** aus — eine HTTP-Challenge kann die Kontrolle
+über *alle* Subdomains nicht beweisen. DNS-01 bedeutet: certbot lässt
+einen TXT-Record `_acme-challenge.DOMAIN` mit vorgegebenem Wert in
+eurer DNS-Zone anlegen (für `DOMAIN` und `*.DOMAIN` ist es derselbe
+Record).
+
+**Voraussetzung (DNS-Zone):**
+
+```dns
+# Wildcard-Record, damit die Preview-Subdomains auf den Server auflösen:
+*.aicampus.uni.example.edu.   IN   A   <Server-IP>
+```
+
+**Variante A (empfohlen): DNS-Plugin — automatische Erneuerung.**
+certbot setzt den TXT-Record selbst über eine DNS-API. Für eigenen
+BIND/PowerDNS (typisch Uni) ist das `dns-rfc2136`-Plugin (DNS-Update
+mit TSIG-Key):
+
+```bash
+sudo apt install python3-certbot-dns-rfc2136   # oder: pip install certbot-dns-rfc2136
+```
+
+```ini
+# /etc/letsencrypt/dns-rfc2136.ini
+[main]
+authenticator = dns-rfc2136
+dns_rfc2136_server = <DNS-Server-IP>:53
+dns_rfc2136_tcp = true
+dns_rfc2136_reg_type = TSIG
+dns_rfc2136_tsig_keyname = aicampus
+dns_rfc2136_tsig_algorithm = hmac-sha256
+dns_rfc2136_tsig_key = <TSIG-Key>
+```
+
+```bash
+sudo certbot certonly --config /etc/letsencrypt/dns-rfc2136.ini \
+    -d aicampus.uni.example.edu -d *.aicampus.uni.example.edu
+```
+
+Der TSIG-Key darf im DNS (BIND: `update-policy` in der Zone) idealer
+Weise nur `_acme-challenge.DOMAIN` aktualisieren. Bei Provider-DNS
+(Delegierung) gibt es äquivalente Plugins (`dns-cloudflare`,
+`dns-google`, `dns-ovh`, …) — gleiche Vorgehensweise. `certbot renew`
+(Timer) erneuert dann alles ohne Zutun.
+
+**Variante B: manuell — ohne automatische Erneuerung.**
+Ohne DNS-API: certbot fragt interaktiv den TXT-Wert ab, ihr legt den
+Record selbst in der Zone an und bestätigt:
+
+```bash
+sudo certbot certonly --manual --preferred-challenges dns \
+    -d aicampus.uni.example.edu -d *.aicampus.uni.example.edu
+```
+
+⚠️ Ein so ausgestelltes Zertifikat wird **nicht automatisch
+erneuert** — alle ~2 Monate muss der Befehl erneut manuell laufen
+(alternativ: auf Variante A umsteigen).
+
+## 4. Modus B — Multi-Server (Compute-Server + SSH-Tunnel)
+
+### 4.1 Compute-Server vorbereiten (einmalig pro Server)
+
+Für reine Compute-Server ohne AICampus-Installation gibt es
+`deploy/compose.compute-only.yml` — der Agent läuft als Container und
+verwaltet dabei den **Host-Docker-Daemon** (docker.sock-Mount):
+
+```bash
+# Auf dem Compute-Server (beliebiges Linux):
 # 1) Docker installieren (GPU: + nvidia-container-toolkit)
 # 2) Repo hinbekommen (git clone / rsync), z. B. /srv/AICampus
 # 3) Key hinterlegen — exakt derselbe Key, der in der Engine-Registry
@@ -167,35 +259,26 @@ docker compose -f deploy/compose.compute-only.yml up -d --build
 curl -s http://127.0.0.1:8700/health   # ohne Token: 401 = Auth aktiv (gut)
 ```
 
+**GPU-Server:** Zusätzlich zum nvidia-container-toolkit auf dem Host
+(`sudo nvidia-ctk runtime configure --runtime=docker`) mit GPU-Overlay
+starten, damit der Agent die GPUs in der Engine-UI meldet (GPU-Checkboxen
++ Label statt „alle/keine"-Fallback):
+
+```bash
+docker compose -f deploy/compose.compute-only.yml \
+               -f deploy/compose.compute-only.gpu.yml up -d --build
+```
+
 Ohne `AGENT_KEY` verweigert der Agent-Container den Start (bewusste
 Schutzsperre). GPU-/Queue-Parameter (`GPU_ENABLED`, `GPU_MAX_JOBS`, …)
 können in `deploy/.env` gesetzt oder direkt in der Compose-Datei
 angepasst werden. Update nach Code-Änderungen: Repo aktualisieren →
 `docker compose -f deploy/compose.compute-only.yml up -d --build`.
 
-## 5. Modus C — Multi-Server (Compute-Server + SSH-Tunnel)
+Der Agent bindet auf `127.0.0.1:8700` — das ist das Ziel des
+SSH-Tunnels in 4.2.
 
-### 5.1 Compute-Server vorbereiten (einmalig pro Server)
-
-Auf dem Compute-Server (beliebiges Linux mit Docker oder Debian/Ubuntu
-Packages):
-
-```bash
-# Repo hinbekommen (git clone / rsync) und dann:
-sudo ./deploy/setup_compute_server.sh /pfad/zu/AICampus
-```
-
-Das Skript: installiert Docker + nvidia-container-toolkit (falls GPU),
-legt User/Verzeichnisse/venv an und installiert die
-`aicampus-compute-agent.service` (startet den Agent **noch NICHT**). Danach:
-
-```bash
-sudo nano /etc/aicampus/compute-agent.env   # AGENT_KEY setzen
-sudo systemctl start aicampus-compute-agent
-curl -s http://127.0.0.1:8700/health      # → {"ok": true, "docker": true, ...}
-```
-
-### 5.2 SSH-Tunnel auf dem AICampus-Server
+### 4.2 SSH-Tunnel auf dem AICampus-Server
 
 ```bash
 # Key + Publikey auf dem Compute-Server (User aicampus)
@@ -214,7 +297,23 @@ curl -s http://127.0.0.1:8701/health
 Mehrere Compute-Server: eine Tunnel-Unit pro Server (lokale Ports 8701,
 8702, …).
 
-### 5.3 Registry in der Admin-Konsole
+**Wichtig bei Docker-Deployment** (AICampus läuft in einem Container,
+z. B. WSL): Der Container erreicht den Tunnel nicht über `127.0.0.1` —
+den Tunnel stattdessen an `0.0.0.0:8701` binden (Unit anpassen) und bei
+aktivem UFW die Docker-Subnetze freigeben (wie für den LLM-Tunnel 8001
+in Abschnitt 5):
+
+```bash
+sudo ufw allow from 172.17.0.0/16 to any port 8701 proto tcp
+sudo ufw allow from 172.18.0.0/16 to any port 8701 proto tcp
+```
+
+Die Registry-URL für diese Engine lautet dann
+`http://host.docker.internal:8701` (zusätzlich `extra_hosts:
+host.docker.internal:host-gateway` in der Compose-Datei, steht bereits
+in `deploy/compose.local.yml`).
+
+### 4.3 Registry in der Admin-Konsole
 
 Admin → Systemeinstellungen → **Compute/Workspace**:
 
@@ -229,7 +328,7 @@ von der Engine gemeldeten GPUs; Default alle, „keine" = nur CPU).
 Speichern ist automatisch (Auto-Save). Der Statusbereich zeigt die Health
 aller Engines (30-s-Cache).
 
-### 5.4 Betriebsprüfung
+### 4.4 Betriebsprüfung
 
 - **Tunnel down?** Agent im Status rot; Workspace-Aufgaben bleiben sichtbar,
   „Ausführen/Abgeben" ausgegraut („⚠️ Compute-Server nicht erreichbar").
@@ -240,7 +339,7 @@ aller Engines (30-s-Cache).
 - **Image-Spec geändert?** Neuer Content-Hash → neues Tag → beim nächsten
   Installieren werden nur die geänderten Schichten neu gebaut.
 
-## 6. LLM hinter SSH erreichen (LLM-Tunnel-Service)
+## 5. LLM hinter SSH erreichen (LLM-Tunnel-Service)
 
 Wenn der LLM-Server in einem anderen Netz liegt oder per Firewall nicht
 direkt erreichbar ist (z. B. vLLM auf einem Uni-GPU-Server, nur SSH
@@ -313,23 +412,23 @@ LLM_API_URL=http://localhost:8001/v1
 SSH-Server/Netz. In der AICampus-Admin-Konsole lässt sich die Verbindung
 jederzeit per „LLM testen" prüfen.
 
-## 7. Backups & Datenorte
+## 6. Backups & Datenorte
 
-| Daten | Ort (nativ) | Ort (Docker-Hybrid) |
-|---|---|---|
-| DB + Uploads + Task-Dateien + Snapshots | `<repo>/data/` | `<repo>/data/` (Volume) |
-| Assets (Daten, Tests, Task-Skripte) | `/opt/aicampus/assets/` | `<repo>/data/compute-assets/` |
-| Task-Images (init.sh-Builds) | Docker-Images `aicampus/task/*` | Docker-Images (Host) |
-| Student-Volumes | Docker-Volumes `aicampus-ws-*` | Docker-Volumes (Host) |
+| Daten | Ort |
+|---|---|
+| DB + Uploads + Task-Dateien + Snapshots | `<repo>/data/` (Volume) |
+| Assets (Daten, Tests, Task-Skripte) | immer `<repo>/data/compute-assets/` (lokal und remote compute-only — Bind-Mount, da der Docker-Daemon Host-Pfade braucht) |
+| Task-Images (init.sh-Builds) | Docker-Images auf dem Host des jeweiligen Agents |
+| Student-Volumes | Docker-Volumes `aicampus-ws-*` auf dem Host des jeweiligen Agents |
 
 > **Backup-Praxis:** `data/` sichern (konsistent stoppen oder
 > `sqlite3 data/aicampus.db ".backup …"`); Docker-Volumes/Images der
 > laufenden Workspaces zusätzlich, falls Fortschritt erhalten bleiben soll.
 
-## 8. Sicherheit (Kurzfassung)
+## 7. Sicherheit (Kurzfassung)
 
-- Agent bindet nur auf `127.0.0.1` (nativ) bzw. nur im Compose-Netz
-  (Docker). Einziger externer Zugangsweg: SSH-Tunnel mit Key-Auth.
+- Agent bindet nur auf `127.0.0.1` bzw. nur im Compose-Netz (Docker).
+  Einziger externer Zugangsweg: SSH-Tunnel mit Key-Auth.
 - Jede AICampus→Agent-Request trägt ein HMAC-Op-Token (60 s, scopet auf
   Workspace/Task). Key leer = offen (NUR Entwicklung!).
 - Workspace-Container: read-only Root-FS, `--network=none` (Default;
@@ -338,5 +437,8 @@ jederzeit per „LLM testen" prüfen.
 - Private Dateien (`.solution/`, `.tests/`) liegen nur auf der
   AICampus-Disk und werden ausschließlich beim Grading in einen frischen
   Container injiziert — nie ins Student-Volume.
+- Medien/Avatare werden in Produktion direkt von nginx gesendet
+  (Abschnitt 3) — die „Verstecktheit" kommt über die unguessable
+  UUID-Dateinamen.
 - **In Produktion:** `SECRET_KEY` setzen (JWT), Admin-Passwort ändern,
-  `DEBUG=false`, nginx mit TLS davor.
+  `DEBUG=false`, nginx mit TLS davor (Abschnitt 3).

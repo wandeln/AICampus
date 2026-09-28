@@ -25,9 +25,6 @@ data/
 .e2e_test/
 
 # Deployment / Betrieb (Repo = nur Code-Backup)
-nginx.conf
-deploy.sh
-aicampus.service
 AGENTS.md
 .env.production.example
 .zed/
