@@ -1903,10 +1903,16 @@ def _drop_init_artifact_entries(session: Session, task: Task,
             try:
                 workspace_service.client_for(agent).remove_init_artifact(
                     task.course_id, task.id, p)
-            except ComputeAgentError:
+            except ComputeAgentError as e:
                 # 404 = auf diesem Agenten nicht gelistet; Agent
                 # unerreichbar = degradierter Modus (wie Lookup).
-                pass
+                # Nicht still schlucken: ein 404 auf ALLEN Agenten bei
+                # vorher positivem Lookup deutet auf einen veralteten
+                # Agent-Code hin (Endpoint fehlt) — das Manifest wird
+                # dann nicht geheilt und die Datei bleibt „[init]“.
+                logger.warning(
+                    "Init-Heilung (task %s, %s) auf %s fehlgeschlagen: %s (%s)",
+                    task.id, p, agent["name"], e.status, e.message)
 
 
 def _reject_init_artifact(session: Session, task: Task, path: str) -> None:
