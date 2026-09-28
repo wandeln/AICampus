@@ -1,0 +1,30 @@
+# GPU-Overlay für Compute-Server mit NVIDIA-GPU
+#
+# Voraussetzungen auf dem Host:
+#   - nvidia-container-toolkit installiert
+#   - sudo nvidia-ctk runtime configure --runtime=docker
+#
+# Start (zusätzlich zur Basis-Compose):
+#   docker compose -f deploy/compose.compute-only.yml \
+#                  -f deploy/compose.compute-only.gpu.yml up -d --build
+#
+# Wirkung:
+#   - Der Agent-Container sieht die GPUs (nvidia-smi) → Health meldet
+#     `gpus` + `gpu_info` → Engine-UI zeigt die GPU-Checkboxen + Label
+#     (z. B. „1× NVIDIA GeForce RTX 2080 Ti") statt des
+#     „alle/keine"-Fallbacks.
+#   - Workspace-Container starten mit --gpus all / --gpus "device=N"
+#     (Host-Runtime via nvidia-container-toolkit).
+#
+# Auf GPU-freien Servern OHNE dieses Overlay starten — die
+# Device-Reservierung würde den Container-Start sonst scheitern lassen.
+
+services:
+  compute-agent:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

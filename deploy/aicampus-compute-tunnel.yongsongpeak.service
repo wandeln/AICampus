@@ -1,0 +1,38 @@
+# SSH-Tunnel WSL → yongsongpeak.informatik.uni-bonn.de (Compute-Agent)
+#
+# Abgeleitet aus deploy/aicampus-compute-tunnel.service, angepasst:
+# - User wandeln, Key /etc/aicampus/compute_ssh_key
+# - Bind an 0.0.0.0:8701 (wie der LLM-Tunnel): AICampus läuft in einem
+#   Docker-Container und erreicht den Tunnel über host.docker.internal
+#   (je nach Container-Konfig die Default-Bridge- oder Compose-Bridge-IP).
+# - UFW auf dem Host: Docker-Subnetze für Port 8701 freigeben (wie für
+#   den LLM-Tunnel 8001, docs/installation.md §5), sonst droppt UFW
+#   den Container-Traffic auf den nicht-published Port.
+
+[Unit]
+Description=AICampus Compute SSH Tunnel (0.0.0.0:8701 → yongsongpeak:8700)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ssh \
+  -N \
+  -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=3 \
+  -o ExitOnForwardFailure=yes \
+  -o BatchMode=yes \
+  -o StrictHostKeyChecking=accept-new \
+  -i /etc/aicampus/compute_ssh_key \
+  -L 0.0.0.0:8701:127.0.0.1:8700 \
+  wandeln@yongsongpeak.informatik.uni-bonn.de
+Restart=always
+RestartSec=5
+
+# Härten
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

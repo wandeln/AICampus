@@ -1,15 +1,17 @@
 # AICampus Compute-Agent — STANDALONE auf externem Compute-Server
 #
 # Nur der Agent, kein AICampus. Für Compute-Server, die per SSH-Tunnel
-# mit dem AICampus-Server verbunden werden (README, Modus C).
+# mit dem AICampus-Server verbunden werden (docs/installation.md, Modus B).
 #
 # Installation auf der Compute-Maschine:
-#   1. Docker installieren (bei GPU: + nvidia-container-toolkit)
+#   1. Docker installieren (bei GPU: + nvidia-container-toolkit +
+#      nvidia-ctk runtime configure; GPU-Checkboxen in der Engine-UI:
+#      zusätzlich GPU-Overlay compose.compute-only.gpu.yml)
 #   2. Repo hinbekommen (git clone / rsync)
 #   3. deploy/.env anlegen:     AGENT_KEY=<Key, == COMPUTE_AGENT_KEY in
 #                               AICampus bzw. Key aus der Engine-Registry>
 #      (chmod 600 deploy/.env)
-#   4. Starten:                 docker compose -f deploy/compose.compute-only.yml up -d --build
+#   4. Starten (vom Repo-Root): docker compose -f deploy/compose.compute-only.yml up -d --build
 #
 #   (Workspace-Images: NICHT vorher bauen — sie werden per Image-Spec-
 #    Installation in der AICampus-UI auf der Engine angelegt,
@@ -36,7 +38,11 @@ services:
       AGENT_KEY: ${AGENT_KEY:?AGENT_KEY fehlt — deploy/.env anlegen oder exportieren}
       AGENT_PORT: "8700"
       ASSET_ROOT: /opt/aicampus/assets
-      GPU_ENABLED: auto         # auto | true | false (s. compute-agent.env.example)
+      # Host-Pfad zum selben Verzeichnis (der Docker-Daemon auf dem Host
+      # braucht Host-Pfade für die Asset-Bind-Mounts in den Workspaces).
+      # Voraussetzung: Compose vom REPO-ROOT starten (s. Header).
+      ASSET_ROOT_HOST: ${PWD}/data/compute-assets
+      GPU_ENABLED: auto         # auto | true | false
       GPU_MAX_JOBS: "8"
       IDLE_TIMEOUT: "1200"
       # AGENT_INIT_TIMEOUT: "1800"   # init.sh-Build-Timeout (30 min Default)
@@ -44,11 +50,11 @@ services:
       # Der Agent verwaltet den Docker-Daemon des HOSTS (Workspace-Container,
       # Images, Volumes leben dort — auch für GPU-Passthrough nötig)
       - /var/run/docker.sock:/var/run/docker.sock
-      - compute-assets:/opt/aicampus/assets
+      # Bind-Mount statt Named Volume: Der Agent übergibt Asset-Pfade an
+      # den Docker-Daemon, der sie als HOST-Pfad auflöst. Ein Named Volume
+      # wäre dem Daemon nicht als Pfad zugänglich → leere Asset-Mounts.
+      - ../data/compute-assets:/opt/aicampus/assets
     ports:
       # Nur auf dem Loopback der Compute-Maschine (Ziel des SSH-Tunnels)
       - "127.0.0.1:8700:8700"
     restart: unless-stopped
-
-volumes:
-  compute-assets:
