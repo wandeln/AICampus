@@ -21,15 +21,20 @@ AUFGABENTYP: {{ task_type_description }}
 THEMA: {{ topic }}
 SCHWIERIGKEIT: {{ difficulty }}
 
-ANZUFORDERNDE FELDER — gib als Antwort ein gültiges JSON-Objekt mit EXAKT diesen Schlüsseln:
+ZULÄSSIGE FELDER — die Liste bestimmt, WELCHE Felder du in deiner Antwort
+bearbeiten darfst (nicht: welche du zwingend bearbeiten MUSST):
 {{ generate_list }}
+Liefere als Antwort ein gültiges JSON-Objekt, dessen Schlüssel ausschließlich
+aus dieser Liste stammen. Ein Schlüssel, der NICHT auf der Liste steht, wird
+vom System IGNORIERT — produziere keine solchen Schlüssel. Ein Feld, das du
+weglässt, bleibt unverändert (bestehender Inhalt wird behalten).
 
 Mögliche Schlüssel und deren Bedeutung:
 - "title": Kurzer, prägnanter Titel (z.B. „Blatt3-01: Rekursion")
 - "description": Vollständige Aufgabenstellung für Studierende
 - "model_solution": Vollständige Musterlösung inkl. Bewertungskriterien
 
-Keine weiteren Schlüssel, keine zusätzlichen Texte, keine Code-Blöcke (```json ... ```).
+Keine zusätzlichen Texte, keine Code-Blöcke (```json ... ```).
 Achte dabei auf korrektes Escaping von special Characters. In Latex-Umgebungen muss insbesondere der Backslash escaped werden (z.B. $\\text{...}$ oder $$A \\rightarrow B$$). Dollar-Zeichen außerhalb von Code-Blöcken, die kein Latex triggern sollen können mit Backslash \\$ escaped werden.
 
 {% if script_chapters %}
@@ -73,7 +78,7 @@ EXISTIERENDE CODE-VORLAGE (nur als Kontext, NICHT ändern):
 {% endif %}
 
 Regeln:
-- Generiere NUR die oben angeforderten Felder. Nicht angeforderte Schlüssel dürfen in der Antwort NICHT vorkommen.
+- Liefere NUR Schlüssel aus der obigen Liste „ZULÄSSIGE FELDER“ — die Ausgabe zu jedem anderen Feld wird vom System ignoriert und ist zu vermeiden.
 - Falls für ein angefordertes Feld bereits ein Inhalt existiert (s. o.), überarbeite/verbessere ihn — halte am Thema fest und gestalte die Aufgabe nicht grundlos neu.
 - Falls kein Inhalt existiert, erstelle das Feld neu passend zum Thema.
 - Die Felder müssen zueinander passen: Die Musterlösung muss die (ggf. neu formulierte) Aufgabenstellung vollständig lösen.

@@ -28,9 +28,9 @@ THEMA / ANWEISUNG DES TUTORS:
 Dauer der Präsentation: ca. {{ minutes }} Minuten.
 Plane die Anzahl der Folien entsprechend (Richtwert: 1,5–2 Minuten pro Inhaltsfolie): zuerst eine Titelfolie (mit der Direktive "layout: center"), dann ggf. kurze Folien mit Abschnitts-Überschrift, danach die Inhaltsfolien und zum Abschluss eine Zusammenfassungsfolie.
 
-ANZUFORDERNDE FELDER — gib als Antwort ein gültiges JSON-Objekt. Erlaubt sind NUR diese Schlüssel:
+ZULÄSSIGE FELDER — gib als Antwort ein gültiges JSON-Objekt. Erlaubt sind NUR diese Schlüssel — jeder andere Schlüssel wird vom System IGNORIERT:
 {{ generate_list }}
-Jeder angeforderte Schlüssel ist OPTIONAL: Wenn die Anweisung ein Feld inhaltlich NICHT betrifft und das Feld bereits einen Inhalt hat, lass den Schlüssel einfach WEG — der vorhandene Wert bleibt dann unverändert. Wenn das Feld geändert werden soll, liefere den aktualisierten Wert. Für Felder OHNE vorhandenen Inhalt ist der Schlüssel PFLICHT.
+Jeder Schlüssel der Liste ist OPTIONAL: Wenn die Anweisung ein Feld inhaltlich NICHT betrifft und das Feld bereits einen Inhalt hat, lass den Schlüssel einfach WEG — der vorhandene Wert bleibt dann unverändert. Wenn das Feld geändert werden soll, liefere den aktualisierten Wert. Für Felder OHNE vorhandenen Inhalt ist der Schlüssel PFLICHT.
 {% if current_content and '"content"' in generate_list %}
 Außerdem: Bei rein lokalen Änderungen an vorhandenem Inhalt darf der Schlüssel "content" durch "content_edits" ersetzt werden (Format siehe unten, „Stellenweise Bearbeitung“).
 {% endif %}

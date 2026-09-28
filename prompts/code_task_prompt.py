@@ -28,8 +28,13 @@ THEMA: {{ topic }}
 SCHWIERIGKEIT: {{ difficulty }}
 MAX. PUNKTE: {{ max_points }}
 
-ANZUFORDERNDE FELDER — gib als Antwort ein gültiges JSON-Objekt mit EXAKT diesen Schlüsseln:
+ZULÄSSIGE FELDER — die Liste bestimmt, WELCHE Felder du in deiner Antwort
+bearbeiten darfst (nicht: welche du zwingend bearbeiten MUSST):
 {{ generate_list }}
+Liefere als Antwort ein gültiges JSON-Objekt, dessen Schlüssel ausschließlich
+aus dieser Liste stammen. Ein Schlüssel, der NICHT auf der Liste steht, wird
+vom System IGNORIERT — produziere keine solchen Schlüssel. Ein Feld, das du
+weglässt, bleibt unverändert (bestehender Inhalt wird behalten).
 Die Reihenfolge der Schlüsselliste ist BEDEUTUNGSVOLL: Arbeite die Felder in
 genau dieser Reihenfolge ab (Implementierung — Vorlage/Tests — zuerst, dann
 Musterlösung + Bewertungskriterien, dann Aufgabenstellung, Titel), damit
@@ -106,7 +111,7 @@ BESTEHENDE CODE-VORLAGE:
 {% endif %}
 
 Regeln:
-- Generiere NUR die oben angeforderten Schlüssel. Nicht angeforderte Schlüssel dürfen in der Antwort NICHT vorkommen.
+- Liefere NUR Schlüssel aus der obigen Liste „ZULÄSSIGE FELDER“ — die Ausgabe zu jedem anderen Feld wird vom System ignoriert und ist zu vermeiden.
 - Falls für ein angefordertes Feld bereits ein Inhalt existiert (s. o.), überarbeite/verbessere ihn — halte am Thema fest und gestalte die Aufgabe nicht grundlos neu.
 - Falls kein Inhalt existiert, erstelle das Feld neu passend zum Thema.
 - Alle Felder bilden ein konsistentes Ganzes:

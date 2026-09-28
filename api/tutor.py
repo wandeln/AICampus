@@ -40,6 +40,7 @@ from database.models import (
     WorkspaceRunStatus,
 )
 from services.auth_service import get_current_user, require_course_access
+from services import file_edits
 from services.export_service import ExportService
 from services.grading_service import GradingService
 from services.llm_service import LLMService
@@ -47,7 +48,10 @@ from services.media_service import all_media_for_course, sync_media_usages
 from services.import_service import spawn_job
 from services.references_service import build_references_text
 from services.settings_resolver import get_effective_compute_config, get_effective_llm_config
-from services.workspace_presets import validate_workspace_generation
+from services.workspace_presets import (
+    IMAGE_SELECTION_FIELDS,
+    validate_workspace_generation,
+)
 from services.workspace_service import (
     MAX_FILE_BYTES,
     MAX_WORKSPACE_TOTAL_BYTES,
@@ -1067,7 +1071,11 @@ async def ai_generate_task(
         if task is not None and task.course_id != course_id:
             task = None
 
-        # Bestehende Dateien als LLM-Kontext (Text, mit Größen-Caps)
+        # Bestehende Dateien als LLM-Kontext (Text, mit Größen-Caps).
+        # NUR echte Task-Dateien (DB-Zeilen): Init-Artefakte (Ergebnisse von
+        # .init.sh/.init_hidden.sh) liegen auf der Compute-Engine (Asset-Dir,
+        # per Init-Manifest getrackt) und sind NICHT Teil des Task-Dateibaums
+        # — sie kommen daher nie in das LLM-Kontext.
         current_files: list[dict] = []
         total_chars = 0
         if task is not None:
@@ -1087,6 +1095,10 @@ async def ai_generate_task(
                         text = text[:20_000] + "\n(… gekürzt …)"
                     total_chars += len(text)
                     current_files.append({"path": row.path, "content": text})
+        # "delete_files" ist nur mit vorhandenen Dateien sinnvoll (sonst gibt
+        # es nichts zu löschen) — daher nur dann anfordern.
+        if gen_files and current_files:
+            ws_fields.append("delete_files")
         # Aktuelle Umgebungsfelder als LLM-Kontext
         current_env: dict | None = None
         if task is not None:
@@ -1164,7 +1176,13 @@ async def ai_generate_task(
             response["model_solution"] = (ws_data.get("model_solution") or "").strip()
 
         try:
-            cleaned = validate_workspace_generation(ws_data)
+            # Ausgabe zu Feldern, die das LLM NICHT bearbeiten darf (nicht
+            # in der ZULÄSSIGEN-FELDER-Liste), wird still ignoriert.
+            cleaned = validate_workspace_generation(
+                ws_data,
+                allowed=set(ws_fields) | (set(IMAGE_SELECTION_FIELDS)
+                                          if require_image_selection else set()),
+            )
         except ValueError as e:
             raise HTTPException(422, f"LLM-Output ungültig: {e}") from e
 
@@ -1210,7 +1228,9 @@ async def ai_generate_task(
             return response
 
         ws_changed = False
-        if gen_env and "env" in cleaned:
+        # LLM kann „env“ auch null/{} liefern → nur anwenden, wenn ein
+        # nicht-leeres Objekt da ist (sonst bleiben die bestehenden Werte).
+        if gen_env and cleaned.get("env"):
             _apply_workspace_env_fields(task, cleaned["env"])
             response["workspace_timeout"] = task.workspace_timeout
             response["workspace_cpu"] = task.workspace_cpu
@@ -1221,18 +1241,64 @@ async def ai_generate_task(
             ws_changed = True
         if gen_files:
             written: list[str] = []
+            edited: list[str] = []
+            deleted: list[str] = []
+            file_warnings: list[str] = []
             for f in cleaned.get("files") or []:
-                file_bytes = f["content"].encode("utf-8")
+                p = _safe_task_path(f["path"])
+                is_edit = "edits" in f
+                applied = 0
+                if is_edit:
+                    # Stellenseitige Bearbeitung einer bestehenden Datei
+                    if workspace_service.get_task_file(session, task, p) is None:
+                        raise HTTPException(
+                            422, f"LLM-Edits für „{f['path']}“ nicht möglich: "
+                                 "Datei existiert nicht in der Aufgabe.")
+                    try:
+                        existing = file_disk_path(task.id, p).read_text(
+                            encoding="utf-8")
+                    except (OSError, UnicodeDecodeError) as e:
+                        raise HTTPException(
+                            422, f"LLM-Edits für „{f['path']}“ nicht möglich: "
+                                 "keine lesbare Textdatei (Binärdatei?).") from e
+                    try:
+                        new_content, applied, warns = file_edits.apply_file_edits(
+                            existing, f["edits"])
+                    except file_edits.FileEditError as e:
+                        raise HTTPException(422, str(e)) from e
+                    file_warnings.extend(warns)
+                    file_bytes = new_content.encode("utf-8")
+                else:
+                    file_bytes = f["content"].encode("utf-8")
                 _check_workspace_size(session, task, len(file_bytes))
                 try:
                     workspace_service.save_task_file(
-                        session, task, _safe_task_path(f["path"]), file_bytes,
-                        access=f.get("access"))
+                        session, task, p, file_bytes, access=f.get("access"))
                 except ValueError as e:
                     raise HTTPException(422, str(e)) from e
-                written.append(f["path"])
+                if is_edit:
+                    edited.append(f"{f['path']} ({applied} Edits)")
+                else:
+                    written.append(f["path"])
+            # Datei-Löschungen ("delete_files"): NUR echte Task-Dateien (DB-
+            # Zeilen) — Init-Artefakte (keine DB-Zeile) werden übersprungen.
+            for p in cleaned.get("delete_files") or []:
+                sp = _safe_task_path(p)
+                if workspace_service.get_task_file(session, task, sp) is None:
+                    file_warnings.append(
+                        f"„{p}“ nicht gelöscht: existiert nicht als Task-Datei "
+                        "(ggf. .init.sh-Ergebnis — wird vom Init-Build verwaltet).")
+                    continue
+                workspace_service.delete_task_file(session, task, sp)
+                deleted.append(sp)
             response["workspace_files"] = written
-            if written:
+            if edited:
+                response["workspace_files_edited"] = edited
+            if deleted:
+                response["workspace_files_deleted"] = deleted
+            if file_warnings:
+                response["workspace_file_warnings"] = file_warnings
+            if written or edited or deleted:
                 ws_changed = True
             # Ordner-Zugriffsklassen (Erbung auf alle Dateien darunter)
             folders = cleaned.get("folders")

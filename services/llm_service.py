@@ -26,6 +26,7 @@ from config import LLM_API_URL, LLM_API_KEY, LLM_MODEL, LLM_TEMPERATURE, LLM_TIM
 from database.base import engine
 from database.models import LLMDebugEntry, User
 from services.auth_service import get_current_user_id
+from services.workspace_presets import IMAGE_SELECTION_FIELDS
 from prompts.grading_prompt import (
     GRADING_TEXT_PROMPT_TEMPLATE,
     GRADING_CODE_PROMPT_TEMPLATE,
@@ -585,8 +586,10 @@ class LLMService:
     ):
         """Generiert/ändert die angeforderten Felder einer Workspace-Aufgabe
         in EINEM LLM-Call (Single-Prompt): title, description,
-        model_solution (Skizze + Bewertungskriterien), env, files, folders —
-        plus workspace_image/workspace_engines/proposed_image_spec, wenn
+        model_solution (Skizze + Bewertungskriterien), env, files
+        (Volltext ODER stellenweise Datei-„edits“), folders,
+        delete_files (NUR bei bestehenden Dateien) — plus
+        workspace_image/workspace_engines/proposed_image_spec, wenn
         require_image_selection (das LLM schlägt vor, die
         Infrastruktur befehligt nie; Validierung serverseitig).
 
@@ -607,10 +610,7 @@ class LLMService:
         Enthält keine Studentendaten — nutzt den Public Endpoint, falls konfiguriert.
         """
         import json as _json
-        mandatory = (
-            ["workspace_image", "workspace_engines", "proposed_image_spec"]
-            if require_image_selection else []
-        )
+        mandatory = list(IMAGE_SELECTION_FIELDS) if require_image_selection else []
         generate_list = ", ".join(
             f'"{f}"' for f in generate_fields + mandatory
         )

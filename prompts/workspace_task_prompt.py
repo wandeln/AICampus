@@ -16,15 +16,19 @@ generierten Dateien beziehen), dann Aufgabenstellung und Titel.
 Zugriffs- & Skript-Modell (seit 2026-09-19): KEINE YAML-Spec, KEIN
 Dataset-Spec, KEINE Pfad-Zonen. Ausführung/Tests/Initialisierung laufen über
 Skript-Dateien; die Sichtbarkeit für Studierende bestimmt eine explizite
-Zugriffsklasse pro Datei/Ordner (✏️ edit / 🔒 read-only / 👤 hidden):
-  run.sh (🔒)             → „▶ Ausführen“-Button (bash run.sh)
+Zugriffsklasse pro Datei/Ordner (✏️ edit / 🔒 read-only / 👤 hidden).
+Jedes für Studierende SICHTBARE .sh-Skript bekommt einen Play-Button (▶) im
+Dateibaum, der es im Container ausführt (bash <skript>) — es gibt KEINE
+festen „Ausführen“-/„Test“-Buttons mehr; es darf beliebig viele .sh-Skripte
+geben (z. B. train.sh, tensorboard.sh, jupyter.sh, marimo.sh):
+  run.sh (🔒)             → konventionelles Ausführungsskript (▶ im Baum)
   .init.sh (👤)           → einmaliger public Build-Schritt (Task-Image, immer
                             Internet; Paket-Installation, Dataset-Downloads nach
                             data/) — FÜR STUDENTEN VERSTECKT (👤), sie sehen
                             nur das Ergebnis — darf NIE in 👤 schreiben
   .init_hidden.sh (👤)    → optional, private Phase 2 NACH .init.sh (private
                             Testdaten laden/erzeugen)
-  test.sh (🔒)            → „🧪 Test“-Button (public Self-Check)
+  test.sh (🔒)            → konventionelles öffentliches Testskript (▶ im Baum)
   .test_private.sh (👤)   → private Grading-Judge (IMMER in der Wurzel; fehlt →
                             Grading ohne private Tests)
   .test_solution.sh (👤)  → Tutor-Testlauf: Musterlösung aus .solution/ über
@@ -64,17 +68,24 @@ WORKSPACE_TASK_PROMPT_TEMPLATE = """\
 Du bist ein erfahrener Informatik-Tutor. Du erstellst bzw. überarbeitest eine
 komplexe Coding-Aufgabe („Workspace-Aufgabe“): Die Studierenden lösen die Aufgabe
 in einem Docker-Container (eine Arbeitsumgebung je Student), indem sie dort
-Dateien editieren und die Ausführen-/Test-Buttons klicken, die auf die
-Skript-Dateien der Aufgabe laufen.
+Dateien editieren und Shell-Skripte ausführen. Jedes für Studierende SICHTBARE
+.sh-Skript hat einen Play-Button (▶) im Dateibaum, der das Skript im
+Container ausführt (bash <skript>). Es dürfen beliebig viele .sh-Skripte geben (je nach Aufgabentyp, z. B.
+run.sh, test.sh, train.sh, tensorboard.sh, marimo.sh, jupyter.sh).
 
 THEMA: {{ topic }}
 SCHWIERIGKEIT: {{ difficulty }}
 MAX. PUNKTE: {{ max_points }}
 
-ANZUFORDERNDE FELDER — gib als Antwort ein gültiges JSON-Objekt mit EXAKT diesen Schlüsseln:
+ZULÄSSIGE FELDER — die Liste bestimmt, WELCHE Felder du in deiner Antwort
+bearbeiten darfst (nicht: welche du zwingend bearbeiten MUSST):
 {{ generate_list }}
-Das Objekt ist FLACH aufgebaut: alle angeforderten Schlüssel stehen auf oberster
-Ebene — verschachtle sie NICHT in ein gemeinsames Wrapper-Objekt.
+Liefere als Antwort ein gültiges JSON-Objekt, dessen Schlüssel ausschließlich
+aus dieser Liste stammen. Das Objekt ist FLACH aufgebaut — verschachtle die
+Schlüssel NICHT in ein gemeinsames Wrapper-Objekt. Ein Schlüssel, der NICHT
+auf der Liste steht, wird vom System IGNORIERT — produziere keine solchen
+Schlüssel. Ein Feld, das du weglässt, bleibt unverändert (bestehender Inhalt
+wird behalten).
 Die Reihenfolge der Schlüsselliste ist BEDEUTUNGSVOLL: Arbeite die Felder in
 genau dieser Reihenfolge ab (Implementierung — Dateien/Ordner/Umwelt — zuerst,
 dann Lösungsskizze/Kriterien, dann Aufgabenstellung, Titel), damit spätere
@@ -108,9 +119,9 @@ Umgebungswahl:
   Größere Umgebungslücken gehören in eine passende/neue Image-Spec
   (proposed_image_spec).
 
-BEDEUTUNG DER ANGEFORDERTEN SCHLÜSSEL:
-(Diese Felder gibst du NUR aus, wenn sie oben unter ANZUFORDERNDE FELDER
-stehen; sonst NUR die dort aufgeführten Schlüssel.)
+BEDEUTUNG DER ZULÄSSIGEN SCHLÜSSEL:
+(Beschreibung der oben unter ZULÄSSIGE FELDER aufgeführten Felder — diese
+Schlüssel darfst du liefern; alle anderen werden ignoriert.)
 - "title": Kurzer, prägnanter Titel (z. B. „MNIST-Ziffernklassifikation").
 - "description": Vollständige Aufgabenstellung für Studierende — alle Infos,
 die für die Lösung nötig sind (Dateinamen, Pfade, wie man die Umgebung
@@ -147,16 +158,17 @@ Testverhalten von test.sh/.test_private.sh).
     aber KEINE vollständige Lösung und keine Syntaxfehler.
   * "readonly" → 🔒 READ-ONLY — Studierende dürfen nur lesen; eine geteilte
     Kopie für alle. Konventionen:
-    - "run.sh": Shell-Skript für den Button „▶ Ausführen“ (läuft als
-      `bash run.sh` im Student-Container). Führe die Lösung der Studierenden
-      aus (z. B. `#!/bin/sh` + `set -e` + `python3 main.py`). Bei den meisten
-      Aufgaben ERFORDERLICH.
-    - "test.sh": Shell-Skript für den Button „🧪 Test“ (läuft als
-      `bash test.sh`). NUR anliefern, wenn auch öffentliche Testdateien
-      geliefert werden. MUSS schnell sein — s. TEST-REGELN unten.
+    - "run.sh": konventionelles AUSFÜHRUNGS-Skript (Start per Play-Button ▶
+      im Dateibaum = `bash run.sh` im Student-Container). Führe die Lösung
+      der Studierenden aus (z. B. `#!/bin/sh` + `set -e` + `python3 main.py`).
+      Bei den meisten Aufgaben ERFORDERLICH.
+    - "test.sh": konventionelles öffentliches TEST-Skript (Start per
+      Play-Button ▶ im Dateibaum). NUR anliefern, wenn auch öffentliche
+      Testdateien geliefert werden. MUSS schnell sein — s. TEST-REGELN unten.
     - öffentliche Testdateien (z. B. "test_public.py", Wurzel): ÖFFENTLICHE
       Tests — die Studierenden sehen sie read-only (access: "readonly") und
-      können sie per Test-Button ausführen. Sinnvolle Teilprüfungen, die den
+      können sie per Play-Button (▶) auf test.sh ausführen. Sinnvolle
+      Teilprüfungen, die den
       Fortschritt anzeigen, aber NUR EINEN TEIL der Aufgabe prüfen (die volle
       Bewertung kommt privat). Müssen an der Musterlösung PASSEN und am
       Starter (weitgehend) FEHLSCHLAGEN. GLEICHE TEST-REGELN wie test.sh
@@ -207,8 +219,8 @@ Testverhalten von test.sh/.test_private.sh).
       nie in der Student-View.
     Alle sechs System-Skripte sind OPTIONAL — fehlt eines, entfällt
     schlicht die dazugehörige Funktion (kein Fehler, kein Crash):
-    run.sh → kein „▶ Ausführen“-Button • test.sh → kein „🧪 Test“-Button •
-    .test_private.sh → Korrektur ohne private Test-Ausgaben •
+    run.sh → kein Ausführungsskript • test.sh → kein öffentliches
+    Testskript • .test_private.sh → Korrektur ohne private Test-Ausgaben •
     .init.sh/.init_hidden.sh → das Basis-Image wird direkt verwendet
     (kein Task-Image-Build) • .test_solution.sh → „🧪 Musterlösung testen“
     nicht verfügbar. Liefere ein Skript nur, wenn seine Funktion für die
@@ -218,8 +230,8 @@ Testverhalten von test.sh/.test_private.sh).
       noVNC-Desktop): Als zusätzliche Run-Skripte (z. B. "jupyter.sh",
       "tensorboard.sh", access: "readonly") anliefern, wenn eine Web-UI
       für die Lösung sinnvoll ist (z. B. Notebook für EDA/Training).
-      Die Studierenden starten das Skript im Terminal und öffnen den
-      Port in der Browser-Preview. Die App MUSS auf 0.0.0.0 OHNE
+      Die Studierenden starten das Skript per Play-Button (▶) im Dateibaum
+      und öffnen den Port in der Browser-Preview. Die App MUSS auf 0.0.0.0 OHNE
       Base-Pfad (auf /) lauschen — AICampus routet jeden Port über eine
       eigene Subdomain zur App (Routing/Auth übernimmt die Plattform,
       das Skript kümmert sich nicht darum). Das ist auch der normale
@@ -309,14 +321,31 @@ BESTEHENDE UMGEBUNG (JSON — nur anpassen, wo angefordert):
 {% if current_files %}
 BESTEHENDE DATEIEN DER AUFGABE (als Kontext — überarbeite gezielt, wo angefordert):
 {% for f in current_files %}
-=== {{ f.path }} ===
+=== Start {{ f.path }} ===
 {{ f.content }}
+=== End {{ f.path }} ===
 {% endfor %}
+{% endif %}
+{% if current_files and '"files"' in generate_list %}
+
+STELLENWEISE DATEI-BEARBEITUNG ("edits") — für lokale Änderungen an bestehenden Dateien:
+Wenn die Anweisung nur LOKALE Änderungen an einer bestehenden Datei verlangt (z. B. eine Funktion ergänzen, einen Fehler in einem Skript korrigieren, einen Abschnitt umformulieren), gib für diese Datei STATT "content" den Schlüssel "edits" mit einer LISTE von Edit-Objekten zurück:
+  { "path": "main.py", "edits": [ { "op": "replace_span", "old": "…", "new": "…" } ] }
+Die restlichen Teile der Datei bleiben dabei unverändert — dadurch kann an anderen Stellen nichts versehentlich geändert oder verloren gehen. Neue Dateien und globale Überarbeitungen einer Datei (Neugestaltung, Umstrukturierung, „kürzer fassen“) bekommen weiterhin den VOLLTEXT über "content". Pro Datei darf genau EINER der Schlüssel "content" bzw. "edits" vorkommen — nie beide.
+Jedes Edit-Objekt: { "op": "replace_span", "old": "...", "new": "..." } — ersetzt ein KURZES, in der Datei EXAKT EINMAL vorkommendes Snippet WORTGLEICH durch "new" (mehrere Zeilen erlaubt; "new" = "" löscht das Snippet). "old" muss exakt so im vorhandenen Dateiinhalt vorkommen (inkl. aller Backslashes, Leerzeichen und Zeilenumbrüche — der Inhalt steht oben unter „BESTEHENDE DATEIEN DER AUFGABE“).
+Regeln für "edits":
+- Verwende NUR Snippets, die in den bestehenden Dateien tatsächlich vorhanden sind — erfinde keine.
+- Jedes "old" muss in seiner Datei EXAKT EINMAL vorkommen (eindeutig); Edits derselben Datei dürfen sich nicht überschneiden. Alle Edits beziehen sich auf den VORHANDENEN Dateiinhalt (nicht auf Zwischenergebnisse).
+- Dateien mit gekürztem Inhalt („… gekürzt …“) oder ohne Inhalt („(nicht geladen — Kontext-Limit)“) NICHT überarbeiten — sie bleiben unverändert.
+{% if '"delete_files"' in generate_list %}
+DATEIEN LÖSCHEN ("delete_files"):
+Wenn die Anweisung das Entfernen bestehender Dateien verlangt, liefere den Schlüssel "delete_files" mit einer LISTE der zu löschenden Dateipfade (exakt die Pfade aus „BESTEHENDE DATEIEN DER AUFGABE“). Für gelöschte Dateien KEIN "files"-Eintrag liefern. Weglassen bzw. [] = nichts löschen.
+{% endif %}
 {% endif %}
 
 Regeln:
-- Generiere NUR die oben unter ANZUFORDERNDE FELDER aufgelisteten Schlüssel.
-  Alle anderen Schlüssel dürfen NICHT vorkommen.
+- Liefere NUR Schlüssel aus der obigen Liste „ZULÄSSIGE FELDER“ — die
+  Ausgabe zu jedem anderen Feld wird vom System ignoriert und ist zu vermeiden.
 {% if require_image_selection %}
 - workspace_image und workspace_engines sind PFLICHT (kein null): wähle
   Image + Engine-Paar passend zur Aufgabe.
@@ -350,8 +379,18 @@ Regeln:
   `echo "Genauigkeit: 0.97"`), damit der Korrektor sie einsehen kann.
   Das Test-Output insgesamt KURZ halten (wenige Zeilen) — es fließt in die
   LLM-Korrektur und soll für Menschen lesbar bleiben.
-- Wenn "env" angefordert ist: setze ALLE FÜNF env-Keys explizit (passend zur
+{% if current_env %}
+- Wenn "env" angefordert ist: Nimm die Werte aus „BESTEHENDE UMGEBUNG“ 1:1 als
+  Basis — ändere NUR Keys, die klar nicht zur Aufgabe/Anweisung passen (z. B.
+  GPU-Training → großzügigeres workspace_timeout / mehr workspace_memory;
+  Lösung schreibt große Dateien → höheres workspace_disk_quota; keine
+  Laufzeit-Downloads → workspace_internet false). Unveränderte Keys
+  WEGLASSEN; wenn nichts geändert werden muss, lass „env“ komplett weg —
+  die bestehenden Werte bleiben dann unangetastet.
+{% else %}
+- Wenn "env" angefordert ist: setze ALLE SECHS env-Keys explizit (passend zur
   Aufgabe, nicht blind Standardwerte).
+{% endif %}
 - Starter-Dateien: lauffähiges Gerüst mit TODOs — NICHT die komplette Lösung.
 - Die Aufgabenstellung muss alle für die Lösung nötigen Infos enthalten
   (Dateinamen, Dataset-Pfad, erwartete Artefakte) und der angegebenen
@@ -363,6 +402,8 @@ Regeln:
 - Verwende in Markdown $Math$-Notation und Code-Blöcke, wo es hilft.
 - Falls für ein angefordertes Feld bereits Inhalt existiert (s. o.),
   überarbeite/verbessere ihn gezielt — gestalte die Aufgabe nicht grundlos neu.
+- Bei lokalen Änderungen an bestehenden DATEIEN nutze „edits“ (s. o.),
+  damit der restliche Dateiinhalt garantiert unverändert bleibt.
 - Gib ausschließlich das JSON-Objekt aus — keine Code-Blöcke (```json ... ```),
   keine weiteren Texte. Achte auf korrektes Escaping (Backslash in Latex,
   Newlines in Shell-Skript-Inhalten als \\n).

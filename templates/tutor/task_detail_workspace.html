@@ -835,10 +835,20 @@
       showToast("Das LLM hat eine neue Image-Spec („" + (data.proposed_image_spec.name || "ohne Name") +
         "“) vorgeschlagen — bitte in den Einstellungen → Compute/Workspace anlegen.", "warning");
     }
-    if (data.workspace_files && data.workspace_files.length) {
+    const nWritten = (data.workspace_files || []).length;
+    const nEdited = (data.workspace_files_edited || []).length;
+    const nDeleted = (data.workspace_files_deleted || []).length;
+    if (nWritten || nEdited || nDeleted) {
       wsUI.refresh();
-      applied.push(data.workspace_files.length + " Dateien");
+      const parts = [];
+      if (nWritten) parts.push(nWritten + " neu/geschrieben");
+      if (nEdited) parts.push(nEdited + " lokal editiert");
+      if (nDeleted) parts.push(nDeleted + " gelöscht");
+      applied.push("Dateien: " + parts.join(", "));
     }
+    (data.workspace_file_warnings || []).forEach((w) => {
+      showToast("⚠️ " + w, "warning");
+    });
     return applied;
   };
 

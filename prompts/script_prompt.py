@@ -26,9 +26,9 @@ KURS: {{ course_name }}
 THEMA / ANWEISUNG DES TUTORS:
 {{ topic }}
 
-ANZUFORDERNDE FELDER — gib als Antwort ein gültiges JSON-Objekt. Erlaubt sind NUR diese Schlüssel:
+ZULÄSSIGE FELDER — gib als Antwort ein gültiges JSON-Objekt. Erlaubt sind NUR diese Schlüssel — jeder andere Schlüssel wird vom System IGNORIERT:
 {{ generate_list }}
-Jeder angeforderte Schlüssel ist OPTIONAL: Wenn die Anweisung ein Feld inhaltlich NICHT betrifft und das Feld bereits einen Inhalt hat, lass den Schlüssel einfach WEG — der vorhandene Wert bleibt dann unverändert. Wenn das Feld geändert werden soll, liefere den aktualisierten Wert. Für Felder OHNE vorhandenen Inhalt ist der Schlüssel PFLICHT.
+Jeder Schlüssel der Liste ist OPTIONAL: Wenn die Anweisung ein Feld inhaltlich NICHT betrifft und das Feld bereits einen Inhalt hat, lass den Schlüssel einfach WEG — der vorhandene Wert bleibt dann unverändert. Wenn das Feld geändert werden soll, liefere den aktualisierten Wert. Für Felder OHNE vorhandenen Inhalt ist der Schlüssel PFLICHT.
 {% if current_content and '"content"' in generate_list %}
 Außerdem: Bei rein lokalen Änderungen an vorhandenem Inhalt darf der Schlüssel "content" durch "content_edits" ersetzt werden (Format siehe unten, „Stellenweise Bearbeitung“).
 {% endif %}
@@ -93,7 +93,7 @@ In der Antwort darf genau EINER der Schlüssel "content" bzw. "content_edits" vo
 {% endif %}
 
 Regeln:
-- Generiere NUR die oben angeforderten Felder. Nicht angeforderte Schlüssel dürfen in der Antwort NICHT vorkommen.
+- Liefere NUR Schlüssel aus der obigen Liste „ZULÄSSIGE FELDER“ — die Ausgabe zu jedem anderen Feld wird vom System ignoriert und ist zu vermeiden.
 - Das Kapitel ist reiner Vorlesungsinhalt: KEINE Übungsaufgaben, keine Aufgabenlisten und keine Aufgabenformulierungen (z.B. „Bestimme …“, „Zeige …“, „Beweise …“) — Übungsaufgaben werden gesondert im Kurs gepflegt und gehören NICHT ins Skript.
 - Falls für ein angefordertes Feld bereits ein Inhalt existiert (s. o.), überarbeite/verbessere ihn gemäß der Anweisung — gestalte das Kapitel nicht grundlos neu, sondern behalte die Struktur bei, soweit die Anweisung nichts anderes vorschreibt.{% if current_content and '"content"' in generate_list %} Bei lokalen Änderungen an vorhandenem Inhalt nutze dafür den Mechanismus „Stellenweise Bearbeitung“ („content_edits“), damit der restliche Inhalt garantiert unverändert bleibt.{% endif %}
 - Falls ein Feld KEINEN Inhalt hat, ist der zugehörige Schlüssel PFLICHT — erstelle den Inhalt neu passend zum Thema.
