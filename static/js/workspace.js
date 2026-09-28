@@ -1994,6 +1994,17 @@
       inp.click();
     }
 
+    // Drop-down für den Upload-Toolbar-Button: Dateien | Ordner.
+    // Der Browser-Picker kann beides nicht in einem Dialog
+    // (multiple vs. webkitdirectory), daher zwei Einträge.
+    function uploadMenu(x, y, targetDir) {
+      showCtxMenu(x, y, [
+        { label: "📤 Dateien hochladen …", fn: () => uploadTo(targetDir, "files") },
+        { label: "📤 Ordner hochladen … (inkl. Struktur)",
+          fn: () => uploadTo(targetDir, "folders") },
+      ]);
+    }
+
     // ── Main-Datei ────────────────────────────────────────────────
     function setMainFileState(p) {
       state.mainFile = String(p || "");
@@ -2352,6 +2363,7 @@
       uploadFile,
       uploadEntries,
       uploadTo,
+      uploadMenu,
       newFileIn,
       newFolderIn,
       getMainFile,

@@ -141,8 +141,7 @@
           <button type="button" id="ws-files-refresh-btn" title="Aktualisieren" class="ws-tree-btn">⟳</button>
           <button type="button" id="ws-files-new-btn" title="Neue Datei in der Wurzel anlegen" class="ws-tree-btn">＋ 📄</button>
           <button type="button" id="ws-files-new-folder-btn" title="Neuen Ordner in der Wurzel anlegen" class="ws-tree-btn">＋ 📁</button>
-          <button type="button" id="ws-files-upload-btn" title="Dateien hochladen (mehrere möglich) — alternativ per Drag & Drop auf einen Ordner" class="ws-tree-btn">⬆</button>
-          <button type="button" id="ws-files-upload-folder-btn" title="Ordner hochladen (inkl. Ordner-Struktur)" class="ws-tree-btn">📁⬆</button>
+          <button type="button" id="ws-files-upload-btn" title="Dateien oder Ordner hochladen (mehrere möglich) — alternativ per Drag & Drop auf einen Ordner" class="ws-tree-btn">⬆▾</button>
           <span id="ws-file-save-state" class="ml-auto text-[10px] text-gray-400 truncate"></span>
           <button type="button" id="ws-files-fullscreen-btn" title="Vollbild" class="ws-tree-btn">⛶</button>
         </div>
@@ -766,22 +765,15 @@
     wsUI.newFolderIn("");
   });
 
-  // Upload: mehrere Dateien / kompletter Ordner (mit Struktur);
-  // Zielpfad/-ordner wird bei Bedarf gefragt, alternativ Dateien/
-  // Ordner per Drag & Drop direkt auf einen Ordner im Baum ziehen.
-  document.getElementById("ws-files-upload-btn").addEventListener("click", () => {
+  // Upload: Dateien oder Ordner (inkl. Struktur) per Drop-down;
+  // alternativ per Drag & Drop direkt auf einen Ordner im Baum ziehen.
+  document.getElementById("ws-files-upload-btn").addEventListener("click", (e) => {
     if (!WS_TASK_ID) {
       showToast("Erst die Aufgabe speichern.", "warning");
       return;
     }
-    wsUI.uploadTo("", "files");
-  });
-  document.getElementById("ws-files-upload-folder-btn").addEventListener("click", () => {
-    if (!WS_TASK_ID) {
-      showToast("Erst die Aufgabe speichern.", "warning");
-      return;
-    }
-    wsUI.uploadTo("", "folders");
+    const r = e.currentTarget.getBoundingClientRect();
+    wsUI.uploadMenu(r.left, r.bottom + 4, "");
   });
 
   // ─── LLM-Generierung: Hooks für die AI-Box im Base-Template ───
