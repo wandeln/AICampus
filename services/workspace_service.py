@@ -477,6 +477,18 @@ class WorkspaceService:
         from services import image_spec_service
         return image_spec_service.task_engine_names(task)
 
+    def target_agents(self, session: Session, task: Task) -> list[dict]:
+        """Agents, auf denen Task-Sync/Init-Build laufen: der Engine-Pool
+        der Aufgabe (task.workspace_engines) — ohne Pool: alle registrierten
+        Agents des Kurses. Wird von on_task_saved UND dem Pending-Marker
+        (api/tutor.py) genutzt, damit beide denselben Agent-Satz zeigen."""
+        agents = self.get_agents(session, task.course_id)
+        names = self.task_engine_names(task)
+        if names:
+            by_name = {a["name"]: a for a in agents}
+            agents = [by_name[n] for n in names if n in by_name]
+        return agents
+
     @staticmethod
     def validate_task_ready(session: Session, task: Task) -> Optional[str]:
         """Prüft, ob die Aufgabe startbar ist (Image-Spec + Engine-Pool).
@@ -1184,15 +1196,11 @@ class WorkspaceService:
         except Exception as e:  # noqa: BLE001 — Stubs dürfen den Sync nicht blockieren
             logger.warning("System-Stubs (task %s): %s", task.id, e)
         from services import image_spec_service
-        engine_names = self.task_engine_names(task)
         spec_row = None
         if task.workspace_image:
             spec_row = image_spec_service.resolve_spec(
                 session, task.course_id, task.workspace_image)
-        agents = self.get_agents(session, task.course_id)
-        if engine_names:
-            by_name = {a["name"]: a for a in agents}
-            agents = [by_name[n] for n in engine_names if n in by_name]
+        agents = self.target_agents(session, task)
         status: dict = {}
         for agent in agents:
             a_status: dict = {

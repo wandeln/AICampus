@@ -225,11 +225,15 @@ def _schedule_workspace_sync(task_id: int) -> None:
                     # Die UI kann „lädt …“ pollen, bis der Sync fertig ist.
                     if workspace_service.is_enabled(bg_session, task.course_id):
                         try:
+                            # Derselbe Agent-Satz wie on_task_saved (Engine-Pool
+                            # der Aufgabe, nicht ALLE Kurs-Agents) — sonst zeigt
+                            # die UI beim Pending-Poll Engines an, auf denen
+                            # gar nichts gebaut wird.
                             task.workspace_assets_status = json.dumps({
                                 a["url"]: {"assets": "pending",
                                            "task_image": "pending",
                                            "image": "pending"}
-                                for a in workspace_service.get_agents(bg_session, task.course_id)
+                                for a in workspace_service.target_agents(bg_session, task)
                             })
                             bg_session.add(task)
                             bg_session.commit()
