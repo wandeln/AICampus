@@ -7,6 +7,8 @@ Rollen:
   globalen UND Kurs-Engines (course_id im Body).
 - Prof: Kurs-Specs verwalten, Installation nur auf KURS-Engines.
   (Globale Specs sind im Kurs lesbar, editierbar nur über die Admin-Konsole.)
+- Tutor: nur Lesezugriff auf Kurs-Specs + Engine-Status (Task-Editor:
+  Image-Spec-/Engine-Auswahl für Workspace-Aufgaben).
 
 Engine-Auswahl für Installation: `engine` = Name aus der effektiven
 Agent-Registry (Kurs-Override > Global > .env).
@@ -56,6 +58,24 @@ def _check_course_prof_admin(user: User, course_id: int,
     ).first()
     if not membership or membership.role_in_course != CourseRole.PROF:
         raise HTTPException(403, "Nur PROF/Admin dürfen Image-Specs verwalten.")
+    return course
+
+
+def _check_course_tutor(user: User, course_id: int,
+                        session: Session) -> Course:
+    """PROF/TUTOR im Kurs oder globaler Admin (Lesezugriff für den Task-Editor)."""
+    course = session.get(Course, course_id)
+    if not course:
+        raise HTTPException(404, "Kurs nicht gefunden.")
+    if user.role == GlobalUserRole.ADMIN:
+        return course
+    membership = session.exec(
+        select(UserCourse)
+        .where(UserCourse.user_id == user.id)
+        .where(UserCourse.course_id == course_id)
+    ).first()
+    if not membership or membership.role_in_course not in (CourseRole.PROF, CourseRole.TUTOR):
+        raise HTTPException(403, "Nur PROF/TUTOR/Admin dürfen auf diese Daten zugreifen.")
     return course
 
 
@@ -319,8 +339,11 @@ async def course_list_specs(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Kurs-Specs + globale Specs (Kurs zuerst)."""
-    _check_course_prof_admin(user, course_id, session)
+    """Kurs-Specs + globale Specs (Kurs zuerst).
+
+    Read-only: PROF, TUTOR (Task-Editor: Image-Spec-Auswahl) und Admin.
+    """
+    _check_course_tutor(user, course_id, session)
     return {"specs": image_spec_service.list_specs(session, course_id)}
 
 
@@ -400,7 +423,7 @@ async def course_engine_images(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    _check_course_prof_admin(user, course_id, session)
+    _check_course_tutor(user, course_id, session)
     agent = _agent_by_name(session, course_id, name)
     try:
         client = workspace_service.client_for(agent)

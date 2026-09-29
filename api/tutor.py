@@ -1062,14 +1062,23 @@ async def ai_generate_task(
             ws_fields.append("description")
         if gen_title:
             ws_fields.append("title")
-        # Image-/Engine-Wahl (workspace_image/-engines/proposed_image_spec)
-        # ist nur relevant, wenn Umgebung/Dateien generiert werden.
-        require_image_selection = gen_env or gen_files
 
         req_task_id = body.get("task_id")
         task = session.get(Task, req_task_id) if req_task_id else None
         if task is not None and task.course_id != course_id:
             task = None
+
+        # Image-/Engine-Wahl (workspace_image/-engines/proposed_image_spec):
+        # PFLICHT, wenn die Umgebung generiert wird oder die Aufgabe (noch)
+        # kein Image bzw. keine Engine hat (z. B. NEUE Aufgabe mit Dateien).
+        # Bei einer bestehenden, vollständig konfigurierten Aufgabe bleibt
+        # die Image-/Engine-Wahl unangetastet, wenn „env“ nicht angefordert
+        # ist — die LLM-Ausgabe zu diesen Feldern wird dann ignoriert.
+        require_image_selection = gen_env or (
+            gen_files
+            and (task is None
+                 or not (task.workspace_image and task.workspace_engines))
+        )
 
         # Bestehende Dateien als LLM-Kontext (Text, mit Größen-Caps).
         # NUR echte Task-Dateien (DB-Zeilen): Init-Artefakte (Ergebnisse von
@@ -2968,8 +2977,10 @@ async def course_compute_engines(
 
     Für die UI-Auswahl (Task-Editor: Engine-Dropdown, Kurs-Settings:
     Install-Picker). Health-Cache (30 s) wird bewusst genutzt.
+
+    Read-only: PROF, TUTOR (Task-Editor: Engine-Auswahl) und Admin.
     """
-    _check_course_prof_admin(user, course_id, session)
+    _check_course_role(user, course_id, session)
     return workspace_service.status(session, course_id)
 
 
