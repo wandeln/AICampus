@@ -125,6 +125,14 @@
 }
 #ws-taskdesc-list .katex::-webkit-scrollbar { display: none; }
 
+/* Die oberste Sektion unter der Toolbar braucht keinen border-top,
+   sonst Doppelborder mit der Toolbar-Border-b (relevant, wenn der
+   Dateibaum weggesnapped ist und Terminals direkt unter der Toolbar
+   steht — oder die Aufgabenstellung ohne Terminals/Ports). */
+#ws-taskdesc-sec.ws-flush-top,
+#ws-terminals-sec.ws-flush-top,
+#ws-ports-sec.ws-flush-top { border-top-width: 0; }
+
 /* ─── Dockerfile-Drop-Down (Tutor: Image-Spec) ─────────────────── */
 /* Design wie die Image-Spec-Karten (Admin-Konsole): Standard-Disclosure-
    Marker aus, eigener Chevron rechts, der beim Öffnen dreht. */

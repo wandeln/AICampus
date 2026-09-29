@@ -51,7 +51,11 @@
                 <span id="ws-save-state" class="ml-auto text-[10px] text-gray-400 truncate"></span>
                 <button type="button" id="ws-fullscreen-btn" title="Vollbild" class="ws-tree-btn">⛶</button>
               </div>
-              <div id="ws-filetree" class="flex-1 overflow-y-auto p-1 text-sm">
+              <!-- p-1 bleibt: das 8-px-Padding-Strippen am Anschlag macht
+                   der Snap unsichtbar (wsTaskDescApply blendet den Baum
+                   bei < 10 px Restplatz aus; die Sektionen stapeln dann
+                   direkt an der Toolbar, die freie Fläche liegt unten). -->
+              <div id="ws-filetree" class="flex-1 min-h-0 overflow-y-auto p-1 text-sm">
                 <div class="text-gray-400 text-xs p-1">Dateien werden geladen …</div>
               </div>
               <!-- ─── Terminals (PTY im Container) ──────────────────── -->
@@ -87,7 +91,7 @@
                   </button>
                   <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Aufgabenstellung</span>
                 </div>
-                <div id="ws-taskdesc-list" class="hidden p-1 text-xs overflow-y-auto max-h-56"></div>
+                <div id="ws-taskdesc-list" class="hidden p-1 px-2 text-xs overflow-y-auto max-h-56"></div>
               </div>
             </div>
 
@@ -205,6 +209,10 @@
     // Chevron zeigt geöffnet nach unten, zugeklappt nach oben.
     if (chev) { chev.style.transform = wsSecs[sec] ? "" : "rotate(180deg)"; }
     btn.title = wsSecs[sec] ? "Liste einklappen" : "Liste aufklappen";
+    // (Re)Render = Sektionshöhe kann sich geändert haben → Snap/Flush
+    // der Aufgabenstellung nachziehen (idempotent, Doppelaufruf über
+    // wsSecToggle/wsLoadStatus ist beabsichtigt).
+    wsTaskDescApplyDefault();
   }
   // Aufgabenstellung: die Base rendert das Markdown bereits für die linke
   // Spalte — hier lazy ein zweites Mal für den Sidebar-Dropdown (erster
@@ -228,6 +236,7 @@
     wsSecs[sec] = !wsSecs[sec];
     if (sec === "taskdesc" && wsSecs.taskdesc) wsTaskDescEnsure();
     wsSecSync(sec);
+    wsTaskDescApplyDefault();  // Snap/Flush nach Öffnen/Schließen
   }
   // Ganze Bar (inkl. Heading) klickbar; die Buttons inside optieren per
   // stopPropagation aus, sonst würden sie doppelt toggeln bzw. beim
@@ -247,9 +256,9 @@
     .addEventListener("click", () => wsSecToggle("ports"));
   // Taskdesc-Bar hat eigene Klick-/Drag-Logik (s. u.) — kein generischer
   // Bar-Klick-Listener, sonst würde der Drag-Ende-Klick doppelt toggeln.
-  wsSecSync("terminals");
-  wsSecSync("ports");
-  wsSecSync("taskdesc");
+  // Initialer Collapse-State (Chevrons/Borders) wird unten NACH der
+  // Geometrie-Init gesetzt: wsSecSync zieht Snap/Flush nach, und das
+  // setzt die Konstanten (WS_TASKDESC_MIN, …) voraus. (TDZ!)
 
   // ─── Aufgabenstellung: Bar = Klick (Toggle) ODER Drag (Höhe) ──
   // Ambiguität per Schwellwert: erst ab CLICK_SLOP px vertikaler
@@ -260,36 +269,89 @@
   // das Dragging verlieren. Der eigene Wert wird (wie wsorder-)
   // pro Nutzer+Task in localStorage gehalten; bei jedem Layout-Change
   // (Vollbild, Split, Resize) wird nur auf den verfügbaren Raum
-  // geklammert — die Liste darf bis ganz nach oben wachsen (Dateibaum
-  // schrumpft dann auf 0).
+  // geklammert — die Liste darf bis ganz nach oben wachsen: der
+  // Dateibaum schrumpft und "snapped" bei < 10 px Restplatz weg, die
+  // Sektionen (inkl. Aufgabenstellung) rücken an die Toolbar (s.
+  // WS_TREE_SNAP). Ab dort ist die Bar oben fixiert.
   const WS_TASKDESC_MIN = 96;
   const WS_TASKDESC_DEF = 320;
+  // Der Dateibaum trägt p-1 (4+4 px): sinkt sein Flex-Restplatz unter
+  // WS_TREE_SNAP, bestünde er nur noch aus dem (durchscheinenden)
+  // Padding-Strippen → er wird ausgeblendet und die Sektionen (u. a.
+  // die Aufgabenstellung) rücken um genau diese Rest-Pixel an die
+  // Toolbar — das 8-px-Strippen wird so unsichtbar, und ws-flush-top
+  // vermeidet den Doppelborder an der Toolbar.
+  const WS_TREE_SNAP = 10;
   const wsTaskDescKey = "wstaskdesc-h-" + {{ current_user.id }} + "-" + {{ task.id }};
   let wsTaskDescCustom = null;
   try {
     const v = parseInt(localStorage.getItem(wsTaskDescKey), 10);
     if (Number.isFinite(v) && v >= WS_TASKDESC_MIN) wsTaskDescCustom = v;
   } catch (err) { /* localStorage nicht verfügbar */ }
-  function wsTaskDescMax() {
+  // Einzige Geometrie-Quelle (Drag, Init, Layout-Change, Toggle):
+  // klammert h_want auf den verfügbaren Raum ein und blendet den Baum
+  // bei < WS_TREE_SNAP Restplatz aus. Der Baum ist der einzige
+  // flex-1-Child: ohne ihn stapeln die Sektionen an der Toolbar —
+  // die Aufgabenstellung "snapped" mitsamt Terminals/Ports nach oben
+  // (um exakt die Rest-Pixel des Baums). Ab dort steht die Bar am
+  // oberen Anschlag: weiter Ziehen vergrößert nur noch die Liste
+  // (die Restfläche liegt unten), die Bar rückt nicht weiter. Die
+  // oberste Sektion unter der Toolbar verliert ihren border-top
+  // (ws-flush-top, sonst Doppelborder). Der Baum-Zustand ist
+  // abgeleitet (nicht gespeichert): bei Reload/Resize rekonstruiert
+  // sich alles aus der Listenhöhe.
+  function wsTaskDescApply(h_want, persist) {
     const sec = document.getElementById("ws-taskdesc-sec");
     const list = document.getElementById("ws-taskdesc-list");
-    const col = sec ? sec.parentElement : null;
-    if (!col || !list) return WS_TASKDESC_DEF;
-    let used = 0;
-    for (const el of col.children) {
-      if (el === sec || el.id === "ws-filetree") continue;
-      if (!el.classList.contains("hidden")) used += el.getBoundingClientRect().height;
-    }
+    const tree = document.getElementById("ws-filetree");
+    if (!sec || !list || !tree) return;
     const bar = list.previousElementSibling;
-    const barH = bar ? bar.getBoundingClientRect().height : 0;
-    return Math.max(WS_TASKDESC_MIN, Math.floor(col.clientHeight - used - barH));
-  }
-  function wsTaskDescApply() {
-    const list = document.getElementById("ws-taskdesc-list");
-    if (!list) return;
-    const h = Math.min(wsTaskDescCustom == null ? WS_TASKDESC_DEF : wsTaskDescCustom,
-                       wsTaskDescMax());
+    const col = sec.parentElement;
+    const C = col.clientHeight;
+    const barH = bar.getBoundingClientRect().height;
+    const open = wsSecs.taskdesc;
+    const auxEls = ["ws-terminals-sec", "ws-ports-sec"]
+      .map((id) => document.getElementById(id))
+      .filter(Boolean);
+    // used = sichtbare Geschwister (Toolbar + Terminals/Ports; ohne
+    // Container sind die Aux-Sektionen hidden → 0).
+    let used = 0, auxSecs = 0;
+    for (const el of col.children) {
+      if (el === sec || el === tree || el.classList.contains("hidden")) continue;
+      const h = el.getBoundingClientRect().height;
+      used += h;
+      if (auxEls.includes(el)) auxSecs += h;
+    }
+    // Restplatz für den Baum (bzw. Restfläche unten, wenn der Baum
+    // ausgeblendet ist), wenn die Liste h_want hoch wäre:
+    const share = C - used - 1 - barH - (open ? h_want : 0);
+    const treeHidden = open && share < WS_TREE_SNAP;
+    // Ohne Terminals/Ports steht die Sektion selbst direkt an der
+    // Toolbar → flush, und die Liste nimmt den 1-px-Vorteil mit.
+    const descFlush = open && treeHidden && auxSecs <= 0.5;
+    const maxH = Math.max(WS_TASKDESC_MIN, C - used - barH - (descFlush ? 0 : 1));
+    const h = Math.max(WS_TASKDESC_MIN, Math.min(h_want, maxH));
+    // Feste Höhe (nicht nur max-height): das Panel belegt exakt die
+    // eingestellte Größe — auch bei kurzem Inhalt. Inline max-height
+    // überschreibt die Tailwind-Fallback-Klasse max-h-56.
+    list.style.height = h + "px";
     list.style.maxHeight = h + "px";
+    tree.classList.toggle("hidden", treeHidden);
+    // Border-T: oberste Sektion unter der Toolbar = flush, sonst
+    // Doppelborder mit der Toolbar-Border-b.
+    const topAux = auxEls.find((el) => !el.classList.contains("hidden"));
+    for (const el of auxEls) {
+      el.classList.toggle("ws-flush-top", treeHidden && el === topAux);
+    }
+    sec.classList.toggle("ws-flush-top", descFlush);
+    if (persist) {
+      wsTaskDescCustom = h;
+      try { localStorage.setItem(wsTaskDescKey, String(h)); }
+      catch (err) { /* ignore */ }
+    }
+  }
+  function wsTaskDescApplyDefault() {
+    wsTaskDescApply(wsTaskDescCustom == null ? WS_TASKDESC_DEF : wsTaskDescCustom);
   }
   (function() {
     const bar = document.getElementById("ws-taskdesc-bar");
@@ -304,7 +366,7 @@
     bar.addEventListener("pointerdown", (e) => {
       if (e.pointerType === "mouse" && e.button !== 0) return;
       const startY = e.clientY;
-      const startH = parseFloat(list.style.maxHeight) || WS_TASKDESC_DEF;
+      const startH = parseFloat(list.style.height) || WS_TASKDESC_DEF;
       let dragging = false;
       try { bar.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
       function onMove(ev) {
@@ -313,9 +375,7 @@
           dragging = true;
           document.body.classList.add("ws-split-drag", "ws-split-drag-v");
         }
-        const h = Math.max(WS_TASKDESC_MIN,
-                           Math.min(startH + (startY - ev.clientY), wsTaskDescMax()));
-        list.style.maxHeight = h + "px";
+        wsTaskDescApply(startH + (startY - ev.clientY));
       }
       function onUp() {
         bar.removeEventListener("pointermove", onMove);
@@ -324,11 +384,7 @@
         document.body.classList.remove("ws-split-drag", "ws-split-drag-v");
         if (dragging) {
           consumed = true;  // der nachfolgende Click darf nicht toggeln
-          wsTaskDescCustom = parseInt(list.style.maxHeight, 10) || null;
-          try {
-            if (wsTaskDescCustom) localStorage.setItem(wsTaskDescKey, String(wsTaskDescCustom));
-            else localStorage.removeItem(wsTaskDescKey);
-          } catch (err) { /* ignore */ }
+          wsTaskDescApply(parseFloat(list.style.height) || WS_TASKDESC_DEF, true);
         }
       }
       bar.addEventListener("pointermove", onMove);
@@ -336,9 +392,12 @@
       bar.addEventListener("pointercancel", onUp);
     });
   })();
-  wsTaskDescApply();
-  window.addEventListener("resize", wsTaskDescApply);
-  document.addEventListener("ws-layout-changed", wsTaskDescApply);
+  wsTaskDescApplyDefault();
+  window.addEventListener("resize", wsTaskDescApplyDefault);
+  document.addEventListener("ws-layout-changed", wsTaskDescApplyDefault);
+  wsSecSync("terminals");
+  wsSecSync("ports");
+  wsSecSync("taskdesc");
 
   // Gemeinsame Baum/Editor-Komponente (workspace.js). Student-Config:
   // nur Bereiche der effektiven Klasse ✏️ edit sind editierbar;
@@ -418,6 +477,9 @@
       wsState.status = data;
       wsRenderBanner();
       wsPortsRender();
+      // Terminals/Ports-Sektionen können (de)appear/en → Baum-Snap und
+      // Flush-Border müssen nachgezogen werden.
+      wsTaskDescApplyDefault();
       if (!data.degraded) {
         // Gestoppt (hold „user“ oder „quota“): Dateibetrieb ist blockiert
         // (409) → Baum bleibt beim letzten Zustand (kein Auto-Start).
