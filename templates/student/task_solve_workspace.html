@@ -75,6 +75,20 @@
                 </div>
                 <div id="ws-ports-list" class="p-1 text-xs overflow-y-auto max-h-24"></div>
               </div>
+              <!-- ─── Aufgabenstellung (kompakte Zweitansicht der Task-Description) ──
+                   Immer sichtbar (unabhängig vom Container); by default
+                   einklappen — Markdown wird lazy beim ersten Aufklappen
+                   gerendert (wsTaskDescEnsure). -->
+              <div id="ws-taskdesc-sec" class="border-t border-gray-200">
+                <div id="ws-taskdesc-bar" class="flex items-center gap-1 h-7 px-1.5 bg-gray-100 border-b border-gray-200 select-none cursor-pointer touch-none"
+                     title="Klick: ein-/ausklappen · Ziehen: Höhe der Aufgabenstellung verstellen">
+                  <button type="button" id="ws-taskdesc-toggle" title="Liste einklappen" class="p-0 shrink-0 text-gray-400 hover:text-gray-600">
+                    <svg class="ws-sec-chevron h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                  </button>
+                  <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Aufgabenstellung</span>
+                </div>
+                <div id="ws-taskdesc-list" class="hidden p-1 text-xs overflow-y-auto max-h-56"></div>
+              </div>
             </div>
 
             <!-- Ziehbarer Trenner (Tree ↔ Editor; Doppelklick = Standardgröße) -->
@@ -171,10 +185,16 @@
   // Image-Specs: Chevron kippt, solange die Liste geöffnet ist).
   // Der Status-Poll rendert die Listen regelmäßig neu — daher wird
   // der Collapse-State hier gehalten und in wsSecSync re-angewendet.
-  const wsSecs = { terminals: false, ports: false };  // per Default einklappen
+  const wsSecs = { terminals: false, ports: false, taskdesc: false };  // per Default einklappen
+  const WS_SEC_IDS = {
+    terminals: { list: "ws-terminals-list", btn: "ws-terminals-toggle" },
+    ports: { list: "ws-ports-list", btn: "ws-ports-toggle" },
+    taskdesc: { list: "ws-taskdesc-list", btn: "ws-taskdesc-toggle" },
+  };
   function wsSecSync(sec) {
-    const list = document.getElementById(sec === "terminals" ? "ws-terminals-list" : "ws-ports-list");
-    const btn = document.getElementById(sec === "terminals" ? "ws-terminals-toggle" : "ws-ports-toggle");
+    const ids = WS_SEC_IDS[sec];
+    const list = document.getElementById(ids.list);
+    const btn = document.getElementById(ids.btn);
     if (!list || !btn) { return; }
     list.classList.toggle("hidden", !wsSecs[sec]);
     // Einklappen: untere Bar-Border weg, sonst Doppelborder
@@ -186,7 +206,29 @@
     if (chev) { chev.style.transform = wsSecs[sec] ? "" : "rotate(180deg)"; }
     btn.title = wsSecs[sec] ? "Liste einklappen" : "Liste aufklappen";
   }
-  function wsSecToggle(sec) { wsSecs[sec] = !wsSecs[sec]; wsSecSync(sec); }
+  // Aufgabenstellung: die Base rendert das Markdown bereits für die linke
+  // Spalte — hier lazy ein zweites Mal für den Sidebar-Dropdown (erster
+  // Klick), damit der (teils LaTeX-lastige) Text nicht doppelt am
+  // Seitenanfang gerendert wird.
+  let wsTaskDescDone = false;
+  function wsTaskDescEnsure() {
+    if (wsTaskDescDone) return;
+    wsTaskDescDone = true;
+    const list = document.getElementById("ws-taskdesc-list");
+    const raw = document.getElementById("task-description-raw");
+    if (!list || !raw) return;
+    const rawDesc = JSON.parse(raw.innerHTML);
+    if (!rawDesc || !rawDesc.trim()) {
+      list.innerHTML = '<div class="px-1.5 py-1 text-gray-400">Keine Aufgabenstellung</div>';
+      return;
+    }
+    renderMarkdown(rawDesc, list, { bibliography: true });
+  }
+  function wsSecToggle(sec) {
+    wsSecs[sec] = !wsSecs[sec];
+    if (sec === "taskdesc" && wsSecs.taskdesc) wsTaskDescEnsure();
+    wsSecSync(sec);
+  }
   // Ganze Bar (inkl. Heading) klickbar; die Buttons inside optieren per
   // stopPropagation aus, sonst würden sie doppelt toggeln bzw. beim
   // Terminal-Öffnen unbeabsichtigt einklappen.
@@ -196,12 +238,107 @@
   document.getElementById("ws-ports-toggle").addEventListener("click", (e) => {
     e.stopPropagation(); wsSecToggle("ports");
   });
+  document.getElementById("ws-taskdesc-toggle").addEventListener("click", (e) => {
+    e.stopPropagation(); wsSecToggle("taskdesc");
+  });
   document.getElementById("ws-terminals-toggle").parentElement
     .addEventListener("click", () => wsSecToggle("terminals"));
   document.getElementById("ws-ports-toggle").parentElement
     .addEventListener("click", () => wsSecToggle("ports"));
+  // Taskdesc-Bar hat eigene Klick-/Drag-Logik (s. u.) — kein generischer
+  // Bar-Klick-Listener, sonst würde der Drag-Ende-Klick doppelt toggeln.
   wsSecSync("terminals");
   wsSecSync("ports");
+  wsSecSync("taskdesc");
+
+  // ─── Aufgabenstellung: Bar = Klick (Toggle) ODER Drag (Höhe) ──
+  // Ambiguität per Schwellwert: erst ab CLICK_SLOP px vertikaler
+  // Bewegung ist es ein Drag (Höhe verstellen); sonst läuft der
+  // Click-Event normal durch (ein-/ausklappen). Der Click nach einem
+  // Drag wird per „consumed“ geschluckt. Pointer-Capture schon beim
+  // pointerdown, damit schnelle Drags die Bar nicht verlassen und
+  // das Dragging verlieren. Der eigene Wert wird (wie wsorder-)
+  // pro Nutzer+Task in localStorage gehalten; bei jedem Layout-Change
+  // (Vollbild, Split, Resize) wird nur auf den verfügbaren Raum
+  // geklammert — die Liste darf bis ganz nach oben wachsen (Dateibaum
+  // schrumpft dann auf 0).
+  const WS_TASKDESC_MIN = 96;
+  const WS_TASKDESC_DEF = 320;
+  const wsTaskDescKey = "wstaskdesc-h-" + {{ current_user.id }} + "-" + {{ task.id }};
+  let wsTaskDescCustom = null;
+  try {
+    const v = parseInt(localStorage.getItem(wsTaskDescKey), 10);
+    if (Number.isFinite(v) && v >= WS_TASKDESC_MIN) wsTaskDescCustom = v;
+  } catch (err) { /* localStorage nicht verfügbar */ }
+  function wsTaskDescMax() {
+    const sec = document.getElementById("ws-taskdesc-sec");
+    const list = document.getElementById("ws-taskdesc-list");
+    const col = sec ? sec.parentElement : null;
+    if (!col || !list) return WS_TASKDESC_DEF;
+    let used = 0;
+    for (const el of col.children) {
+      if (el === sec || el.id === "ws-filetree") continue;
+      if (!el.classList.contains("hidden")) used += el.getBoundingClientRect().height;
+    }
+    const bar = list.previousElementSibling;
+    const barH = bar ? bar.getBoundingClientRect().height : 0;
+    return Math.max(WS_TASKDESC_MIN, Math.floor(col.clientHeight - used - barH));
+  }
+  function wsTaskDescApply() {
+    const list = document.getElementById("ws-taskdesc-list");
+    if (!list) return;
+    const h = Math.min(wsTaskDescCustom == null ? WS_TASKDESC_DEF : wsTaskDescCustom,
+                       wsTaskDescMax());
+    list.style.maxHeight = h + "px";
+  }
+  (function() {
+    const bar = document.getElementById("ws-taskdesc-bar");
+    const list = document.getElementById("ws-taskdesc-list");
+    if (!bar || !list) return;
+    const CLICK_SLOP = 5;  // px vertikale Toleranz, bevor es ein Drag ist
+    let consumed = false;
+    bar.addEventListener("click", (e) => {
+      if (consumed) { consumed = false; e.stopPropagation(); return; }
+      wsSecToggle("taskdesc");
+    });
+    bar.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const startY = e.clientY;
+      const startH = parseFloat(list.style.maxHeight) || WS_TASKDESC_DEF;
+      let dragging = false;
+      try { bar.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      function onMove(ev) {
+        if (!dragging) {
+          if (Math.abs(ev.clientY - startY) < CLICK_SLOP) return;
+          dragging = true;
+          document.body.classList.add("ws-split-drag", "ws-split-drag-v");
+        }
+        const h = Math.max(WS_TASKDESC_MIN,
+                           Math.min(startH + (startY - ev.clientY), wsTaskDescMax()));
+        list.style.maxHeight = h + "px";
+      }
+      function onUp() {
+        bar.removeEventListener("pointermove", onMove);
+        bar.removeEventListener("pointerup", onUp);
+        bar.removeEventListener("pointercancel", onUp);
+        document.body.classList.remove("ws-split-drag", "ws-split-drag-v");
+        if (dragging) {
+          consumed = true;  // der nachfolgende Click darf nicht toggeln
+          wsTaskDescCustom = parseInt(list.style.maxHeight, 10) || null;
+          try {
+            if (wsTaskDescCustom) localStorage.setItem(wsTaskDescKey, String(wsTaskDescCustom));
+            else localStorage.removeItem(wsTaskDescKey);
+          } catch (err) { /* ignore */ }
+        }
+      }
+      bar.addEventListener("pointermove", onMove);
+      bar.addEventListener("pointerup", onUp);
+      bar.addEventListener("pointercancel", onUp);
+    });
+  })();
+  wsTaskDescApply();
+  window.addEventListener("resize", wsTaskDescApply);
+  document.addEventListener("ws-layout-changed", wsTaskDescApply);
 
   // Gemeinsame Baum/Editor-Komponente (workspace.js). Student-Config:
   // nur Bereiche der effektiven Klasse ✏️ edit sind editierbar;

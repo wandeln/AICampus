@@ -101,8 +101,29 @@
 .ws-tree-btn:hover:not(:disabled) { background: #f3f4f6; }
 .ws-tree-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* Chevron des Section-Collapse-Toggles (Terminals/Ports) */
+/* Chevron des Section-Collapse-Toggles (Terminals/Ports/Aufgabenstellung) */
 .ws-sec-chevron { transition: transform 0.2s ease; }
+
+/* Aufgabenstellung-Dropdown: Markdown in der Sidebar (Zweitansicht der
+   Task-Description) — Schriftgrößen absichtlich identisch zur linken
+   Spalte (Basis-Regeln von .markdown-preview), nur Medien werden auf
+   die Spaltenbreite gekappt, damit sie kein horizontales Scrollen
+   erzwingen. */
+#ws-taskdesc-list .markdown-preview img,
+#ws-taskdesc-list .markdown-preview video { max-width: 100%; height: auto; }
+/* Breite KaTeX-Formeln: nie breiter als ihr Container (sonst können
+   Formelteile über die Spalte auf den Editor-Trenner ragen) — stattdessen
+   scrollt die Formel intern, Scrollbar ist dabei immer versteckt.
+   (display- und inline-Formeln: .katex ist block bzw. inline-block,
+   overflow greift in beiden Fällen.) */
+#ws-taskdesc-list .katex {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;      /* Firefox */
+  -ms-overflow-style: none;   /* legacy Edge/IE */
+}
+#ws-taskdesc-list .katex::-webkit-scrollbar { display: none; }
 
 /* ─── Dockerfile-Drop-Down (Tutor: Image-Spec) ─────────────────── */
 /* Design wie die Image-Spec-Karten (Admin-Konsole): Standard-Disclosure-
@@ -149,7 +170,13 @@ body.ws-fs-lock { overflow: hidden; }
 }
 
 /* ─── Trenner Tree/Editor (ziehbar zum Resize) ─────────────────── */
+/* Trenner Tree/Editor (ziehbar zum Resize). position+z-index: Inhalt
+   der Tree-Spalte (z. B. absolut positionierte Formel-Teile) wird in
+   der Stacking-Reihenfolge über unpositionierten Nachbarn gemalt —
+   der Trenner muss davon unabhängig immer obendrauf bleiben. */
 .ws-split-handle {
+  position: relative;
+  z-index: 2;
   flex-shrink: 0;
   background-color: #f3f4f6; /* dezent, Tönung wie die Verzeichnisbar */
   transition: background-color 0.15s;
