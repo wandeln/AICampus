@@ -1,10 +1,13 @@
 """
-User-Settings: Name / Passwort ändern, Profilbild verwalten.
+User-Settings: Name / Passwort ändern, Profilbild verwalten, Account löschen.
 
 - PATCH  /api/auth/settings      → Eigene Einstellungen aktualisieren
 - POST   /api/auth/settings/avatar → Profilbild hochladen/ersetzen
 - DELETE /api/auth/settings/avatar → Profilbild entfernen
+- DELETE /api/auth/settings/account → Eigene Account löschen (Username-Bestätigung)
 """
+
+import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
@@ -12,12 +15,14 @@ from sqlmodel import Session
 
 from database.base import get_session
 from database.models import User, GlobalUserRole
-from services import media_service
+from services import media_service, user_service
 from services.auth_service import (
     get_current_user,
     hash_password,
     verify_password,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth/settings", tags=["User-Settings"])
 
@@ -26,6 +31,10 @@ class SettingsUpdate(BaseModel):
     current_password: str = Field(default="", max_length=128)
     new_name: str = Field(default="", max_length=200)
     new_password: str = Field(default="", max_length=128)
+
+
+class DeleteAccountRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
 
 
 @router.patch("/")
@@ -147,3 +156,34 @@ async def delete_avatar(
 
     display_role = "Admin" if user.role == GlobalUserRole.ADMIN else "User"
     return {"message": "Profilbild wurde entfernt.", "user": _user_dict(user, display_role)}
+
+
+@router.delete("/account")
+async def delete_account(
+    data: DeleteAccountRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """
+    Eigene Account endgültig löschen (inkl. aller referenzierenden Daten).
+
+    Sicherheit: Username muss als Bestätigung mitgeschickt werden.
+    Admin-Accounts können nicht selbst gelöscht werden (letzter-Admin-
+    Lockout — im Admin-Bereich von einem anderen Admin möglich).
+    """
+    if user.role == GlobalUserRole.ADMIN:
+        raise HTTPException(
+            403,
+            "Admin-Accounts können nicht selbst gelöscht werden. "
+            "Bitte lass deinen Account von einem anderen Admin entfernen.",
+        )
+
+    if data.username.strip() != user.username:
+        raise HTTPException(
+            400,
+            "Der eingegebene Username stimmt nicht mit deinem Account überein.",
+        )
+
+    username = user_service.delete_user_with_data(session, user)
+    logger.info("[Account] User '%s' hat seinen Account selbst gelöscht.", username)
+    return {"message": "Dein Account wurde gelöscht."}

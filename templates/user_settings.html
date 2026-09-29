@@ -119,6 +119,45 @@
     {% endif %}
   </div>
 
+  <!-- Dangerzone -->
+  <div class="bg-white rounded-xl shadow-md border border-red-200 p-6 mb-6">
+    <h2 class="text-lg font-semibold text-red-600 mb-2">⚠️ Dangerzone</h2>
+
+    {% if current_user.role == "Admin" %}
+    <p class="text-sm text-gray-600">
+      Admin-Accounts können nicht selbst gelöscht werden.
+      Bitte lass deinen Account von einem anderen Admin entfernen.
+    </p>
+    {% else %}
+    <p class="text-sm text-gray-600 mb-4">
+      Löscht deinen Account <strong>endgültig</strong> — inkl. aller Einreichungen,
+      Foren-Beiträge, Skript-Fragen und Kurs-Mitgliedschaften. Inhalt, den du in
+      Kursen erstellt hast (eigene Kurse, Aufgaben, Materialien, Medien), wird
+      mitgelöscht.
+    </p>
+    <div class="flex flex-col sm:flex-row gap-3">
+      <input
+        type="text"
+        id="delete_username"
+        placeholder="Username zur Bestätigung"
+        autocomplete="off"
+        spellcheck="false"
+        class="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
+      />
+      <button
+        type="button"
+        id="delete-account-btn"
+        class="bg-red-600 hover:bg-red-700 text-white px-5 py-2 rounded-lg text-sm font-medium transition shrink-0"
+      >
+        Account löschen
+      </button>
+    </div>
+    <p class="text-xs text-gray-400 mt-2">
+      Gib deinen Username ein, um die Löschung zu bestätigen.
+    </p>
+    {% endif %}
+  </div>
+
   <!-- Zurueck-Link -->
   <a href="/" class="text-sm text-blue-600 hover:text-blue-800 transition flex items-center gap-1">
     <span>←</span>
@@ -255,6 +294,37 @@
         showToast(data.message, "success");
         document.getElementById('current_password').value = '';
         document.getElementById('new_password').value = '';
+      } else {
+        showToast(data.detail || 'Ein Fehler ist aufgetreten.', "error");
+      }
+    });
+  }
+  // ─── Account löschen (Dangerzone) ──────────────────────────────
+  const deleteBtn = document.getElementById('delete-account-btn');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', async () => {
+      const username = document.getElementById('delete_username').value.trim();
+      if (!username) {
+        showToast('Bitte gib deinen Username zur Bestätigung ein.', "warning");
+        return;
+      }
+
+      const res = await fetch('/api/auth/settings/account', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ username: username }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data.message || 'Dein Account wurde gelöscht.', "success");
+        // Session-Cookie entfernen und zur Login-Seite weiterleiten
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        setTimeout(() => { window.location.href = '/login'; }, 1200);
       } else {
         showToast(data.detail || 'Ein Fehler ist aufgetreten.', "error");
       }

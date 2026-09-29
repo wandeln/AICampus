@@ -5,45 +5,34 @@ Rollen: Administrator (global)
 """
 
 import logging
-import shutil
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing import Optional
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
-from config import COMPUTE_AGENT_KEY, COMPUTE_AGENT_URL, COMPUTE_AGENT_URL_EXPLICIT, MEDIA_DIR
+from config import COMPUTE_AGENT_KEY, COMPUTE_AGENT_URL, COMPUTE_AGENT_URL_EXPLICIT
 from database.base import get_session
 from database.models import (
     Course,
     CourseCreate,
-    CourseInvite,
     CourseMaterial,
-    CourseMedia,
     CourseReference,
     CourseRole,
     CourseSettings,
     CourseSettingsUpdate,
     CourseSlidesTheme,
-    Feedback,
     ForumChannel,
-    ForumChannelReadState,
-    ForumMessage,
     GlobalSettings,
     GlobalSettingsUpdate,
     GlobalSettingsRead,
     GlobalUserRole,
-    HintExchange,
-    MediaUsage,
-    ScriptQuestion,
-    ScriptQuestionResponse,
     ScriptSection,
-    Submission,
     Task,
     User,
     UserCourse,
 )
-from services import import_service, workspace_service
+from services import course_service, user_service
 from services.auth_service import hash_password, require_global_admin
 from services.llm_service import get_llm_debug_entry, get_llm_debug_log
 from services.llm_service import record_llm_debug_entry
@@ -294,147 +283,8 @@ async def delete_course(
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(404, "Kurs nicht gefunden.")
-    
-    course_name = course.name
 
-    # Manuelle Cascading deletes in korrekter Reihenfolge (Kinder zuerst).
-    # flush() nach jeder Gruppe, damit die Lösch-Reihenfolge garantiert ist —
-    # alles in einem einzigen Commit, atomar.
-
-    # 1. Skript-Fragen: Antworten → Fragen → Kapitel
-    questions = session.exec(
-        select(ScriptQuestion).where(ScriptQuestion.course_id == course_id)
-    ).all()
-    for question in questions:
-        responses = session.exec(
-            select(ScriptQuestionResponse).where(
-                ScriptQuestionResponse.question_id == question.id
-            )
-        ).all()
-        for response in responses:
-            session.delete(response)
-        session.delete(question)
-    session.flush()
-    sections = session.exec(
-        select(ScriptSection).where(ScriptSection.course_id == course_id)
-    ).all()
-    for section in sections:
-        session.delete(section)
-    session.flush()
-
-    # 2. Forum: Nachrichten → Read-States → Kanäle
-    messages = session.exec(
-        select(ForumMessage).where(ForumMessage.course_id == course_id)
-    ).all()
-    for message in messages:
-        session.delete(message)
-    session.flush()
-    channels = session.exec(
-        select(ForumChannel).where(ForumChannel.course_id == course_id)
-    ).all()
-    for channel in channels:
-        read_states = session.exec(
-            select(ForumChannelReadState).where(
-                ForumChannelReadState.channel_id == channel.id
-            )
-        ).all()
-        for read_state in read_states:
-            session.delete(read_state)
-        session.delete(channel)
-    session.flush()
-
-    # 3. Einladungslinks
-    invites = session.exec(
-        select(CourseInvite).where(CourseInvite.course_id == course_id)
-    ).all()
-    for invite in invites:
-        session.delete(invite)
-    session.flush()
-
-    # 4. Medien: Usages → DB-Einträge (Dateien auf Disc nach dem Commit)
-    media = session.exec(
-        select(CourseMedia).where(CourseMedia.course_id == course_id)
-    ).all()
-    for medium in media:
-        usages = session.exec(
-            select(MediaUsage).where(MediaUsage.media_id == medium.id)
-        ).all()
-        for usage in usages:
-            session.delete(usage)
-        session.delete(medium)
-    session.flush()
-
-    # 5. Materialien, Referenzen, Slides-Theme
-    materials = session.exec(
-        select(CourseMaterial).where(CourseMaterial.course_id == course_id)
-    ).all()
-    for material in materials:
-        session.delete(material)
-    references = session.exec(
-        select(CourseReference).where(CourseReference.course_id == course_id)
-    ).all()
-    for reference in references:
-        session.delete(reference)
-    theme = session.exec(
-        select(CourseSlidesTheme).where(CourseSlidesTheme.course_id == course_id)
-    ).first()
-    if theme:
-        session.delete(theme)
-    session.flush()
-
-    # 6. Tasks: Feedbacks → Submissions → Hint-Dialoge → Tasks
-    tasks = session.exec(select(Task).where(Task.course_id == course_id)).all()
-    for task in tasks:
-        task_id = task.id
-        if task.task_type.value == "workspace":
-            # Agent-Ressourcen + lokale Dateien + Workspace-DB-Rows
-            # (NOT NULL-FKs ohne Relationship-Cascade)
-            try:
-                workspace_service.on_task_deleted(session, task)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Workspace-Aufräumen (task %s) fehlgeschlagen: %s", task_id, e)
-            workspace_service.delete_task_db_rows(session, task)
-        submissions = session.exec(
-            select(Submission).where(Submission.task_id == task_id)
-        ).all()
-        for sub in submissions:
-            feedbacks = session.exec(
-                select(Feedback).where(Feedback.submission_id == sub.id)
-            ).all()
-            for fb in feedbacks:
-                session.delete(fb)
-            session.delete(sub)
-        hints = session.exec(
-            select(HintExchange).where(HintExchange.task_id == task_id)
-        ).all()
-        for hint in hints:
-            session.delete(hint)
-        session.delete(task)
-    session.flush()
-
-    # 7. Kurs-Settings + Mitgliedschaften
-    settings = session.exec(
-        select(CourseSettings).where(CourseSettings.course_id == course_id)
-    ).first()
-    if settings:
-        session.delete(settings)
-    memberships = session.exec(
-        select(UserCourse).where(UserCourse.course_id == course_id)
-    ).all()
-    for mc in memberships:
-        session.delete(mc)
-    session.flush()
-
-    # 8. Kurs-Import (DB-Zeile + Staging-Dateien, eigenes Session-Handling)
-    import_service.delete_import(course_id)
-
-    # 9. Schließlich den Kurs selbst
-    session.delete(course)
-    session.commit()
-
-    # 10. Medien-Dateien des Kurses von Disc entfernen (best effort)
-    shutil.rmtree(MEDIA_DIR / f"course_{course_id}", ignore_errors=True)
-
+    course_name = course_service.delete_course(session, course)
     return {"message": f"Kurs '{course_name}' gelöscht."}
 
 
@@ -564,70 +414,7 @@ async def delete_user(
     if not user:
         raise HTTPException(404, "User nicht gefunden.")
 
-    username = user.username
-
-    # 1. Alle Feedbacks, die dieser User gegeben hat
-    user_feedback = session.exec(
-        select(Feedback).where(Feedback.giver_id == user_id)
-    ).all()
-    for fb in user_feedback:
-        session.delete(fb)
-
-    # 2. Alle Einreichungen dieses Users (inkl. deren Feedbacks)
-    user_submissions = session.exec(
-        select(Submission).where(Submission.student_id == user_id)
-    ).all()
-    for sub in user_submissions:
-        # Feedbacks der Einreichung vorher löschen
-        sub_feedback = session.exec(
-            select(Feedback).where(Feedback.submission_id == sub.id)
-        ).all()
-        for fb in sub_feedback:
-            session.delete(fb)
-        session.delete(sub)
-
-    # 3. Alle Aufgaben, die dieser User erstellt hat
-    user_tasks = session.exec(
-        select(Task).where(Task.created_by == user_id)
-    ).all()
-    for task in user_tasks:
-        if task.task_type.value == "workspace":
-            # Agent-Ressourcen + lokale Dateien + Workspace-DB-Rows
-            # (NOT NULL-FKs ohne Relationship-Cascade)
-            try:
-                workspace_service.on_task_deleted(session, task)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Workspace-Aufräumen (task %s) fehlgeschlagen: %s", task.id, e)
-            workspace_service.delete_task_db_rows(session, task)
-        # Vorherige Einreichungen und Feedbacks der Aufgabe löschen
-        task_submissions = session.exec(
-            select(Submission).where(Submission.task_id == task.id)
-        ).all()
-        for sub in task_submissions:
-            sub_feedback = session.exec(
-                select(Feedback).where(Feedback.submission_id == sub.id)
-            ).all()
-            for fb in sub_feedback:
-                session.delete(fb)
-            session.delete(sub)
-        hints = session.exec(
-            select(HintExchange).where(HintExchange.task_id == task.id)
-        ).all()
-        for hint in hints:
-            session.delete(hint)
-        session.delete(task)
-
-    # 4. Alle Kurs-Mitgliedschaften dieses Users
-    user_memberships = session.exec(
-        select(UserCourse).where(UserCourse.user_id == user_id)
-    ).all()
-    for uc in user_memberships:
-        session.delete(uc)
-
-    # 5. Endlich den User selbst
-    session.delete(user)
-    session.commit()
-
+    username = user_service.delete_user_with_data(session, user)
     return {"message": f"User '{username}' samt allen referenzierenden Daten gelöscht."}
 
 
