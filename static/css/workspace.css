@@ -225,6 +225,84 @@ body.ws-split-drag { user-select: none; -webkit-user-select: none; }
 body.ws-split-drag-h { cursor: col-resize; }
 body.ws-split-drag-v { cursor: row-resize; }
 
+/* ─── Thin-Scrollbars (außerhalb Editor/Terminal) ──────────────── */
+/* 8 px wie die Editor- (CodeMirror) und Terminal-Scrollbar:
+   transparenter Track, dezent gerundeter Thumb. Helle Flächen:
+   grau; dunkle Pre-Blöcke (Dockerfile, Init-Log, Testlauf): hell.
+   CodeMirror wird nicht angefasst — der Editor ist bereits thin. */
+#ws-filetree,
+#ws-files-tree,
+#ws-terminals-list,
+#ws-ports-list,
+#ws-taskdesc-list,
+.ws-ctx-menu {
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db transparent;
+}
+#ws-filetree::-webkit-scrollbar,
+#ws-files-tree::-webkit-scrollbar,
+#ws-terminals-list::-webkit-scrollbar,
+#ws-ports-list::-webkit-scrollbar,
+#ws-taskdesc-list::-webkit-scrollbar,
+.ws-ctx-menu::-webkit-scrollbar {
+  width: 8px;
+}
+#ws-filetree::-webkit-scrollbar-track,
+#ws-files-tree::-webkit-scrollbar-track,
+#ws-terminals-list::-webkit-scrollbar-track,
+#ws-ports-list::-webkit-scrollbar-track,
+#ws-taskdesc-list::-webkit-scrollbar-track,
+.ws-ctx-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+#ws-filetree::-webkit-scrollbar-thumb,
+#ws-files-tree::-webkit-scrollbar-thumb,
+#ws-terminals-list::-webkit-scrollbar-thumb,
+#ws-ports-list::-webkit-scrollbar-thumb,
+#ws-taskdesc-list::-webkit-scrollbar-thumb,
+.ws-ctx-menu::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 4px;
+  border: 2px solid transparent;
+}
+#ws-filetree::-webkit-scrollbar-thumb:hover,
+#ws-files-tree::-webkit-scrollbar-thumb:hover,
+#ws-terminals-list::-webkit-scrollbar-thumb:hover,
+#ws-ports-list::-webkit-scrollbar-thumb:hover,
+#ws-taskdesc-list::-webkit-scrollbar-thumb:hover,
+.ws-ctx-menu::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+/* Dunkle Pre-Blöcke (nur Tutor-Workspace): heller Thumb wie im Terminal */
+#ws-spec-dockerfile,
+#ws-init-log,
+#ws-test-run-terminal-text {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+#ws-spec-dockerfile::-webkit-scrollbar,
+#ws-init-log::-webkit-scrollbar,
+#ws-test-run-terminal-text::-webkit-scrollbar {
+  width: 8px;
+}
+#ws-spec-dockerfile::-webkit-scrollbar-track,
+#ws-init-log::-webkit-scrollbar-track,
+#ws-test-run-terminal-text::-webkit-scrollbar-track {
+  background: transparent;
+}
+#ws-spec-dockerfile::-webkit-scrollbar-thumb,
+#ws-init-log::-webkit-scrollbar-thumb,
+#ws-test-run-terminal-text::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 4px;
+  border: 2px solid transparent;
+}
+#ws-spec-dockerfile::-webkit-scrollbar-thumb:hover,
+#ws-init-log::-webkit-scrollbar-thumb:hover,
+#ws-test-run-terminal-text::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.45);
+}
+
 /* ─── Terminal-Scrollbar (xterm-Viewport) ─────────────────────── */
 /* overflow-y: scroll (immer sichtbar) bleibt xterm-Standard: mit
    „auto“ taucht die Scrollbar erst bei Overflow auf, der Viewport
