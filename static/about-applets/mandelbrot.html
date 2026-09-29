@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Mandelbrot-Fraktal – Maschinengenauigkeit</title>
+<style>
+:root{--bg:#f8fafc;--text:#1e293b;--border:#e2e8f0;--accent:#3b82f6;--accent-hover:#2563eb;--danger:#ef4444}
+*{box-sizing:border-box;margin:0;padding:0}*{scrollbar-width:none}*::-webkit-scrollbar{display:none}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:12px;line-height:1.4;overscroll-behavior:none}
+.app{padding:4px 6px}
+.header{display:flex;align-items:baseline;gap:8px;margin-bottom:4px;flex-wrap:wrap}
+.header h1{font-size:13px;font-weight:700;color:#0f172a}
+.canvas-wrapper{width:100%;height:300px;border:1px solid var(--border);border-radius:6px;overflow:hidden;position:relative;background:#f8fafc;cursor:crosshair;touch-action:none;overscroll-behavior:none}
+canvas{display:block;width:100%;height:100%;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.controls{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center}
+.ctl{display:flex;align-items:center;gap:4px;background:#fff;border:1px solid var(--border);border-radius:4px;padding:3px 6px}
+.ctl label{font-size:10px;font-weight:600;color:#475569;white-space:nowrap}
+.ctl select{font-size:11px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:3px;background:#fff;max-width:100px}
+.ctl input[type=range]{width:110px}
+.ctl .val{font-size:10px;color:#3b82f6;font-weight:600;min-width:24px;text-align:right}
+.btn{padding:3px 10px;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;transition:all .12s}
+.btn-p{background:var(--accent);color:#fff}.btn-p:hover{background:var(--accent-hover)}
+.btn-s{background:#e2e8f0;color:#334155}.btn-s:hover{background:#cbd5e1}
+.status-row{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px;align-items:center;justify-content:center}
+.legend{display:flex;gap:8px;align-items:center;font-size:10px;color:#475569}
+.legend-item{display:flex;align-items:center;gap:3px}
+.color-box{width:8px;height:8px;border-radius:2px}
+.gradient-bar{width:80px;height:8px;border-radius:3px;border:1px solid var(--border)}
+.zoom-display{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.zoom-badge{background:#e0e7ff;color:#3730a3;padding:1px 6px;border-radius:4px;font-weight:600;font-family:ui-monospace,Menlo,monospace;font-size:10px}
+.zoom-badge.warn{background:#fef3c7;color:#92400e}
+.zoom-badge.danger{background:#fee2e2;color:#991b1b}
+.precision-note{font-size:10px;color:#64748b;margin-top:4px;text-align:center}
+.precision-note strong{color:var(--danger)}
+@media(max-width:480px){
+.canvas-wrapper{height:220px}
+.ctl input[type=range]{width:90px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+<div class="header">
+<h1>Mandelbrot-Fraktal</h1>
+</div>
+<div class="canvas-wrapper">
+<canvas id="fractalCanvas"></canvas>
+</div>
+<div class="controls">
+<div class="ctl"><label for="maxIter">Max. Iterationen</label><input type="range" id="maxIter" min="10" max="1000" value="100" step="10"><span class="val" id="maxIterVal">100</span></div>
+<div class="ctl"><label for="colorScheme">Farbschema</label>
+<select id="colorScheme">
+<option value="classic">Klassisch</option>
+<option value="fire">Feuer</option>
+<option value="ocean">Ozean</option>
+<option value="mono">Schwarz-Weiß</option>
+</select></div>
+<button class="btn btn-s" id="resetBtn">Zurücksetzen</button>
+<button class="btn btn-p" id="zoomOutBtn">Zoom Out</button>
+</div>
+<div class="status-row">
+<div id="legend" class="legend"></div>
+<div class="zoom-display" id="zoomDisplay"></div>
+</div>
+<div class="precision-note" id="precisionNote"></div>
+</div>
+<script>
+(function(){
+const canvas=document.getElementById('fractalCanvas');
+const ctx=canvas.getContext('2d',{willReadFrequently:false});
+const maxIterInput=document.getElementById('maxIter');
+const maxIterVal=document.getElementById('maxIterVal');
+const colorSchemeSel=document.getElementById('colorScheme');
+const resetBtn=document.getElementById('resetBtn');
+const zoomOutBtn=document.getElementById('zoomOutBtn');
+const legendEl=document.getElementById('legend');
+const zoomDisplayEl=document.getElementById('zoomDisplay');
+const precisionNoteEl=document.getElementById('precisionNote');
+
+const MIN_SCALE=1e-15;
+const MAX_SCALE=5000;
+const MACHINE_EPS=2.220446049250313e-16;
+
+let state={centerX:-0.75,centerY:0,scale:1.5,maxIter:100,colorScheme:'classic',width:0,height:0,needsRender:true};
+let rafId=null;
+let imgData=null;
+let data=null;
+
+function scheduleRender(){if(!rafId){rafId=requestAnimationFrame(function(){rafId=null;render();})}}
+
+// Pixel→Komplexe-Ebene, konsistent mit render() (s=min(w,h), dx=dy=2*scale/s).
+// Beide Achsen um (centerX,centerY) symmetrisch — so bleibt der Fraktal-
+// Schwerpunkt mittig auch auf weiten (nicht-quadratischen) Canvases.
+function mouseComplex(mx,my){
+const s=Math.min(state.width,state.height);
+const d=2*state.scale/s;
+return[state.centerX+(mx-state.width/2)*d,state.centerY+(my-state.height/2)*d];
+}
+function zoomAt(factor,mx,my){
+const s=Math.min(state.width,state.height);
+const mc=mouseComplex(mx,my);
+const newScale=Math.max(MIN_SCALE,Math.min(MAX_SCALE,state.scale*factor));
+const d=2*newScale/s;
+state.centerX=mc[0]-(mx-state.width/2)*d;
+state.centerY=mc[1]-(my-state.height/2)*d;
+state.scale=newScale;
+state.needsRender=true;
+scheduleRender();
+}
+
+function resize(){
+const rect=canvas.parentElement.getBoundingClientRect();
+state.width=Math.floor(rect.width);
+state.height=Math.floor(rect.height);
+canvas.width=state.width;
+canvas.height=state.height;
+state.needsRender=true;
+scheduleRender();
+}
+
+function getColor(iter,maxIter,scheme){
+if(iter>=maxIter)return[0,0,0];
+const t=iter/maxIter;
+let r,g,b;
+if(scheme==='classic'){
+const hue=(t*360+200)%360;
+const s=0.85,l=0.5;
+const c=(1-Math.abs(2*l-1))*s;
+const x=c*(1-Math.abs((hue/60)%2-1));
+const m=l-c/2;
+let r1=0,g1=0,b1=0;
+if(hue<60){r1=c;g1=x;b1=0}else if(hue<120){r1=x;g1=c;b1=0}else if(hue<180){r1=0;g1=c;b1=x}
+else if(hue<240){r1=0;g1=x;b1=c}else if(hue<300){r1=x;g1=0;b1=c}else{r1=c;g1=0;b1=x}
+r=Math.round((r1+m)*255);g=Math.round((g1+m)*255);b=Math.round((b1+m)*255);
+}else if(scheme==='fire'){
+r=Math.round(255*Math.min(1,t*3));
+g=Math.round(255*Math.max(0,Math.min(1,t*3-1)));
+b=Math.round(255*Math.max(0,Math.min(1,t*3-2)));
+}else if(scheme==='ocean'){
+r=Math.round(20+40*t);
+g=Math.round(60+120*t);
+b=Math.round(150+105*t);
+}else{
+const v=Math.round(255*(1-t));
+r=v;g=v;b=v;
+}
+return[r,g,b];
+}
+
+function render(){
+if(!state.needsRender)return;
+state.needsRender=false;
+const w=state.width,h=state.height;
+if(w<1||h<1)return;
+if(!imgData||imgData.width!==w||imgData.height!==h){imgData=ctx.createImageData(w,h);data=imgData.data;}
+const maxIter=state.maxIter,scale=state.scale,cx=state.centerX,cy=state.centerY,scheme=state.colorScheme;
+const s=Math.min(w,h);
+const dx=(2*scale)/s,dy=(2*scale)/s;
+const len=w*h;
+
+for(let i=0;i<len;i++){
+const px=i%w;
+const py=(i/w)|0;
+const cr=cx+(px-w/2)*dx;
+const ci=cy+(py-h/2)*dy;
+let zr=0,zi=0,iter=0;
+while(iter<maxIter){
+const zr2=zr*zr,zi2=zi*zi;
+if(zr2+zi2>4)break;
+zi=2*zr*zi+ci;
+zr=zr2-zi2+cr;
+iter++;
+}
+let r,g,b;
+if(iter>=maxIter){r=0;g=0;b=0;}
+else{
+const zr2=zr*zr,zi2=zi*zi;
+const logZn=Math.log(zr2+zi2)/2;
+const log2Zn=Math.log(logZn)/Math.LN2;
+const smooth=iter+1-log2Zn;
+const t=Math.max(0,Math.min(1,smooth/maxIter));
+const c=getColor(Math.round(t*maxIter),maxIter,scheme);
+r=c[0];g=c[1];b=c[2];
+}
+const idx=i*4;
+data[idx]=r;data[idx+1]=g;data[idx+2]=b;data[idx+3]=255;
+}
+ctx.putImageData(imgData,0,0);
+updateZoomDisplay();
+}
+
+function updateZoomDisplay(){
+const scale=state.scale;
+const zoomFactor=1.5/scale;
+let html='';
+html+='<span class="zoom-badge">Zoom: ×'+formatZoom(zoomFactor)+'</span>';
+html+='<span class="zoom-badge">Skala: '+formatScale(scale)+'</span>';
+
+if(scale<1e-12){
+html+='<span class="zoom-badge danger">⚠ Maschinengenauigkeit</span>';
+}
+zoomDisplayEl.innerHTML=html;
+
+if(scale<1e-14){
+precisionNoteEl.innerHTML='<strong>⚠</strong> Sie haben die Grenze der IEEE-754-Doppelpräzision (ε ≈ 2,2×10⁻¹⁶) erreicht. Weitere Vergrößerung ist numerisch nicht mehr sinnvoll.';
+}else if(scale<1e-12){
+precisionNoteEl.innerHTML='Sie nähern sich der Maschinengenauigkeit. Ab ca. 10⁻¹⁴ werden Artefakte sichtbar.';
+}else{
+precisionNoteEl.innerHTML='';
+}
+}
+
+function formatZoom(z){
+if(z>=1e15)return'10¹⁵+';
+if(z>=1e12)return'10¹²+';
+if(z>=1e9)return'10⁹+';
+if(z>=1e6)return'10⁶+';
+if(z>=1e3)return Math.round(z).toLocaleString('de-DE');
+return z.toFixed(1);
+}
+
+function formatScale(s){
+if(s>=1)return s.toFixed(3);
+const exp=Math.floor(Math.log10(s));
+const mantissa=s/Math.pow(10,exp);
+return mantissa.toFixed(2)+'×10'+superscript(exp);
+}
+
+function superscript(n){
+const digits='⁰¹²³⁴⁵⁶⁷⁸⁹';
+let str='';
+if(n<0){str+='⁻';n=-n;}
+const s=String(n);
+for(let i=0;i<s.length;i++){str+=digits[parseInt(s[i],10)];}
+return str;
+}
+
+function updateLegend(){
+legendEl.innerHTML='';
+const bar=document.createElement('div');
+bar.className='gradient-bar';
+const scheme=state.colorScheme;
+let stops=[];
+for(let i=0;i<=10;i++){
+const t=i/10;
+const c=getColor(Math.round(t*state.maxIter),state.maxIter,scheme);
+stops.push('rgb('+c[0]+','+c[1]+','+c[2]+') '+(t*100)+'%');
+}
+bar.style.background='linear-gradient(to right,'+stops.join(',')+')';
+const item1=document.createElement('div');
+item1.className='legend-item';
+const t1=document.createTextNode('Flucht:');
+item1.appendChild(t1);
+item1.appendChild(bar);
+const t2=document.createTextNode('Menge:');
+const item2=document.createElement('div');
+item2.className='legend-item';
+const box=document.createElement('div');
+box.className='color-box';
+box.style.background='#000';
+item2.appendChild(box);
+item2.appendChild(t2);
+legendEl.appendChild(item1);
+legendEl.appendChild(item2);
+}
+
+let isDragging=false,lastMouse={x:0,y:0};
+canvas.addEventListener('mousedown',function(e){isDragging=true;const rect=canvas.getBoundingClientRect();lastMouse={x:e.clientX-rect.left,y:e.clientY-rect.top};canvas.style.cursor='grabbing';});
+window.addEventListener('mousemove',function(e){if(!isDragging)return;const rect=canvas.getBoundingClientRect();const mx=e.clientX-rect.left,my=e.clientY-rect.top;const s=Math.min(state.width,state.height);const dx=(mx-lastMouse.x)/s*2*state.scale,dy=(my-lastMouse.y)/s*2*state.scale;state.centerX-=dx;state.centerY-=dy;lastMouse={x:mx,y:my};state.needsRender=true;scheduleRender();});
+window.addEventListener('mouseup',function(){isDragging=false;canvas.style.cursor='crosshair';});
+
+canvas.addEventListener('wheel',function(e){
+e.preventDefault();
+const rect=canvas.getBoundingClientRect();
+zoomAt(e.deltaY>0?1.08:0.92,e.clientX-rect.left,e.clientY-rect.top);
+},{passive:false});
+
+canvas.addEventListener('dblclick',function(e){
+e.preventDefault();
+const rect=canvas.getBoundingClientRect();
+zoomAt(0.25,e.clientX-rect.left,e.clientY-rect.top);
+});
+
+let pinchState={active:false,lastDist:0,lastCenter:{x:0,y:0}};
+function touchDist(t0,t1){return Math.hypot(t1.x-t0.x,t1.y-t0.y)}
+function touchCenter(t0,t1){return{x:(t0.x+t1.x)/2,y:(t0.y+t1.y)/2}}
+function applyZoom(factor,px,py){zoomAt(factor,px,py);}
+
+canvas.addEventListener('touchstart',function(e){
+e.preventDefault();
+if(e.touches.length===1){isDragging=true;pinchState.active=false;const rect=canvas.getBoundingClientRect();lastMouse={x:e.touches[0].clientX-rect.left,y:e.touches[0].clientY-rect.top};}
+else if(e.touches.length===2){isDragging=false;pinchState.active=true;const rect=canvas.getBoundingClientRect();const t0={x:e.touches[0].clientX-rect.left,y:e.touches[0].clientY-rect.top};const t1={x:e.touches[1].clientX-rect.left,y:e.touches[1].clientY-rect.top};pinchState.lastDist=touchDist(t0,t1);pinchState.lastCenter=touchCenter(t0,t1);}
+},{passive:false});
+
+canvas.addEventListener('touchmove',function(e){
+e.preventDefault();
+if(e.touches.length===1&&isDragging){
+const rect=canvas.getBoundingClientRect();
+const mx=e.touches[0].clientX-rect.left,my=e.touches[0].clientY-rect.top;
+const s=Math.min(state.width,state.height);
+const dx=(mx-lastMouse.x)/s*2*state.scale;
+const dy=(my-lastMouse.y)/s*2*state.scale;
+state.centerX-=dx;state.centerY-=dy;
+lastMouse={x:mx,y:my};
+state.needsRender=true;scheduleRender();
+}else if(e.touches.length===2&&pinchState.active){
+const rect=canvas.getBoundingClientRect();
+const t0={x:e.touches[0].clientX-rect.left,y:e.touches[0].clientY-rect.top};
+const t1={x:e.touches[1].clientX-rect.left,y:e.touches[1].clientY-rect.top};
+const newDist=touchDist(t0,t1);
+const newCenter=touchCenter(t0,t1);
+if(pinchState.lastDist>0&&newDist>0){
+const s=Math.min(state.width,state.height);
+const panDx=(newCenter.x-pinchState.lastCenter.x)/s*2*state.scale;
+const panDy=(newCenter.y-pinchState.lastCenter.y)/s*2*state.scale;
+state.centerX-=panDx;state.centerY-=panDy;
+const zoomFactor=pinchState.lastDist/newDist;
+if(Math.abs(zoomFactor-1)>0.001){applyZoom(zoomFactor,newCenter.x,newCenter.y);}
+}
+pinchState.lastDist=newDist;
+pinchState.lastCenter=newCenter;
+state.needsRender=true;scheduleRender();
+}
+},{passive:false});
+
+canvas.addEventListener('touchend',function(e){
+e.preventDefault();
+if(e.touches.length===0){isDragging=false;pinchState.active=false;pinchState.lastDist=0;}
+else if(e.touches.length===1){pinchState.active=false;pinchState.lastDist=0;isDragging=true;const rect=canvas.getBoundingClientRect();lastMouse={x:e.touches[0].clientX-rect.left,y:e.touches[0].clientY-rect.top};}
+},{passive:false});
+
+canvas.addEventListener('touchcancel',function(e){
+e.preventDefault();isDragging=false;pinchState.active=false;pinchState.lastDist=0;
+},{passive:false});
+
+maxIterInput.addEventListener('input',function(e){
+state.maxIter=parseInt(e.target.value,10);
+maxIterVal.textContent=state.maxIter;
+state.needsRender=true;scheduleRender();
+});
+
+colorSchemeSel.addEventListener('change',function(e){
+state.colorScheme=e.target.value;
+updateLegend();
+state.needsRender=true;scheduleRender();
+});
+
+resetBtn.addEventListener('click',function(){
+state.centerX=-0.75;state.centerY=0;state.scale=1.5;
+state.maxIter=100;maxIterInput.value=100;maxIterVal.textContent='100';
+colorSchemeSel.value='classic';state.colorScheme='classic';
+updateLegend();state.needsRender=true;scheduleRender();
+});
+
+let zoomOutAnim=null;
+zoomOutBtn.addEventListener('click',function(){
+if(zoomOutAnim)cancelAnimationFrame(zoomOutAnim);
+const startScale=state.scale;
+const targetScale=1.5;
+const duration=10000;
+const startTime=performance.now();
+const scaleRatio=targetScale/startScale;
+function animate(now){
+const elapsed=now-startTime;
+const t=Math.min(1,elapsed/duration);
+const currentScale=startScale*Math.pow(scaleRatio,t);
+state.scale=currentScale;
+state.needsRender=true;
+scheduleRender();
+if(t<1){zoomOutAnim=requestAnimationFrame(animate);}
+else{zoomOutAnim=null;}
+}
+zoomOutAnim=requestAnimationFrame(animate);
+});
+
+const ro=new ResizeObserver(function(){resize();});
+ro.observe(canvas.parentElement);
+resize();
+updateLegend();
+})();
+</script>
+</body>
+</html>

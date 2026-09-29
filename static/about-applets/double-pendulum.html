@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Doppelpendel</title>
+  <style>
+    :root { --bg: #f8fafc; --text: #1e293b; --accent: #3b82f6; --panel: #ffffff; --border: #e2e8f0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * { scrollbar-width: none; }
+    *::-webkit-scrollbar { display: none; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); font-size: 12px; line-height: 1.4; padding: 4px 6px; }
+    #app { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 13px; font-weight: 700; padding-bottom: 4px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+    .ctl { display: flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; }
+    .ctl label { font-size: 10px; font-weight: 500; white-space: nowrap; }
+    .ctl input[type="range"] { width: 110px; }
+    .ctl .val { font-size: 10px; color: var(--accent); font-weight: 600; min-width: 28px; }
+    .btn { font-size: 11px; padding: 3px 10px; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; }
+    .btn-p { background: var(--accent); color: #fff; }
+    .btn-s { background: var(--border); color: var(--text); }
+    .btn:hover { opacity: 0.9; }
+    .main { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; position: relative; }
+    .panel canvas { width: 100%; height: 300px; display: block; background: #ffffff; }
+    @media (max-width: 640px) {
+      .main { grid-template-columns: 1fr; }
+      .panel canvas { height: 240px; }
+      .ctl input[type="range"] { width: 90px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <h1>2D-Doppelpendel: Chaos-Visualisierung</h1>
+    <div class="controls">
+      <div class="ctl"><label for="phi0">Startwinkel φ₀ (rad)</label><input type="range" id="phi0" min="-3.14" max="3.14" step="0.01" value="1.57"><span class="val" id="phi-val">1.57</span></div>
+      <div class="ctl"><label for="theta0">Startwinkel θ₀ (rad)</label><input type="range" id="theta0" min="-3.14" max="3.14" step="0.01" value="1.57"><span class="val" id="theta-val">1.57</span></div>
+      <button class="btn btn-p" id="btn-start">⏸ Pause</button>
+      <button class="btn btn-s" id="btn-reset">↺ Zurücksetzen</button>
+    </div>
+    <div class="main">
+      <div class="panel" id="pendulum-panel"><canvas id="pendulum-canvas"></canvas></div>
+      <div class="panel" id="chart-panel"><canvas id="chart-canvas"></canvas></div>
+    </div>
+  </div>
+  <script src="/static/vendor/three.min.js"></script>
+  <script src="/static/vendor/three.OrbitControls.js"></script>
+  <script src="/static/vendor/chart.umd.js"></script>
+  <script>
+    (function() {
+      let state = [Math.PI/2, 0, Math.PI/2, 0];
+      let running = true;
+      let lastTime = performance.now();
+      let simTime = 0;
+      const g = 9.81, m1 = 1, m2 = 1, L1 = 1, L2 = 1;
+      const canvas = document.getElementById('pendulum-canvas');
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xffffff);
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+      camera.position.set(0, 0, 5);
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setClearColor(0xffffff);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+      scene.add(new THREE.DirectionalLight(0xffffff, 0.5));
+      const rod1 = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x334155 }));
+      const rod2 = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x334155 }));
+      const bob1 = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 16), new THREE.MeshStandardMaterial({ color: 0x3b82f6 }));
+      const bob2 = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 16), new THREE.MeshStandardMaterial({ color: 0xef4444 }));
+      scene.add(rod1, rod2, bob1, bob2);
+      const controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      const chartCanvas = document.getElementById('chart-canvas');
+      const ctx = chartCanvas.getContext('2d');
+      const chart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: 'φ (phi)', data: [], borderColor: '#3b82f6', tension: 0.1 }, { label: 'θ (theta)', data: [], borderColor: '#ef4444', tension: 0.1 }] },
+        options: { responsive: true, maintainAspectRatio: false, animation: false, scales: { x: { type: 'linear', title: { display: true, text: 'Zeit (s)' }, ticks: { maxTicksLimit: 10, callback: (v) => v.toFixed(1) } }, y: { title: { display: true, text: 'Winkel (rad)' } } }, plugins: { legend: { position: 'top' } } }
+      });
+      function derivatives(s) {
+        const [phi, phi_d, theta, theta_d] = s;
+        const delta = phi - theta;
+        const den = 2*m1 + m2 - m2*Math.cos(2*delta);
+        const alpha1 = (-g*(2*m1+m2)*Math.sin(phi) - m2*g*Math.sin(phi-2*theta) - 2*Math.sin(delta)*m2*(theta_d*theta_d*L2 + phi_d*phi_d*L1*Math.cos(delta))) / (L1*den);
+        const alpha2 = (2*Math.sin(delta)*(phi_d*phi_d*L1*(m1+m2) + g*(m1+m2)*Math.cos(phi) + theta_d*theta_d*L2*m2*Math.cos(delta))) / (L2*den);
+        return [phi_d, alpha1, theta_d, alpha2];
+      }
+      function rk4Step(s, dt) {
+        const k1 = derivatives(s);
+        const k2 = derivatives(s.map((v, i) => v + k1[i]*dt/2));
+        const k3 = derivatives(s.map((v, i) => v + k2[i]*dt/2));
+        const k4 = derivatives(s.map((v, i) => v + k3[i]*dt));
+        return s.map((v, i) => v + (k1[i] + 2*k2[i] + 2*k3[i] + k4[i])*dt/6);
+      }
+      function updatePendulumVisuals() {
+        const x1 = L1 * Math.sin(state[0]);
+        const y1 = -L1 * Math.cos(state[0]);
+        const x2 = x1 + L2 * Math.sin(state[2]);
+        const y2 = y1 - L2 * Math.cos(state[2]);
+        rod1.geometry.setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(x1, y1, 0)]);
+        rod2.geometry.setFromPoints([new THREE.Vector3(x1, y1, 0), new THREE.Vector3(x2, y2, 0)]);
+        bob1.position.set(x1, y1, 0);
+        bob2.position.set(x2, y2, 0);
+      }
+      function update(time) {
+        if (!running) { updatePendulumVisuals(); controls.update(); renderer.render(scene, camera); requestAnimationFrame(update); return; }
+        const dt = Math.min((time - lastTime) / 1000, 0.05);
+        lastTime = time;
+        simTime += dt;
+        const substeps = 4;
+        const subDt = dt / substeps;
+        for(let i=0; i<substeps; i++) state = rk4Step(state, subDt);
+        updatePendulumVisuals();
+        chart.data.labels.push(simTime);
+        chart.data.datasets[0].data.push(state[0]);
+        chart.data.datasets[1].data.push(state[2]);
+        if(chart.data.labels.length > 600) { chart.data.labels.shift(); chart.data.datasets[0].data.shift(); chart.data.datasets[1].data.shift(); }
+        chart.update('none');
+        controls.update();
+        renderer.render(scene, camera);
+        requestAnimationFrame(update);
+      }
+      document.getElementById('btn-start').addEventListener('click', () => { running = !running; lastTime = performance.now(); document.getElementById('btn-start').textContent = running ? '⏸ Pause' : '▶ Start'; });
+      document.getElementById('btn-reset').addEventListener('click', () => {
+        state[0] = parseFloat(document.getElementById('phi0').value);
+        state[2] = parseFloat(document.getElementById('theta0').value);
+        state[1] = 0; state[3] = 0;
+        running = false; document.getElementById('btn-start').textContent = '▶ Start';
+        simTime = 0;
+        chart.data.labels = []; chart.data.datasets[0].data = []; chart.data.datasets[1].data = []; chart.update();
+        updatePendulumVisuals();
+      });
+      document.getElementById('phi0').addEventListener('input', e => {
+        document.getElementById('phi-val').textContent = e.target.value;
+        state[0] = parseFloat(e.target.value);
+        state[1] = 0;
+        updatePendulumVisuals();
+        chart.data.labels = []; chart.data.datasets[0].data = []; chart.data.datasets[1].data = []; chart.update();
+      });
+      document.getElementById('theta0').addEventListener('input', e => {
+        document.getElementById('theta-val').textContent = e.target.value;
+        state[2] = parseFloat(e.target.value);
+        state[3] = 0;
+        updatePendulumVisuals();
+        chart.data.labels = []; chart.data.datasets[0].data = []; chart.data.datasets[1].data = []; chart.update();
+      });
+      const ro = new ResizeObserver(() => {
+        const w = canvas.clientWidth, h = canvas.clientHeight;
+        // Versteckt (display:none) → 0×0: überspringen, sonst würde
+        // setSize(0,0) den Canvas auf inline 0 px pinnen und den
+        // WebGL-Puffer zerstören (Visualisierung ab 2. Anzeigen tot).
+        if (w < 2 || h < 2) return;
+        // updateStyle=false: Größe kommt aus dem CSS (100% × 300 px),
+        // nicht aus einem Inline-Style, der sonst nie zurückläuft.
+        renderer.setSize(w, h, false); camera.aspect = w/h; camera.updateProjectionMatrix();
+        chart.canvas.width = chartCanvas.clientWidth;
+        chart.canvas.height = chartCanvas.clientHeight;
+        chart.resize();
+      });
+      ro.observe(canvas.parentElement); ro.observe(chartCanvas.parentElement);
+      const latex = "\\begin{aligned} \\dot{\\phi} &= \\omega_1 \\\\ \\dot{\\theta} &= \\omega_2 \\\\ \\dot{\\omega}_1 &= \\frac{-g(2m_1+m_2)\\sin\\phi - m_2 g \\sin(\\phi-2\\theta) - 2\\sin(\\phi-\\theta)m_2(\\omega_2^2 L_2 + \\omega_1^2 L_1 \\cos(\\phi-\\theta))}{L_1(2m_1+m_2-m_2\\cos(2\\phi-2\\theta))} \\\\ \\dot{\\omega}_2 &= \\frac{2\\sin(\\phi-\\theta)(\\omega_1^2 L_1(m_1+m_2) + g(m_1+m_2)\\cos\\phi + \\omega_2^2 L_2 m_2 \\cos(\\phi-\\theta))}{L_2(2m_1+m_2-m_2\\cos(2\\phi-2\\theta))} \\end{aligned}";
+      //document.getElementById('katex-output').innerHTML = katex.renderToString(latex, { displayMode: true, throwOnError: false });
+      requestAnimationFrame(update);
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LBM Strömungssimulation</title>
+  <style>
+    :root { --bg: #f8fafc; --text: #1e293b; --accent: #3b82f6; --border: #e2e8f0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * { scrollbar-width: none; }
+    *::-webkit-scrollbar { display: none; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); padding: 0; line-height: 1.3; font-size: 12px; }
+    .wrap { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 0.9rem; padding: 4px 6px 2px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 3px 6px; }
+    .btn-group { display: flex; gap: 4px; flex-wrap: nowrap; }
+    .controls label { font-size: 11px; font-weight: 500; }
+    input[type="range"] { width: 70px; height: 16px; }
+    button { padding: 2px 6px; border: 1px solid var(--border); background: #fff; border-radius: 3px; cursor: pointer; font-weight: 500; font-size: 11px; transition: all 0.15s; }
+    button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    button:hover { background: #f1f5f9; }
+    button.active:hover { background: #2563eb; }
+    button.paused { background: #ef4444; color: #fff; border-color: #ef4444; }
+    button.paused:hover { background: #dc2626; }
+    .val { font-size: 11px; color: #64748b; font-variant-numeric: tabular-nums; }
+    .canvas-wrap { position: relative; width: 100%; aspect-ratio: 2/1; background: #0f172a; }
+    canvas { width: 100%; height: 100%; display: block; cursor: crosshair; image-rendering: pixelated; touch-action: none; }
+    .legend-bar { display: flex; align-items: center; gap: 6px; padding: 2px 6px; font-size: 10px; color: #64748b; }
+    .legend-grad { width: 60px; height: 8px; border-radius: 2px; background: linear-gradient(to right, #00f, #0ff, #0f0, #ff0, #f00); }
+    @media (max-width: 480px) {
+      .controls { flex-direction: column; align-items: flex-start; }
+      input[type="range"] { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>LBM Strömungssimulation (D2Q9)</h1>
+    <div class="controls">
+      <label for="velSlider">U₀ = <span class="val" id="velVal">0.20</span></label>
+      <input type="range" id="velSlider" min="0.01" max="0.3" step="0.01" value="0.2">
+      <div class="btn-group">
+        <button id="btnDraw" class="active">✏️ Zeichnen</button>
+        <button id="btnErase">🧹 Radieren</button>
+        <button id="btnReset">↺ Reset</button>
+        <button id="btnPause">⏸ Pause</button>
+      </div>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="simCanvas"></canvas>
+    </div>
+    <div class="legend-bar">
+      <span>0</span>
+      <div class="legend-grad"></div>
+      <span>0.3</span>
+      <span style="margin-left:auto;">Geschwindigkeit</span>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var NX = 120, NY = 60;
+      var SIZE = NX * NY;
+      var f = new Array(9), f_new = new Array(9);
+      for(var i=0;i<9;i++){f[i]=new Float32Array(SIZE);f_new[i]=new Float32Array(SIZE);}
+      var rho=new Float32Array(SIZE),ux=new Float32Array(SIZE),uy=new Float32Array(SIZE),solid=new Uint8Array(SIZE);
+      var ex=[0,1,-1,0,0,1,-1,1,-1],ey=[0,0,0,1,-1,1,1,-1,-1],opp=[0,2,1,4,3,6,5,8,7];
+      var w=[4/9,1/9,1/9,1/9,1/9,1/36,1/36,1/36,1/36],omega=1.8,BRUSH_R=2;
+      function idx(x,y){return y*NX+x;}
+      function feq(i,r,u,v){var eu=ex[i]*u+ey[i]*v,usq=u*u+v*v;return w[i]*r*(1+3*eu+4.5*eu*eu-1.5*usq);}
+      function init(){
+        for(var i=0;i<9;i++)for(var j=0;j<SIZE;j++)f[i][j]=w[i];
+        rho.fill(1);ux.fill(0);uy.fill(0);solid.fill(0);
+        for(var x=0;x<NX;x++){solid[idx(x,0)]=1;solid[idx(x,NY-1)]=1;}
+        var cx=Math.floor(NX*0.22),cy=Math.floor(NY*0.5),rad=6;
+        for(var y=0;y<NY;y++)for(var x=0;x<NX;x++){var dx=x-cx,dy=y-cy;if(dx*dx+dy*dy<=rad*rad)solid[idx(x,y)]=1;}
+      }
+      function step(U_in){
+        var x,y,i,id,r,u,v;
+        for(y=0;y<NY;y++)for(x=0;x<NX;x++){id=idx(x,y);if(solid[id]){ux[id]=0;uy[id]=0;continue;}r=0;u=0;v=0;for(i=0;i<9;i++){var fi=f[i][id];r+=fi;u+=ex[i]*fi;v+=ey[i]*fi;}if(r<0.1)r=1;rho[id]=r;ux[id]=u/r;uy[id]=v/r;}
+        for(y=0;y<NY;y++)for(x=0;x<NX;x++){id=idx(x,y);if(solid[id])continue;r=rho[id];u=ux[id];v=uy[id];for(i=0;i<9;i++){var fe=feq(i,r,u,v);f[i][id]-=omega*(f[i][id]-fe);if(f[i][id]<0)f[i][id]=0;}}
+        for(i=0;i<9;i++)for(y=0;y<NY;y++)for(x=0;x<NX;x++){id=idx(x,y);if(solid[id]){f_new[i][id]=f[i][id];continue;}var sx=x-ex[i],sy=y-ey[i];if(sx>=0&&sx<NX&&sy>=0&&sy<NY){var sid=idx(sx,sy);f_new[i][id]=solid[sid]?f[opp[i]][sid]:f[i][sid];}else{f_new[i][id]=f[opp[i]][id];}}
+        for(i=0;i<9;i++)f[i].set(f_new[i]);
+        for(y=0;y<NY;y++)for(x=0;x<NX;x++){id=idx(x,y);if(!solid[id])continue;for(i=0;i<9;i++)f[opp[i]][id]=f[i][id];}
+        for(y=0;y<NY;y++){id=idx(0,y);if(solid[id])continue;for(i=0;i<9;i++)f[i][id]=feq(i,1,U_in,0);}
+        for(y=0;y<NY;y++){id=idx(NX-1,y);var nid=idx(NX-2,y);if(solid[id])continue;for(i=0;i<9;i++)f[i][id]=f[i][nid];}
+      }
+      var canvas=document.getElementById('simCanvas'),ctx=canvas.getContext('2d');
+      var imgData=ctx.createImageData(NX,NY),data=imgData.data;
+      function resize(){canvas.width=NX;canvas.height=NY;render();}
+      window.addEventListener('resize',resize);resize();
+      function speedToRGB(t){t=Math.max(0,Math.min(1,t));var r,g,b;if(t<0.25){r=0;g=Math.floor(t*4*255);b=255;}else if(t<0.5){r=0;g=255;b=Math.floor((1-(t-0.25)*4)*255);}else if(t<0.75){r=Math.floor((t-0.5)*4*255);g=255;b=0;}else{r=255;g=Math.floor((1-(t-0.75)*4)*255);b=0;}return[r,g,b];}
+      function render(){for(var y=0;y<NY;y++)for(var x=0;x<NX;x++){var id=idx(x,y),p=(y*NX+x)*4;if(solid[id]){data[p]=30;data[p+1]=41;data[p+2]=59;data[p+3]=255;}else{var sp=Math.sqrt(ux[id]*ux[id]+uy[id]*uy[id]),t=Math.min(1,sp/0.3),rgb=speedToRGB(t);data[p]=rgb[0];data[p+1]=rgb[1];data[p+2]=rgb[2];data[p+3]=255;}}ctx.putImageData(imgData,0,0);}
+      var isDrawing=false,mode='draw',isPaused=false;
+      var btnDraw=document.getElementById('btnDraw'),btnErase=document.getElementById('btnErase'),btnReset=document.getElementById('btnReset'),btnPause=document.getElementById('btnPause');
+      var velSlider=document.getElementById('velSlider'),velVal=document.getElementById('velVal');
+      velSlider.addEventListener('input',function(){velVal.textContent=parseFloat(velSlider.value).toFixed(2);});
+      btnDraw.addEventListener('click',function(){mode='draw';btnDraw.classList.add('active');btnErase.classList.remove('active');});
+      btnErase.addEventListener('click',function(){mode='erase';btnErase.classList.add('active');btnDraw.classList.remove('active');});
+      btnReset.addEventListener('click',function(){init();render();});
+      btnPause.addEventListener('click',function(){isPaused=!isPaused;if(isPaused){btnPause.textContent='▶ Fortsetzen';btnPause.classList.add('paused');render();}else{btnPause.textContent='⏸ Pause';btnPause.classList.remove('paused');}});
+      function getGridPos(e){var rect=canvas.getBoundingClientRect();var cx=e.touches?e.touches[0].clientX:e.clientX,cy=e.touches?e.touches[0].clientY:e.clientY;var x=Math.floor((cx-rect.left)/rect.width*NX),y=Math.floor((cy-rect.top)/rect.height*NY);return{x:Math.max(0,Math.min(NX-1,x)),y:Math.max(0,Math.min(NY-1,y))};}
+      function handlePointer(e){e.preventDefault();var pos=getGridPos(e);for(var dy=-BRUSH_R;dy<=BRUSH_R;dy++)for(var dx=-BRUSH_R;dx<=BRUSH_R;dx++){var px=pos.x+dx,py=pos.y+dy;if(px<0||px>=NX||py<0||py>=NY)continue;if(dx*dx+dy*dy>BRUSH_R*BRUSH_R)continue;var id=idx(px,py);if(mode==='draw'){solid[id]=1;ux[id]=0;uy[id]=0;for(var k=0;k<9;k++)f[k][id]=w[k];}else{solid[id]=0;ux[id]=0;uy[id]=0;for(var k=0;k<9;k++)f[k][id]=w[k];}}render();}
+      canvas.addEventListener('mousedown',function(e){isDrawing=true;handlePointer(e);});
+      canvas.addEventListener('mousemove',function(e){if(isDrawing)handlePointer(e);});
+      window.addEventListener('mouseup',function(){isDrawing=false;});
+      canvas.addEventListener('touchstart',function(e){isDrawing=true;handlePointer(e);},{passive:false});
+      canvas.addEventListener('touchmove',function(e){if(isDrawing)handlePointer(e);},{passive:false});
+      window.addEventListener('touchend',function(){isDrawing=false;});
+      function loop(){if(!isPaused){step(parseFloat(velSlider.value));render();}requestAnimationFrame(loop);}
+      init();render();loop();
+    })();
+  </script>
+</body>
+</html>

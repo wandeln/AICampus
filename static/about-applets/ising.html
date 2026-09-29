@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ising-Modell</title>
+<link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
+<script src="/static/vendor/katex/katex.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}*{scrollbar-width:none}*::-webkit-scrollbar{display:none}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:13px;background:#f8fafc;color:#1e293b;overflow-y:auto}
+#app{display:flex;flex-direction:column;width:100%}
+h1{font-size:13px;font-weight:700;color:#0f172a;padding:6px 8px 0}
+#controls{display:flex;align-items:center;gap:8px;padding:6px 8px;background:rgba(255,255,255,0.92);backdrop-filter:blur(6px);border-bottom:1px solid #e2e8f0;flex-wrap:wrap;position:relative;z-index:10}
+#controls label{font-size:11px;font-weight:600;color:#475569;white-space:nowrap}
+#controls input[type=range]{width:70px;height:4px;accent-color:#3b82f6;cursor:pointer}
+#controls .val{font-size:11px;color:#64748b;min-width:28px;text-align:right}
+.btn{padding:3px 10px;font-size:11px;font-weight:600;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#334155;cursor:pointer;transition:all .15s}
+.btn:hover{background:#f1f5f9;border-color:#94a3b8}
+.btn.active{background:#3b82f6;color:#fff;border-color:#3b82f6}
+.btn.danger{color:#dc2626;border-color:#fca5a5}
+.btn.danger:hover{background:#fef2f2}
+#canvas-wrap{position:relative;aspect-ratio:2/1;max-height:300px;background:#fff;z-index:1;display:flex;align-items:center;justify-content:center}
+#lattice{display:block;cursor:crosshair}
+#stats{display:flex;align-items:center;gap:12px;padding:5px 10px;background:#f1f5f9;border-top:1px solid #e2e8f0;font-size:11px;flex-wrap:wrap}
+#stats .stat{display:flex;align-items:center;gap:4px;position:relative}
+#stats .stat b{color:#0f172a}
+#formula{margin-left:auto;font-size:12px}
+#chart-wrap{height:120px;border-top:1px solid #e2e8f0;position:relative}
+#chart-wrap canvas{width:100%!important;height:100%!important}
+#chart-legend{display:flex;align-items:center;justify-content:center;gap:20px;padding:5px 8px;font-size:11px;color:#334155;background:#f8fafc;border-top:1px solid #e2e8f0;font-weight:500}
+.legend-item{display:flex;align-items:center;gap:5px;font-weight:500}
+.legend-swatch{display:inline-block;width:20px;height:3px;border-radius:2px}
+.lbl-wrap{position:relative;display:inline-flex;align-items:center;gap:2px}
+.info-btn{cursor:pointer;font-size:9px;color:#94a3b8;user-select:none;line-height:1;transition:color .15s}
+.info-btn:hover{color:#3b82f6}
+.info-tip{display:none;position:absolute;top:calc(100% + 6px);left:0;background:#1e293b;color:#f1f5f9;padding:7px 9px;border-radius:5px;font-size:10px;font-weight:400;width:180px;line-height:1.45;z-index:100;box-shadow:0 3px 10px rgba(0,0,0,.18)}
+.info-tip.show{display:block}
+.info-tip::before{content:'';position:absolute;top:-4px;left:14px;border-left:4px solid transparent;border-right:4px solid transparent;border-bottom:4px solid #1e293b}
+@media(max-width:400px){#controls{gap:4px}#controls input[type=range]{width:50px}.btn{padding:2px 6px;font-size:10px}.info-tip{width:150px}}
+</style>
+</head>
+<body>
+<div id="app">
+<h1>2D Ising-Modell</h1>
+<div id="controls">
+<span class="lbl-wrap"><label>T</label><span class="info-btn" data-tip="tipT">ℹ</span><span class="info-tip" id="tipT">Temperatur: Steuert die Wahrscheinlichkeit, dass ein Spin gegen seine Nachbarn flippt. Bei T &lt; T<sub>c</sub> ≈ 2.27 (J=1) entsteht ferromagnetische Ordnung; bei T &gt; T<sub>c</sub> herrscht Unordnung.</span></span><input type="range" id="tempSlider" min="0.1" max="5" step="0.05" value="2.27"><span class="val" id="tempVal">2.27</span>
+<span class="lbl-wrap"><label>J</label><span class="info-btn" data-tip="tipJ">ℹ</span><span class="info-tip" id="tipJ">Kopplungskonstante: Stärke der Wechselwirkung zwischen benachbarten Spins. Größeres J begünstigt parallele Ausrichtung (Ordnung) und erhöht die kritische Temperatur T<sub>c</sub>.</span></span><input type="range" id="jSlider" min="0.2" max="3" step="0.1" value="1.0"><span class="val" id="jVal">1.0</span>
+<span class="lbl-wrap"><label>⚡</label><span class="info-btn" data-tip="tipS">ℹ</span><span class="info-tip" id="tipS">Schrittgeschwindigkeit: Anzahl der Metropolis-Updates pro Frame. Höhere Werte beschleunigen die Simulation, können aber die Konvergenz pro Schritt verringern.</span></span><input type="range" id="speedSlider" min="1" max="200" step="1" value="50"><span class="val" id="speedVal">50</span>
+<button class="btn" id="btnStep">Step</button>
+<button class="btn active" id="btnRun">⏸ Pause</button>
+<button class="btn" id="btnReset">Reset</button>
+<button class="btn danger" id="btnRandom">Random</button>
+</div>
+<div id="canvas-wrap"><canvas id="lattice"></canvas></div>
+<div id="stats">
+<span class="stat">E = <b id="statE">0</b><span class="info-btn" data-tip="tipE">ℹ</span><span class="info-tip" id="tipE">Gesamtenergie: E = −J Σ⟨i,j⟩ sᵢsⱼ. Negative Werte zeigen parallele Spin-Ausrichtung (Ordnung). Bei T &lt; T<sub>c</sub> sinkt E gegen den Grundzustand; bei T &gt; T<sub>c</sub> nähert sich E dem paramagnetischen Wert (≈ 0).</span></span>
+<span class="stat">M = <b id="statM">0</b><span class="info-btn" data-tip="tipM">ℹ</span><span class="info-tip" id="tipM">Magnetisierung (mittlere Spin-Ausrichtung): M = (1/N) Σ sᵢ. |M| ≈ 1: vollständige ferromagnetische Ordnung; M ≈ 0: Unordnung. Bei T &lt; T<sub>c</sub> ist |M| &gt; 0 (gebrochene Symmetrie); bei T &gt; T<sub>c</sub> ist ⟨M⟩ = 0.</span></span>
+<span class="stat">Schritt: <b id="statStep">0</b></span>
+<span id="formula"></span>
+</div>
+<div id="chart-wrap"><canvas id="chartCanvas"></canvas></div>
+<div id="chart-legend"><span class="legend-item"><span class="legend-swatch" style="background:#3b82f6"></span>Energie E(t)</span><span class="legend-item"><span class="legend-swatch" style="background:#ef4444"></span>Magnetisierung M(t)</span></div>
+</div>
+<script>
+(function(){
+var NROWS=24,NCOLS=48;
+var N=NROWS*NCOLS;
+var spins=new Int8Array(N);
+var T=2.27,J=1.0,speed=50;
+var running=true,stepCount=0;
+var eHist=[],mHist=[];
+var canvas=document.getElementById('lattice');
+var ctx=canvas.getContext('2d');
+var chartCanvas=document.getElementById('chartCanvas');
+var chartCtx=chartCanvas.getContext('2d');
+
+function initSpins(ordered){
+for(var i=0;i<N;i++)spins[i]=ordered?1:(Math.random()<0.5?1:-1);
+stepCount=0;eHist=[];mHist=[];
+}
+initSpins(true);
+
+function resize(){
+var wrap=document.getElementById('canvas-wrap');
+var w=wrap.clientWidth,h=wrap.clientHeight;
+var cell=Math.min(w/NCOLS,h/NROWS);
+canvas.width=Math.round(NCOLS*cell);canvas.height=Math.round(NROWS*cell);
+var cw=document.getElementById('chart-wrap');
+chartCanvas.width=cw.clientWidth;chartCanvas.height=cw.clientHeight;
+draw();
+}
+window.addEventListener('resize',resize);
+
+function draw(){
+var w=canvas.width,h=canvas.height;
+var cellW=w/NCOLS,cellH=h/NROWS;
+ctx.clearRect(0,0,w,h);
+for(var i=0;i<NROWS;i++){
+for(var j=0;j<NCOLS;j++){
+var s=spins[i*NCOLS+j];
+ctx.fillStyle=s>0?'#3b82f6':'#ef4444';
+ctx.fillRect(j*cellW,i*cellH,cellW-0.5,cellH-0.5);
+}
+}
+}
+
+function computeEM(){
+var E=0,M=0;
+for(var i=0;i<NROWS;i++){
+for(var j=0;j<NCOLS;j++){
+var s=spins[i*NCOLS+j];
+M+=s;
+var r=(i+1)%NROWS,c=(j+1)%NCOLS;
+E+=-J*s*spins[i*NCOLS+c];
+E+=-J*s*spins[r*NCOLS+j];
+}
+}
+return{E:E,M:M};
+}
+
+function metropolisStep(){
+var i=Math.floor(Math.random()*NROWS);
+var j=Math.floor(Math.random()*NCOLS);
+var idx=i*NCOLS+j;
+var s=spins[idx];
+var up=spins[((i-1+NROWS)%NROWS)*NCOLS+j];
+var dn=spins[((i+1)%NROWS)*NCOLS+j];
+var lf=spins[i*NCOLS+(j-1+NCOLS)%NCOLS];
+var rt=spins[i*NCOLS+(j+1)%NCOLS];
+var dE=2*J*s*(up+dn+lf+rt);
+if(dE<0||Math.random()<Math.exp(-dE/T)){
+spins[idx]=-s;
+}
+}
+
+function doSteps(n){
+for(var k=0;k<n;k++)metropolisStep();
+stepCount+=n;
+var em=computeEM();
+eHist.push(em.E);mHist.push(em.M/N);
+if(eHist.length>500){eHist.shift();mHist.shift();}
+document.getElementById('statE').textContent=em.E.toFixed(1);
+document.getElementById('statM').textContent=(em.M/N).toFixed(3);
+document.getElementById('statStep').textContent=stepCount;
+draw();
+drawChart();
+}
+
+function drawChart(){
+var w=chartCanvas.width,h=chartCanvas.height;
+chartCtx.clearRect(0,0,w,h);
+if(eHist.length<2)return;
+var pad={l:60,r:60,t:14,b:18};
+var pw=w-pad.l-pad.r,ph=h-pad.t-pad.b;
+var eMin=Math.min.apply(null,eHist),eMax=Math.max.apply(null,eHist);
+var mMin=Math.min.apply(null,mHist),mMax=Math.max.apply(null,mHist);
+if(eMax-eMin<1){eMin-=0.5;eMax+=0.5;}
+if(mMax-mMin<0.01){mMin-=0.005;mMax+=0.005;}
+chartCtx.strokeStyle='#e2e8f0';chartCtx.lineWidth=0.5;
+for(var g=0;g<=4;g++){var y=pad.t+ph*g/4;chartCtx.beginPath();chartCtx.moveTo(pad.l,y);chartCtx.lineTo(w-pad.r,y);chartCtx.stroke();}
+chartCtx.font='9px sans-serif';chartCtx.textAlign='right';
+chartCtx.fillStyle='#3b82f6';
+for(var g=0;g<=4;g++){var y=pad.t+ph*g/4;var val=eMax-(eMax-eMin)*g/4;chartCtx.fillText(val.toFixed(1),pad.l-4,y+3);}
+chartCtx.textAlign='left';
+chartCtx.fillStyle='#ef4444';
+for(var g=0;g<=4;g++){var y=pad.t+ph*g/4;var val=mMax-(mMax-mMin)*g/4;chartCtx.fillText(val.toFixed(3),w-pad.r+4,y+3);}
+chartCtx.font='bold 10px sans-serif';chartCtx.textAlign='right';
+chartCtx.fillStyle='#3b82f6';chartCtx.fillText('E',pad.l-4,pad.t-7);
+chartCtx.textAlign='left';
+chartCtx.fillStyle='#ef4444';chartCtx.fillText('M',w-pad.r+4,pad.t-7);
+chartCtx.font='9px sans-serif';chartCtx.fillStyle='#94a3b8';chartCtx.textAlign='center';
+chartCtx.fillText('0',pad.l,h-4);
+chartCtx.fillText(''+eHist.length,w-pad.r,h-4);
+function plotLine(data,min,max,color){
+chartCtx.beginPath();chartCtx.strokeStyle=color;chartCtx.lineWidth=1.2;
+for(var i=0;i<data.length;i++){
+var x=pad.l+pw*i/(data.length-1);
+var y=pad.t+ph*(1-(data[i]-min)/(max-min));
+if(i===0)chartCtx.moveTo(x,y);else chartCtx.lineTo(x,y);
+}
+chartCtx.stroke();
+}
+plotLine(eHist,eMin,eMax,'#3b82f6');
+plotLine(mHist,mMin,mMax,'#ef4444');
+}
+
+var animId=null;
+function animate(){
+if(!running)return;
+doSteps(speed);
+animId=requestAnimationFrame(animate);
+}
+
+document.getElementById('btnRun').addEventListener('click',function(){
+running=!running;
+this.textContent=running?'⏸ Pause':'▶ Run';
+this.classList.toggle('active',running);
+if(running)animate();
+else if(animId)cancelAnimationFrame(animId);
+});
+document.getElementById('btnStep').addEventListener('click',function(){doSteps(1);});
+document.getElementById('btnReset').addEventListener('click',function(){initSpins(true);doSteps(0);});
+document.getElementById('btnRandom').addEventListener('click',function(){initSpins(false);doSteps(0);});
+
+document.getElementById('tempSlider').addEventListener('input',function(){T=parseFloat(this.value);document.getElementById('tempVal').textContent=T.toFixed(2);});
+document.getElementById('jSlider').addEventListener('input',function(){J=parseFloat(this.value);document.getElementById('jVal').textContent=J.toFixed(1);});
+document.getElementById('speedSlider').addEventListener('input',function(){speed=parseInt(this.value);document.getElementById('speedVal').textContent=speed;});
+
+canvas.addEventListener('click',function(e){
+var rect=canvas.getBoundingClientRect();
+var mx=e.clientX-rect.left,my=e.clientY-rect.top;
+var cellW=canvas.width/NCOLS,cellH=canvas.height/NROWS;
+var cj=Math.floor(mx/cellW),ci=Math.floor(my/cellH);
+if(ci>=0&&ci<NROWS&&cj>=0&&cj<NCOLS){
+spins[ci*NCOLS+cj]*=-1;
+draw();
+var em=computeEM();
+document.getElementById('statE').textContent=em.E.toFixed(1);
+document.getElementById('statM').textContent=(em.M/N).toFixed(3);
+}
+});
+
+katex.render("H = -J\\sum_{\\langle i,j\\rangle} s_i\\,s_j",document.getElementById('formula'),{throwOnError:false});
+
+document.querySelectorAll('.info-btn').forEach(function(btn){
+btn.addEventListener('click',function(e){
+e.stopPropagation();
+var tipId=btn.getAttribute('data-tip');
+var tip=document.getElementById(tipId);
+var wasShown=tip.classList.contains('show');
+document.querySelectorAll('.info-tip.show').forEach(function(t){t.classList.remove('show')});
+if(!wasShown)tip.classList.add('show');
+});
+});
+document.addEventListener('click',function(){
+document.querySelectorAll('.info-tip.show').forEach(function(t){t.classList.remove('show')});
+});
+resize();
+doSteps(0);
+animate();
+})();
+</script>
+</body>
+</html>

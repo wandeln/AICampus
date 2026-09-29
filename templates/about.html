@@ -23,8 +23,19 @@
     .about-flow-dot { top: 50%; margin-top: -4px; animation: about-flow-x 2.2s linear infinite; }
   }
 
-  /* About: Material-Card — Textwechsel */
+  /* About: Material-Card / Applet-Karussell — Textwechsel */
   .about-fade { transition: opacity .3s ease; }
+
+  /* About: Applet-Karussell — Auswahl-Punkte */
+  .about-applet-dot { width: 9px; height: 9px; border-radius: 9999px; background: #cbd5e1; cursor: pointer; transition: background .25s ease, width .25s ease; }
+  .about-applet-dot:hover { background: #94a3b8; }
+  .about-applet-dot-on { background: #2563eb; width: 22px; }
+  .about-applet-dot-on:hover { background: #1d4ed8; }
+
+  /* About: Applet-Karussell — Container passt sich an Applet-Höhe an.
+     content-box: Die inline gesetzte Höhe ist exakt die Iframe-Höhe;
+     die 2 px Border liegen außerhalb (kein Puffer nötig). */
+  .about-applet-viewport { box-sizing: content-box; transition: height .35s ease; }
 
   /* About: Gamification — Medaillen leuchten nacheinander auf */
   .about-medal { opacity: .25; filter: grayscale(1); transform: scale(.95); transition: opacity .45s ease, filter .45s ease, transform .45s ease; }
@@ -34,7 +45,7 @@
   @media (prefers-reduced-motion: reduce) {
     .about-reveal { opacity: 1; transform: none; transition: none; }
     .about-cursor, .about-flow-dot { animation: none; }
-    .about-medal, .about-fade { transition: none; }
+    .about-medal, .about-fade, .about-applet-dot, .about-applet-viewport { transition: none; }
   }
 </style>
 {% endblock %}
@@ -91,9 +102,7 @@
       <p class="mt-4 text-gray-600 leading-relaxed max-w-3xl">
         AICampus spricht jedes LLM an, das eine OpenAI-kompatible API bietet —
         vLLM, TGI oder Ollama auf euren GPU-Servern. Einreichungen, Korrekturen
-        und Kursmaterial verlassen euer Netz nicht. Und wenn der LLM-Endpoint
-        nur intern erreichbar ist, verbindet ein reboot-fester SSH-Tunnel die
-        App — ohne offene Ports.
+        und Kursmaterial verlassen euer Netz nicht.
       </p>
 
       <div class="mt-8">
@@ -129,6 +138,41 @@
             </div>
 
           </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Interaktive Applets ──────────────────────────────────── -->
+  <section class="mt-10 sm:mt-12 about-reveal">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
+      <p class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Interaktive Applets</p>
+      <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">
+        Aus einer Beschreibung: ein interaktives Applet in wenigen Augenblicken.
+      </h2>
+      <p class="mt-4 text-gray-600 leading-relaxed max-w-3xl">
+        Interaktive Applets lassen sich in wenigen Augenblicken mit Hilfe von
+        LLMs generieren und in Skript und Slides integrieren — ideal für intuitive Erklärungen:
+      </p>
+
+      <div class="mt-8" id="about-applets">
+        <div class="relative">
+          <div id="about-applet-viewport"
+               class="about-applet-viewport relative min-h-[320px] rounded-lg border border-gray-200 overflow-hidden bg-white">
+            <!-- Slides (Iframes) werden per JS erzeugt — erst beim ersten Anzeigen -->
+          </div>
+          <button id="about-applet-prev" type="button" aria-label="Vorheriges Applet"
+                  class="absolute top-1/2 -translate-y-1/2 -left-3 z-10 w-9 h-9 rounded-full bg-white border border-gray-300 shadow-md text-gray-600 hover:text-blue-700 hover:bg-blue-50 transition flex items-center justify-center text-base leading-none">&larr;</button>
+          <button id="about-applet-next" type="button" aria-label="Nächstes Applet"
+                  class="absolute top-1/2 -translate-y-1/2 -right-3 z-10 w-9 h-9 rounded-full bg-white border border-gray-300 shadow-md text-gray-600 hover:text-blue-700 hover:bg-blue-50 transition flex items-center justify-center text-base leading-none">&rarr;</button>
+        </div>
+
+        <div class="mt-4 flex items-start justify-between gap-2 sm:gap-2 flex-col">
+          <div class="min-w-0 flex-1">
+            <p id="about-applet-title" class="about-fade font-semibold text-gray-800"></p>
+            <p id="about-applet-desc" class="about-fade text-sm text-gray-500 mt-0.5 leading-relaxed"></p>
+          </div>
+          <div id="about-applet-dots" class="flex items-center gap-2 mt-1.5" aria-label="Applet-Auswahl"></div>
         </div>
       </div>
     </div>
@@ -228,13 +272,8 @@
           </h2>
           <p class="mt-4 text-gray-600 leading-relaxed">
             Punkte, Fortschrittsbalken und Medaillen pro Aufgabe machen
-            Lernfortschritt sichtbar: Bronze ab 70 %, Silber ab 80 %, Gold ab
-            90 %, Platinum bei 100 %. Dazu Perzentil im Kurs und
+            Lernfortschritt sichtbar. Dazu Perzentil im Kurs und
             Kursdurchschnitt — jede und jeder sieht, wo er oder sie steht.
-          </p>
-          <p class="mt-3 text-gray-600 leading-relaxed">
-            Ohne zusätzliche Konfiguration: Die Medaillen basieren einfach auf
-            den Punkten, die ihr pro Aufgabe ohnehin setzt.
           </p>
         </div>
 
@@ -459,6 +498,145 @@
         setTimeout(loop, 7500);
       })();
     }
+  }
+
+  /* ── Applets: Karussell (lazy Iframes + Auto-Advance) ──────── */
+  var appletsRoot = document.getElementById("about-applets");
+  if (appletsRoot) {
+    var SLIDES = [
+      { src: "{{ asset('about-applets/ising.html') }}",
+        t: "2D Ising-Modell Simulation",
+        d: "Magnetismus im Browser: unterhalb der kritischen Temperatur T_c ≈ 2,27 ordnen sich die Spins ferromagnetisch aus, oberhalb herrscht Unordnung — Temperatur, Kopplung und Tempo live verändern." },
+      { src: "{{ asset('about-applets/gradient-descent-1d.html') }}",
+        t: "Gradientenabstieg 1D mit Formel",
+        d: "Der Abstieg Schritt für Schritt: Funktion, Lernrate und Iterationsverlauf des Gradientenabstiegs live verändern." },
+      { src: "{{ asset('about-applets/lbm-d2q9.html') }}",
+        t: "LBM Strömungssimulation (D2Q9)",
+        d: "Lattice-Boltzmann-Flüssigkeitsdynamik im Browser: Strömungen an selbst gezeichneten Hindernissen in Echtzeit." },
+      { src: "{{ asset('about-applets/mandelbrot.html') }}",
+        t: "Mandelbrot-Fraktal",
+        d: "Die Mandelbrot-Menge bis an die Grenzen der Maschinengenauigkeit — klick-zoomen in endlose Strukturen." },
+      { src: "{{ asset('about-applets/double-pendulum.html') }}",
+        t: "Interaktives Doppelpendel: Chaos-Visualisierung",
+        d: "Chaos, das man sieht: Winzige Änderungen der Anfangslage verformen die Bahn des Pendels dramatisch." }
+    ];
+    var viewport = document.getElementById("about-applet-viewport");
+    var capTitle = document.getElementById("about-applet-title");
+    var capDesc = document.getElementById("about-applet-desc");
+    var dotsEl = document.getElementById("about-applet-dots");
+    var prevBtn = document.getElementById("about-applet-prev");
+    var nextBtn = document.getElementById("about-applet-next");
+    var slides = [];
+    var idx = 0;
+    var autoTimer = null;
+    var hovered = false;
+    var visible = true;
+    var AUTO_MS = 9000;
+
+    SLIDES.forEach(function (s, i) {
+      var slide = document.createElement("div");
+      slide.className = "absolute inset-0";
+      slide.style.display = i === 0 ? "block" : "none";
+      var dot = document.createElement("button");
+      dot.type = "button";
+      dot.className = "about-applet-dot" + (i === 0 ? " about-applet-dot-on" : "");
+      dot.setAttribute("aria-label", "Applet " + (i + 1) + ": " + s.t);
+      dot.addEventListener("click", function () { go(i); });
+      dotsEl.appendChild(dot);
+      viewport.appendChild(slide);
+      slides.push({ slide: slide, dot: dot, loaded: false, height: null });
+    });
+
+    function measure(i) {
+      // Same-origin: Applet-Höhe direkt aus dem Iframe-Dokument ausmessen.
+      // Nur bei sichtbarem Slide (display:none → scrollHeight 0).
+      var st = slides[i];
+      if (!st.loaded) { return; }
+      var frame = st.slide.querySelector("iframe");
+      var doc = null;
+      try { doc = frame.contentDocument || (frame.contentWindow && frame.contentWindow.document); } catch (e) { doc = null; }
+      if (!doc || !doc.body) { return; }
+      // Bewusst body.scrollHeight (reine Inhaltshöhe) — NICHT
+      // documentElement.scrollHeight: Das unterliegt dem Iframe-Viewport als
+      // Untergrenze, und der Container würde in jedem Messzyklus um ein paar
+      // px wachsen (Feedback-Loop über den inneren resize-Event).
+      var h = doc.body.scrollHeight;
+      if (!h || h < 10) { return; }
+      // Nur echte Inhaltsänderungen (≥2 px: Details aufklappen, Reflow)
+      // setzen eine neue Höhe; Subpixel-Wackeln wird ignoriert.
+      if (st.height === null || Math.abs(h - st.height) >= 2) {
+        st.height = h;
+        if (i === idx) { viewport.style.height = h + "px"; }
+      }
+    }
+
+    function ensureLoaded(i) {
+      if (slides[i].loaded) { return; }
+      slides[i].loaded = true;
+      var frame = document.createElement("iframe");
+      frame.src = SLIDES[i].src;
+      frame.title = SLIDES[i].t;
+      frame.className = "w-full h-full border-0";
+      frame.addEventListener("load", function () {
+        measure(i);
+        var doc = null;
+        try { doc = frame.contentDocument; } catch (e) { doc = null; }
+        if (doc && doc.body) {
+          // Dynamische Inhalte (Canvas-Resizes, Details, Controls) mitverfolgen.
+          if ("ResizeObserver" in window) { new ResizeObserver(function () { measure(i); }).observe(doc.body); }
+          try { frame.contentWindow.addEventListener("resize", function () { measure(i); }); } catch (e) {}
+        }
+      });
+      slides[i].slide.appendChild(frame);
+    }
+
+    function go(i) {
+      var n = SLIDES.length;
+      idx = ((i % n) + n) % n;
+      slides.forEach(function (s, j) {
+        s.slide.style.display = j === idx ? "block" : "none";
+        s.dot.classList.toggle("about-applet-dot-on", j === idx);
+      });
+      ensureLoaded(idx);
+      // Gespeicherte Höhe des angezeigten Slides sofort (wieder-)anwenden:
+      // Beim Zurückkehren zu einem geladenen Slide trägt der Viewport noch
+      // die Höhe des vorherigen Slides — die erneute Messung (gleiche Breite
+      // → gleiche Höhe) dürfte das dadurch fälschlich unterdrücken.
+      if (slides[idx].height) { viewport.style.height = slides[idx].height + "px"; }
+      measure(idx);
+      capTitle.style.opacity = "0";
+      capDesc.style.opacity = "0";
+      setTimeout(function () {
+        capTitle.textContent = SLIDES[idx].t;
+        capDesc.textContent = SLIDES[idx].d;
+        capTitle.style.opacity = "1";
+        capDesc.style.opacity = "1";
+      }, reduced ? 0 : 200);
+      syncTimer();
+    }
+
+    function syncTimer() {
+      if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+      if (reduced || hovered || !visible) { return; }
+      autoTimer = setInterval(function () { go(idx + 1); }, AUTO_MS);
+    }
+
+    capTitle.textContent = SLIDES[0].t;
+    capDesc.textContent = SLIDES[0].d;
+    prevBtn.addEventListener("click", function () { go(idx - 1); });
+    nextBtn.addEventListener("click", function () { go(idx + 1); });
+    appletsRoot.addEventListener("mouseenter", function () { hovered = true; syncTimer(); });
+    appletsRoot.addEventListener("mouseleave", function () { hovered = false; syncTimer(); });
+
+    ensureLoaded(0);
+    if ("IntersectionObserver" in window) {
+      var vio = new IntersectionObserver(function (entries) {
+        visible = entries[0].isIntersecting;
+        syncTimer();
+      }, { threshold: 0.1 });
+      vio.observe(appletsRoot);
+    }
+    syncTimer();
   }
 })();
 </script>
