@@ -60,7 +60,8 @@
               </div>
               <!-- ─── Terminals (PTY im Container) ──────────────────── -->
               <div id="ws-terminals-sec" class="hidden border-t border-gray-200">
-                <div class="flex items-center gap-1 h-7 px-1.5 bg-gray-100 border-b border-gray-200 select-none cursor-pointer">
+                <div class="flex items-center gap-1 h-7 px-1.5 bg-gray-100 border-b border-gray-200 select-none cursor-pointer touch-none"
+                     title="Klick: ein-/ausklappen · Ziehen: Höhe der Aufgabenstellung verstellen">
                   <button type="button" id="ws-terminals-toggle" title="Liste einklappen" class="p-0 shrink-0 text-gray-400 hover:text-gray-600">
                     <svg class="ws-sec-chevron h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                   </button>
@@ -71,7 +72,8 @@
               </div>
               <!-- ─── Ports (Preview der Webservices) ───────────────── -->
               <div id="ws-ports-sec" class="hidden border-t border-gray-200">
-                <div class="flex items-center gap-1 h-7 px-1.5 bg-gray-100 border-b border-gray-200 select-none cursor-pointer">
+                <div class="flex items-center gap-1 h-7 px-1.5 bg-gray-100 border-b border-gray-200 select-none cursor-pointer touch-none"
+                     title="Klick: ein-/ausklappen · Ziehen: Höhe der Aufgabenstellung verstellen">
                   <button type="button" id="ws-ports-toggle" title="Liste einklappen" class="p-0 shrink-0 text-gray-400 hover:text-gray-600">
                     <svg class="ws-sec-chevron h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                   </button>
@@ -250,12 +252,10 @@
   document.getElementById("ws-taskdesc-toggle").addEventListener("click", (e) => {
     e.stopPropagation(); wsSecToggle("taskdesc");
   });
-  document.getElementById("ws-terminals-toggle").parentElement
-    .addEventListener("click", () => wsSecToggle("terminals"));
-  document.getElementById("ws-ports-toggle").parentElement
-    .addEventListener("click", () => wsSecToggle("ports"));
-  // Taskdesc-Bar hat eigene Klick-/Drag-Logik (s. u.) — kein generischer
-  // Bar-Klick-Listener, sonst würde der Drag-Ende-Klick doppelt toggeln.
+  // Bar-Klick UND vertikales Drag (verstellt die Aufgabenstellung, wenn
+  // diese geöffnet ist) kommen für alle drei Bars per wsTaskDescDragOn
+  // unten — hier kein generischer Bar-Klick-Listener, sonst doppelt
+  // toggeln.
   // Initialer Collapse-State (Chevrons/Borders) wird unten NACH der
   // Geometrie-Init gesetzt: wsSecSync zieht Snap/Flush nach, und das
   // setzt die Konstanten (WS_TASKDESC_MIN, …) voraus. (TDZ!)
@@ -353,25 +353,32 @@
   function wsTaskDescApplyDefault() {
     wsTaskDescApply(wsTaskDescCustom == null ? WS_TASKDESC_DEF : wsTaskDescCustom);
   }
-  (function() {
-    const bar = document.getElementById("ws-taskdesc-bar");
+  // Bar-Geste für alle drei Sektions-Bars (Terminals, Ports,
+  // Aufgabenstellung): Klick = eigene Sektion toggeln, vertikales Drag
+  // (ab WS_DRAG_SLOP px Bewegung) = Höhe der Aufgabenstellung verstellen
+  // — aber nur, wenn sie geöffnet ist (sonst bleibt es ein Klick). Der
+  // Ambiguitäts-Entscheid und Pointer-Capture laufen wie bei einer Bar;
+  // der Click nach einem Drag wird per „consumed“ geschluckt, damit die
+  // Sektion nicht zusätzlich toggelt.
+  const WS_DRAG_SLOP = 5;  // px vertikale Toleranz, bevor es ein Drag ist
+  function wsTaskDescDragOn(bar, secId) {
     const list = document.getElementById("ws-taskdesc-list");
     if (!bar || !list) return;
-    const CLICK_SLOP = 5;  // px vertikale Toleranz, bevor es ein Drag ist
     let consumed = false;
     bar.addEventListener("click", (e) => {
       if (consumed) { consumed = false; e.stopPropagation(); return; }
-      wsSecToggle("taskdesc");
+      wsSecToggle(secId);
     });
     bar.addEventListener("pointerdown", (e) => {
       if (e.pointerType === "mouse" && e.button !== 0) return;
+      if (!wsSecs.taskdesc) return;  // zugeklappt: nur regulärer Klick
       const startY = e.clientY;
       const startH = parseFloat(list.style.height) || WS_TASKDESC_DEF;
       let dragging = false;
       try { bar.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
       function onMove(ev) {
         if (!dragging) {
-          if (Math.abs(ev.clientY - startY) < CLICK_SLOP) return;
+          if (Math.abs(ev.clientY - startY) < WS_DRAG_SLOP) return;
           dragging = true;
           document.body.classList.add("ws-split-drag", "ws-split-drag-v");
         }
@@ -391,7 +398,10 @@
       bar.addEventListener("pointerup", onUp);
       bar.addEventListener("pointercancel", onUp);
     });
-  })();
+  }
+  wsTaskDescDragOn(document.getElementById("ws-taskdesc-bar"), "taskdesc");
+  wsTaskDescDragOn(document.getElementById("ws-terminals-toggle").parentElement, "terminals");
+  wsTaskDescDragOn(document.getElementById("ws-ports-toggle").parentElement, "ports");
   wsTaskDescApplyDefault();
   window.addEventListener("resize", wsTaskDescApplyDefault);
   document.addEventListener("ws-layout-changed", wsTaskDescApplyDefault);
