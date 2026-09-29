@@ -60,8 +60,18 @@
       </div>
     </div>
 
+    <!-- Signup-Link für Studierende ohne Account -->
+    <p class="mt-4 text-center text-sm text-gray-500">
+      Noch keinen Account?
+      {% if next_url is defined and next_url %}
+      <a href="/signup?next={{ next_url }}" class="text-blue-600 font-medium hover:underline">Jetzt registrieren</a>
+      {% else %}
+      <a href="/signup" class="text-blue-600 font-medium hover:underline">Jetzt registrieren</a>
+      {% endif %}
+    </p>
+
     <!-- About-Link für alle, die die Plattform noch nicht kennen -->
-    <p class="mt-6 text-center text-sm text-gray-500">
+    <p class="mt-4 text-center text-sm text-gray-500">
       Neu bei AICampus?
       <a href="/about" class="text-blue-600 font-medium hover:underline">Erfahrt, was die Plattform kann →</a>
     </p>

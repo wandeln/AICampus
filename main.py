@@ -31,7 +31,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import TemplateNotFound
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from config import BASE_DIR, DEBUG, LLM_TIMEOUT, PREVIEW_BASE_DOMAIN
 from database.base import create_db_and_tables, engine, get_session, migrate_schema
@@ -785,6 +785,129 @@ async def login_submit(
         }, status_code=status)
 
     # Redirect zu next_url oder Default
+    redirect_to = next_url if next_url else "/"
+    # Sicherheitscheck: nur relative URLs erlauben (keine externen Redirects)
+    if not redirect_to.startswith("/"):
+        redirect_to = "/"
+
+    response = RedirectResponse(url=redirect_to, status_code=303)
+    response.set_cookie(
+        key="access_token", value=token,
+        httponly=not DEBUG, secure=not DEBUG, samesite="lax",
+        max_age=8 * 3600, path="/",
+    )
+    return response
+
+
+@app.get("/signup")
+async def signup_page(request: Request, session: Session = Depends(get_session)):
+    """Signup-Seite anzeigen. Bereits angemeldete User direkt zum Dashboard."""
+    try:
+        user = await get_current_user(request, session)
+    except HTTPException:
+        user = None
+    if user:
+        return RedirectResponse(url="/", status_code=302)
+
+    next_url = request.query_params.get("next", "")
+    return templates.TemplateResponse("signup.html", {"request": request, "next_url": next_url})
+
+
+async def _render_signup_error(
+    request: Request,
+    error: str,
+    next_url: str = "",
+    username: str = "",
+    name: str = "",
+    email: str = "",
+):
+    """Signup-Seite mit Fehlermeldung neu rendern (eingetragene Werte bleiben erhalten)."""
+    return templates.TemplateResponse("signup.html", {
+        "request": request,
+        "error": error,
+        "next_url": next_url,
+        "username": username,
+        "name": name,
+        "email": email,
+    }, status_code=400)
+
+
+@app.post("/signup")
+async def signup_submit(
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """
+    Self-Service-Registrierung für Studierende (nur Rolle USER, nie Admin).
+
+    Akzeptiert beide Content-Types wie /login:
+    - application/x-www-form-urlencoded (normales HTML-Formular)
+    - application/json (HTMX, Fetch-API, etc.)
+
+    Bei Erfolg: JWT in Cookie setzen und weiterleiten (Auto-Login).
+    """
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        body: dict = await request.json()
+        username = str(body.get("username", "")).strip()
+        name = str(body.get("name", "")).strip()
+        email = str(body.get("email", "")).strip()
+        password = str(body.get("password", ""))
+        next_url = str(body.get("next_url", ""))
+    else:
+        form = await request.form()
+
+        def _form_str(key: str) -> str:
+            val = form.get(key, "")
+            return str(val) if not hasattr(val, "read") else ""
+
+        username = _form_str("username").strip()
+        name = _form_str("name").strip()
+        email = _form_str("email").strip()
+        password = _form_str("password")
+        next_url = _form_str("next_url")
+
+    # ── Validierung ───────────────────────────────────────────
+    if not username or not name or not email or not password:
+        return await _render_signup_error(
+            request, "Bitte alle Felder ausfüllen.", next_url, username, name, email)
+
+    if len(password) < 6:
+        return await _render_signup_error(
+            request, "Das Password muss mindestens 6 Zeichen lang sein.",
+            next_url, username, name, email)
+
+    if "@" not in email:
+        return await _render_signup_error(
+            request, "Bitte eine gültige E-Mail-Adresse angeben.",
+            next_url, username, name, email)
+
+    # Username-Prüfung (case-insensitive, damit z. B. 'Max' und 'max' nicht kollidieren)
+    existing = session.exec(
+        select(User).where(func.lower(User.username) == username.lower())
+    ).first()
+    if existing:
+        return await _render_signup_error(
+            request, f"Username '{username}' ist bereits vergeben.",
+            next_url, username, name, email)
+
+    # ── User anlegen (immer Rolle USER, nie Admin) ───────────
+    new_user = User(
+        username=username,
+        email=email,
+        name=name,
+        role=GlobalUserRole.USER,
+        password_hash=hash_password(password),
+    )
+    session.add(new_user)
+    session.commit()
+    session.refresh(new_user)
+    logger.info(f"[Signup] Neuer User '{username}' (ID {new_user.id}) registriert sich selbst.")
+
+    # ── Auto-Login: JWT in Cookie setzen und weiterleiten ─────
+    from services.auth_service import create_access_token
+    token = create_access_token({"sub": new_user.id, "username": new_user.username})
+
     redirect_to = next_url if next_url else "/"
     # Sicherheitscheck: nur relative URLs erlauben (keine externen Redirects)
     if not redirect_to.startswith("/"):
