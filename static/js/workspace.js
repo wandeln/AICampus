@@ -1999,8 +1999,8 @@
     // (multiple vs. webkitdirectory), daher zwei Einträge.
     function uploadMenu(x, y, targetDir) {
       showCtxMenu(x, y, [
-        { label: "📤 Dateien hochladen …", fn: () => uploadTo(targetDir, "files") },
-        { label: "📤 Ordner hochladen … (inkl. Struktur)",
+        { label: "📄 Dateien hochladen …", fn: () => uploadTo(targetDir, "files") },
+        { label: "📁 Ordner hochladen … (inkl. Struktur)",
           fn: () => uploadTo(targetDir, "folders") },
       ]);
     }
