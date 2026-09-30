@@ -3,6 +3,12 @@
 {% block title %} - Über AICampus{% endblock %}
 
 {% block extra_head %}
+{# Lehrmaterial-Vorschau: echte (eingebettete) Reveal-Instanz — gleiche Assets
+   wie die Kurs-Kacheln (course/slides.html). reveal.css vor slides.css;
+   Theme = Default "light" (die :root-Variablen aus slides.css). #}
+<link rel="stylesheet" href="{{ asset('vendor/reveal/reveal.css') }}">
+<link rel="stylesheet" href="{{ asset('css/slides.css') }}">
+<script src="{{ asset('vendor/reveal/reveal.js') }}"></script>
 <style>
   /* About-Page: Scroll-Reveal (dezente Fade-in der Sektionen) */
   .about-reveal { opacity: 0; transform: translateY(24px); transition: opacity .7s ease, transform .7s ease; }
@@ -42,6 +48,13 @@
   .about-medal.about-lit { opacity: 1; filter: none; transform: scale(1); }
   .about-medal.about-pop { transform: scale(1.18); }
 
+  /* About: Workspace-Mockup — Datei-/Terminal-Auswahl im Dateibaum */
+  .about-ws-file { font-family: inherit; font-size: 11px; line-height: 1.5; padding: 2px 6px; border-radius: 4px; color: #374151; background: transparent; white-space: nowrap; cursor: pointer; transition: background-color .15s ease, color .15s ease; }
+  .about-ws-file:hover { background: #eef2f6; }
+  .about-ws-file-on { background: #dbeafe; color: #1d4ed8; font-weight: 600; }
+
+  /* About: Slide-Deck-Vorschau — echte Reveal-Instanz; das Folien-Styling
+     kommt aus css/slides.css (.slides-preview-shell, .markdown-preview). */
   @media (prefers-reduced-motion: reduce) {
     .about-reveal { opacity: 1; transform: none; transition: none; }
     .about-cursor, .about-flow-dot { animation: none; }
@@ -148,14 +161,164 @@
     <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
       <div class="grid lg:grid-cols-2 gap-8 items-center">
 
-        <!-- Cycling-Card: wechselt durch die Material-Typen -->
+        <!-- Slide-Deck-Vorschau: echte eingebettete Reveal-Instanz (Dummy-Deck,
+             gleiche Assets/Struktur wie die Kurs-Kacheln in course/slides.html) -->
         <div class="order-2 lg:order-1 rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-            <span id="about-mat-label" class="about-fade font-mono text-xs uppercase tracking-[0.2em] text-blue-600"></span>
-            <span class="font-mono text-[10px] text-gray-300">4 Material-Typen</span>
+            <span class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Slide-Deck</span>
+            <span class="font-mono text-[10px] text-gray-300">6 Folien · reveal.js</span>
           </div>
-          <div class="p-5">
-            <p id="about-mat-desc" class="about-fade text-gray-700 leading-relaxed min-h-[72px]"></p>
+          <div class="p-4 sm:p-5">
+            <div id="about-slides" class="rounded-lg border border-gray-200 bg-white overflow-hidden">
+              <div class="slides-preview-shell">
+                <div class="reveal">
+                  <div class="slides" data-footer="AICampus · Algorithmen &amp; Datenstrukturen · {{ today_de }}">
+
+                    <!-- Folie 1: Titelfolie (layout:center) -->
+                    <section class="layout-center">
+                      <div class="markdown-preview">
+                        <h1>Kürzeste Pfade in Graphen</h1>
+                        <p>Algorithmen &amp; Datenstrukturen · Kapitel 5</p>
+                      </div>
+                    </section>
+
+                    <!-- Folie 2: Problemstellung -->
+                    <section>
+                      <div class="markdown-preview">
+                        <h1>Das Problem</h1>
+                        <div style="display:flex;align-items:center;gap:1.5em">
+                          <ul style="flex:1;min-width:0">
+                            <li>Gegeben: Graph <span data-katex="G=(V,E)"></span> mit Kosten <span data-katex="w(e) \geq 0"></span></li>
+                            <li>Gesucht: der billigste Weg von <span data-katex="s"></span> nach <span data-katex="t"></span></li>
+                          </ul>
+                          <figure style="width:40%;flex-shrink:0">
+                            <svg viewBox="0 0 200 120" class="w-full h-auto" aria-hidden="true">
+                              <g stroke="#94a3b8" stroke-width="1.5">
+                                <line x1="18" y1="60" x2="78" y2="18"/><line x1="18" y1="60" x2="88" y2="98"/>
+                                <line x1="78" y1="18" x2="88" y2="98"/><line x1="78" y1="18" x2="148" y2="28"/>
+                                <line x1="88" y1="98" x2="148" y2="92"/><line x1="148" y1="28" x2="148" y2="92"/>
+                                <line x1="148" y1="28" x2="185" y2="60"/><line x1="148" y1="92" x2="185" y2="60"/>
+                              </g>
+                              <g font-size="8" fill="#64748b" text-anchor="middle" font-family="ui-monospace, monospace">
+                                <text x="42" y="35">2</text><text x="44" y="78">5</text>
+                                <text x="94" y="61">3</text><text x="113" y="16">1</text>
+                                <text x="118" y="108">2</text><text x="159" y="63">4</text>
+                                <text x="171" y="39">3</text><text x="171" y="83">1</text>
+                              </g>
+                              <g font-size="9" font-weight="700" text-anchor="middle">
+                                <circle cx="18" cy="60" r="9" fill="#16a34a"/><text x="18" y="63" fill="#fff">s</text>
+                                <circle cx="78" cy="18" r="9" fill="#fff" stroke="#475569" stroke-width="1.5"/><text x="78" y="21" fill="#334155">a</text>
+                                <circle cx="88" cy="98" r="9" fill="#fff" stroke="#475569" stroke-width="1.5"/><text x="88" y="101" fill="#334155">b</text>
+                                <circle cx="148" cy="28" r="9" fill="#fff" stroke="#475569" stroke-width="1.5"/><text x="148" y="31" fill="#334155">c</text>
+                                <circle cx="148" cy="92" r="9" fill="#fff" stroke="#475569" stroke-width="1.5"/><text x="148" y="95" fill="#334155">d</text>
+                                <circle cx="185" cy="60" r="9" fill="#1d4ed8"/><text x="185" y="63" fill="#fff">t</text>
+                              </g>
+                            </svg>
+                            <figcaption style="font-size:0.8em;color:#6b7280;margin-top:0.3em;text-align:center">Straßennetz mit 6 Knoten</figcaption>
+                          </figure>
+                        </div>
+                        <span data-katex="d(s,t) = \min_{P: s \leadsto t} \sum_{e \in P} w(e)" data-display></span>
+                      </div>
+                    </section>
+
+                    <!-- Folie 3: Bausteine — Begriffe -->
+                    <section>
+                      <div class="markdown-preview">
+                        <h1>Die Bausteine</h1>
+                        <ul>
+                          <li><span data-katex="N(u)"></span> — <strong>Nachbarschaft von u</strong>: alle Knoten, die direkt an u angrenzen</li>
+                          <li><span data-katex="w(u,v)"></span> — Kosten der Kante von u nach v</li>
+                          <li><span data-katex="d[v]"></span> — kürzeste bisher bekannte Entfernung von <span data-katex="s"></span> nach v (∞ = noch unbekannt)</li>
+                          <li><span data-katex="Q"></span> — Prioritätswarteschlange über alle noch offenen Knoten</li>
+                        </ul>
+                      </div>
+                    </section>
+
+                    <!-- Folie 4: Die Warteschlange Q (extract-min / decrease-key) -->
+                    <section>
+                      <div class="markdown-preview">
+                        <h1>Die Warteschlange Q</h1>
+                        <ul>
+                          <li><span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.92em;background:#f1f5f9;padding:0.08em 0.4em;border-radius:0.3em;white-space:nowrap">extract-min(Q)</span> — nimmt den Knoten mit dem <strong>kleinsten</strong> d-Wert aus Q</li>
+                          <li><span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.92em;background:#f1f5f9;padding:0.08em 0.4em;border-radius:0.3em;white-space:nowrap">decrease-key(Q, v)</span> — senkt die Priorität von v, wenn ein kürzerer Weg gefunden wird</li>
+                        </ul>
+                        <div style="display:flex;align-items:center;gap:0.45em;margin-top:1.1em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.85em">
+                          <span style="background:#dcfce7;border:1.5px solid #16a34a;color:#166534;border-radius:0.35em;padding:0.35em 0.65em;font-weight:700">a · 2</span>
+                          <span style="background:#f8fafc;border:1px solid #cbd5e1;color:#334155;border-radius:0.35em;padding:0.35em 0.65em">b · 5</span>
+                          <span style="background:#f8fafc;border:1px solid #cbd5e1;color:#334155;border-radius:0.35em;padding:0.35em 0.65em">c · 7</span>
+                          <span style="background:#f8fafc;border:1px solid #cbd5e1;color:#334155;border-radius:0.35em;padding:0.35em 0.65em">d · ∞</span>
+                          <span style="margin-left:0.6em;color:#16a34a;font-weight:700">← extract-min</span>
+                        </div>
+                        <p style="margin:0.8em 0 0;padding:0.5em 0.8em;background:#eff6ff;border-left:3px solid #2563eb;border-radius:0.2em;font-size:0.9em"><strong>Warum klappt das?</strong> Alle Kosten sind ≥ 0 — ein extrahierter Knoten wird nie noch kürzer erreichbar.</p>
+                      </div>
+                    </section>
+
+                    <!-- Folie 5: Dijkstra-Algorithmus -->
+                    <section>
+                      <div class="markdown-preview">
+                        <h1>Dijkstra-Algorithmus</h1>
+                        <pre style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:0.3em;padding:0.8em 1.2em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.8em;line-height:1.5;margin:0;max-height:none!important">d[s] ← 0, alle anderen ← ∞      <span style="color:#94a3b8"># Initialisierung</span>
+Q ← alle Knoten (Priorität: d(v)) <span style="color:#94a3b8"># Q startet voll</span>
+while Q ≠ ∅:                    <span style="color:#94a3b8"># O((V+E)·log V)</span>
+    u ← extract-min(Q)           <span style="color:#94a3b8"># d(u) final</span>
+    for v ∈ N(u):
+        if d[u] + w(u,v) &lt; d[v]:
+            d[v] ← d[u] + w(u,v)  <span style="color:#94a3b8"># Tabelle aktualisieren</span>
+            decrease-key(Q, v)   <span style="color:#94a3b8"># Q bleibt auf dem Stand</span></pre>
+                      </div>
+                    </section>
+
+                    <!-- Folie 6: Anwendungen + gefundener Pfad -->
+                    <section>
+                      <div class="markdown-preview">
+                        <h1>Warum lohnt sich das?</h1>
+                        <div style="display:flex;align-items:center;gap:1.5em">
+                          <ul style="flex:1;min-width:0">
+                            <li>🚗 Navigation &amp; Routing</li>
+                            <li>🌐 Internet (OSPF)</li>
+                            <li>🏭 Logistik &amp; Planung</li>
+                          </ul>
+                          <figure style="width:40%;flex-shrink:0">
+                            <svg viewBox="0 0 200 120" class="w-full h-auto" aria-hidden="true">
+                              <g stroke="#e2e8f0" stroke-width="1.5">
+                                <line x1="18" y1="60" x2="88" y2="98"/><line x1="78" y1="18" x2="88" y2="98"/>
+                                <line x1="88" y1="98" x2="148" y2="92"/><line x1="148" y1="28" x2="148" y2="92"/>
+                                <line x1="148" y1="92" x2="185" y2="60"/>
+                              </g>
+                              <g stroke="#2563eb" stroke-width="3">
+                                <line x1="18" y1="60" x2="78" y2="18"/><line x1="78" y1="18" x2="148" y2="28"/>
+                                <line x1="148" y1="28" x2="185" y2="60"/>
+                              </g>
+                              <g font-size="8" fill="#64748b" text-anchor="middle" font-family="ui-monospace, monospace">
+                                <text x="42" y="35" fill="#1d4ed8" font-weight="700">2</text>
+                                <text x="113" y="16" fill="#1d4ed8" font-weight="700">1</text>
+                                <text x="171" y="39" fill="#1d4ed8" font-weight="700">3</text>
+                                <text x="44" y="78">5</text><text x="94" y="61">3</text>
+                                <text x="118" y="108">2</text><text x="159" y="63">4</text>
+                                <text x="171" y="83">1</text>
+                              </g>
+                              <g font-size="9" font-weight="700" text-anchor="middle">
+                                <circle cx="18" cy="60" r="9" fill="#16a34a"/><text x="18" y="63" fill="#fff">s</text>
+                                <circle cx="78" cy="18" r="9" fill="#fff" stroke="#475569" stroke-width="1.5"/><text x="78" y="21" fill="#334155">a</text>
+                                <circle cx="88" cy="98" r="9" fill="#fff" stroke="#475569" stroke-width="1.5"/><text x="88" y="101" fill="#334155">b</text>
+                                <circle cx="148" cy="28" r="9" fill="#fff" stroke="#475569" stroke-width="1.5"/><text x="148" y="31" fill="#334155">c</text>
+                                <circle cx="148" cy="92" r="9" fill="#fff" stroke="#475569" stroke-width="1.5"/><text x="148" y="95" fill="#334155">d</text>
+                                <circle cx="185" cy="60" r="9" fill="#1d4ed8"/><text x="185" y="63" fill="#fff">t</text>
+                              </g>
+                            </svg>
+                            <figcaption style="font-size:0.8em;color:#6b7280;margin-top:0.3em;text-align:center">Optimaler Weg — Kosten 6</figcaption>
+                          </figure>
+                        </div>
+                      </div>
+                    </section>
+
+                  </div>
+                </div>
+              </div>
+              <div class="h-0.5 bg-gray-100">
+                <div id="about-slide-prog" class="h-full bg-blue-500 transition-all duration-500" style="width:16.7%"></div>
+              </div>
+            </div>
             <p class="mt-3 text-sm font-medium text-green-600">✓ generiert — bereit zur Prüfung &amp; Freigabe</p>
           </div>
         </div>
@@ -163,11 +326,11 @@
         <div class="order-1 lg:order-2">
           <p class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Lehrmaterial</p>
           <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">
-            Material, das ihr prüft — statt zu schreiben.
+            Material, das ihr prüft — statt mühsames schreiben.
           </h2>
           <p class="mt-4 text-gray-600 leading-relaxed">
             Ob hochwertige Vorlesungsskripte mit LaTeX und
-            Mermaid-Diagrammen, Slide-Decks, interaktive Applets oder
+            Mermaid-Diagrammen, Slide-Decks oder
             Übungsaufgaben mit Vorlage, Unit-Tests und Musterlösung — das LLM unterstützt
             euch, sodass mehr Zeit für die eigentliche Betreuung der Studierenden bleibt.
           </p>
@@ -182,10 +345,10 @@
     <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
       <p class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Interaktive Applets</p>
       <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">
-        Aus einer Beschreibung: ein interaktives Applet in wenigen Augenblicken.
+        Aus einer Skizze: ein interaktives Applet in wenigen Augenblicken.
       </h2>
       <p class="mt-4 text-gray-600 leading-relaxed max-w-3xl">
-        Interaktive Applets lassen sich in wenigen Augenblicken mit Hilfe von
+        Interaktive Applets lassen sich in wenigen Augenblicken aus einer Beschreibung oder Skizze mit Hilfe von
         LLMs generieren und in Skript und Slides integrieren — ideal für intuitive Erklärungen:
       </p>
 
@@ -196,9 +359,9 @@
             <!-- Slides (Iframes) werden per JS erzeugt — erst beim ersten Anzeigen -->
           </div>
           <button id="about-applet-prev" type="button" aria-label="Vorheriges Applet"
-                  class="absolute top-1/2 -translate-y-1/2 -left-3 z-10 w-9 h-9 rounded-full bg-white border border-gray-300 shadow-md text-gray-600 hover:text-blue-700 hover:bg-blue-50 transition flex items-center justify-center text-base leading-none">&larr;</button>
+                  class="absolute top-1/2 -translate-y-1/2 -left-3 z-10 w-9 h-9 rounded-full bg-white border border-gray-300 shadow-md text-gray-600 hover:text-blue-700 hover:bg-blue-50 transition flex items-center justify-center"><svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="10 3 5 8 10 13"></polyline></svg></button>
           <button id="about-applet-next" type="button" aria-label="Nächstes Applet"
-                  class="absolute top-1/2 -translate-y-1/2 -right-3 z-10 w-9 h-9 rounded-full bg-white border border-gray-300 shadow-md text-gray-600 hover:text-blue-700 hover:bg-blue-50 transition flex items-center justify-center text-base leading-none">&rarr;</button>
+                  class="absolute top-1/2 -translate-y-1/2 -right-3 z-10 w-9 h-9 rounded-full bg-white border border-gray-300 shadow-md text-gray-600 hover:text-blue-700 hover:bg-blue-50 transition flex items-center justify-center"><svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 3 11 8 6 13"></polyline></svg></button>
         </div>
 
         <div class="mt-4 flex items-start justify-between gap-2 sm:gap-2 flex-col">
@@ -212,41 +375,95 @@
     </div>
   </section>
 
-  <!-- ── Automatisiertes Feedback ─────────────────────────────── -->
+  <!-- ── Übungs-Aufgaben ───────────────────────────────────── -->
   <section class="mt-10 sm:mt-12 about-reveal">
     <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
       <div class="grid lg:grid-cols-2 gap-8 items-center">
 
-        <div>
-          <p class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Automatisiertes Feedback</p>
-          <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">
-            Jede Abgabe bekommt in Sekunden ein ehrliches Feedback.
-          </h2>
-          <p class="mt-4 text-gray-600 leading-relaxed">
-            Statt auf die nächste Sprechstunde zu warten: Textaufgaben
-            korrigiert das LLM mit konstruktivem, differenziertem Feedback.
-            Codeaufgaben laufen durch eure Unit-Tests — sichtbar und
-            versteckt — in einer serverseitigen Sandbox mit CPU-, RAM- und
-            Timeout-Limits.
-          </p>
-          <p class="mt-3 text-gray-600 leading-relaxed">
-            Workspace-Aufgaben bekommen pro Studierendem einen isolierten
-            Container: Editor, Terminal, Web-Preview, auf Wunsch GPU. Und wenn
-            jemand feststeckt, gibt das LLM <strong>sokratische
-            Hinweise</strong> — es führt an der Aufgabe entlang, statt die
-            Lösung zu verraten.
-          </p>
+        <!-- Mockup: Workspace (Mini-IDE) wie in der Aufgabe -->
+        <div id="about-ws" class="order-2 lg:order-1 rounded-xl border border-gray-200 shadow-sm overflow-hidden bg-white">
+          <div class="flex items-center px-4 py-2.5 border-b border-gray-200">
+            <span class="text-sm font-semibold text-gray-800">Deine Lösung</span>
+            <span class="ml-auto font-mono text-xs text-blue-600 tabular-nums">12:34</span>
+          </div>
+
+          <div class="flex items-center gap-2 px-4 py-1.5 bg-gray-100 border-b border-gray-200">
+            <span class="h-2 w-2 shrink-0 rounded-full bg-green-500 animate-pulse"></span>
+            <span class="text-xs text-gray-600">Container läuft · 1× GPU</span>
+            <span class="hidden sm:inline text-[10px] text-gray-400 tabular-nums">CPU 14 % · RAM 1,2 / 4 GB</span>
+            <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded border border-gray-300 bg-white text-gray-600">⏹ Stoppen</span>
+          </div>
+
+          <div class="flex flex-col lg:flex-row h-[280px] lg:h-[204px]">
+            <!-- Dateibaum: mobil oben, ab lg links (wie im echten Workspace) -->
+            <div class="shrink-0 border-b lg:border-b-0 lg:border-r lg:w-36 border-gray-200 bg-gray-50 overflow-hidden">
+              <div class="flex gap-1 px-1.5 py-1 border-b border-gray-200 text-[10px] text-gray-400">
+                <span>⟳</span><span>＋</span><span>📤</span><span class="ml-auto">⛶</span>
+              </div>
+              <div class="flex flex-wrap items-center gap-1 px-1.5 py-1.5 lg:flex-col lg:items-stretch">
+                <span class="px-1.5 py-0.5 text-[11px] leading-5 text-gray-500">📁 data</span>
+                <button type="button" class="about-ws-file about-ws-file-on lg:w-full" data-file="train">📄 train.py</button>
+                <button type="button" class="about-ws-file lg:w-full" data-file="model">📄 model.json</button>
+                <button type="button" class="about-ws-file lg:w-full" data-file="test">📄 test_solution.py</button>
+                <span class="hidden lg:block px-1.5 pt-2 text-[9px] font-semibold uppercase tracking-wide text-gray-400">Terminals</span>
+                <button type="button" class="about-ws-file lg:w-full" data-term>⌘ bash · ~/aufgabe</button>
+              </div>
+            </div>
+
+            <!-- Editor- bzw. Terminal-Ansicht (per Klick im Dateibaum umschaltbar) -->
+            <div class="flex-1 min-h-0 min-w-0 bg-white overflow-hidden">
+              <div class="about-ws-pane overflow-hidden px-3 py-2 font-mono text-[10px] sm:text-[11px] leading-5 text-gray-800" data-file="train">
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">1</span><span class="text-purple-600">import</span> torch</div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">2</span></div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">3</span>model = torch.<span class="text-blue-600">nn</span>.<span class="text-blue-600">Sequential</span>(</div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">4</span>&nbsp;&nbsp;&nbsp;&nbsp;torch.nn.Linear(784, 256),</div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">5</span>&nbsp;&nbsp;&nbsp;&nbsp;torch.nn.Linear(256, 10),</div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">6</span>).<span class="text-blue-600">cuda</span>()<span class="about-cursor"></span></div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">7</span></div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">8</span><span class="text-blue-600">train</span>(model, epochs=50)</div>
+              </div>
+              <div class="about-ws-pane hidden overflow-hidden px-3 py-2 font-mono text-[10px] sm:text-[11px] leading-5 text-gray-800" data-file="model">
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">1</span>{</div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">2</span>&nbsp;&nbsp;<span class="text-blue-600">"layers"</span>: [784, 256, 10],</div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">3</span>&nbsp;&nbsp;<span class="text-blue-600">"optimizer"</span>: <span class="text-green-600">"adam"</span>,</div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">4</span>&nbsp;&nbsp;<span class="text-blue-600">"device"</span>: <span class="text-green-600">"cuda"</span></div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">5</span>}</div>
+              </div>
+              <div class="about-ws-pane hidden overflow-hidden px-3 py-2 font-mono text-[10px] sm:text-[11px] leading-5 text-gray-800" data-file="test">
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">1</span><span class="text-purple-600">import</span> torch</div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">2</span><span class="text-purple-600">from</span> model <span class="text-purple-600">import</span> net</div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">3</span></div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">4</span><span class="text-purple-600">def</span> <span class="text-blue-600">test_shape</span>():</div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">5</span>&nbsp;&nbsp;&nbsp;&nbsp;out = net(torch.zeros(1, 784))</div>
+                <div><span class="inline-block w-4 mr-2 text-right text-gray-300 select-none">6</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="text-purple-600">assert</span> out.shape[1] == 10</div>
+              </div>
+              <div id="about-ws-termview" class="hidden h-full overflow-hidden bg-[#0f172a] px-3 py-2 font-mono text-[10px] sm:text-[11px] leading-5">
+                <div class="text-slate-500">$ python train.py</div>
+                <div class="text-green-400">epoch 10/50 · loss 0.241 · acc 91.8 %</div>
+                <div class="text-green-400">epoch 11/50 · loss 0.207 · acc 93.0 %</div>
+                <div class="text-green-400">epoch 12/50 · loss 0.183 · acc 94.2 %</div>
+                <div class="text-slate-400"><span class="about-cursor"></span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2.5 px-4 py-2.5 border-t border-gray-200 bg-gray-50">
+            <span class="rounded-lg bg-green-600 px-2.5 py-1 text-xs font-medium text-white">📤 Einreichen</span>
+            <span class="text-[11px] text-blue-700">⬇️ Vorlage</span>
+            <span class="text-[11px] text-blue-700">⬇️ Meine Lösung</span>
+          </div>
         </div>
 
-        <!-- Live-Demo: Grading-Session, die sich selbst tippt (Loops) -->
-        <div class="rounded-xl overflow-hidden border border-gray-700 shadow-lg bg-[#282c34] font-mono text-[12px] sm:text-[13px] leading-relaxed">
-          <div class="flex items-center gap-1.5 px-4 py-2.5 bg-[#21252b] border-b border-gray-700">
-            <span class="w-3 h-3 rounded-full bg-gray-600"></span>
-            <span class="w-3 h-3 rounded-full bg-gray-600"></span>
-            <span class="w-3 h-3 rounded-full bg-gray-600"></span>
-            <span class="ml-3 text-xs text-gray-500">aicampus — sandbox</span>
-          </div>
-          <div id="about-term" class="p-4 sm:p-5 min-h-[330px] sm:min-h-[300px] text-slate-200"></div>
+        <div class="order-1 lg:order-2">
+          <p class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Übungs-Aufgaben</p>
+          <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">
+            Vielseitige Übungen dank flexibler Arbeitsumgebungen.
+          </h2>
+          <p class="mt-4 text-gray-600 leading-relaxed">
+            Ob Freitextaufgaben oder komplexe Programmieraufgaben auf GPU-Servern —
+            AICampus bietet flexible Übungsmöglichkeiten, um das Wissen der
+            Studierenden zu vertiefen und zu festigen.
+          </p>
         </div>
 
       </div>
@@ -267,6 +484,11 @@
             Punkte, Fortschrittsbalken und Medaillen pro Aufgabe machen
             Lernfortschritt sichtbar. Dazu Perzentil im Kurs und
             Kursdurchschnitt — jede und jeder sieht, wo er oder sie steht.
+          </p>
+          <p class="mt-3 text-gray-600 leading-relaxed">
+            Und wenn jemand feststeckt: Direktes KI-Feedback und
+            <strong>sokratische Hinweise</strong> führen an der Aufgabe
+            entlang, statt die Lösung zu verraten.
           </p>
         </div>
 
@@ -294,6 +516,96 @@
           <div class="mt-4 flex justify-between text-sm border-t border-gray-200 pt-4">
             <span class="text-gray-500">Kursdurchschnitt: <span class="font-semibold text-gray-700">61 %</span></span>
             <span class="text-gray-500">Perzentil: <span id="about-pct" class="font-semibold text-green-600">0 %</span></span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Automatisiertes Feedback ─────────────────────────────── -->
+  <section class="mt-10 sm:mt-12 about-reveal">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
+      <div class="grid lg:grid-cols-2 gap-8 items-center">
+
+        <div>
+          <p class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Automatisiertes Feedback</p>
+          <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">
+            Feedback? Für alle!
+          </h2>
+          <p class="mt-4 text-gray-600 leading-relaxed">
+            Nicht nur Studierende profitieren von direktem Feedback —
+            auch Tutoren und Dozierende: Die Übersicht zeigt, wo der Kurs
+            steht, und die KI verdichtet die häufigsten
+            Verständnisprobleme aus allen Abgaben zu einer kurzen
+            <strong>Zusammenfassung</strong>, bevor die nächste Sprechstunde
+            startet.
+          </p>
+        </div>
+
+        <!-- Mockup: Kurs-Übersicht (Tutor-Ansicht) wie in course/overview.html -->
+        <div class="rounded-xl border border-gray-200 shadow-sm overflow-hidden bg-white">
+          <div class="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-gray-200">
+            <span class="text-sm font-semibold text-gray-800">Übersicht</span>
+            <span class="rounded-full bg-blue-50 text-blue-700 px-2.5 py-0.5 text-[11px] font-medium">👁️ Tutor-Ansicht</span>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full border-collapse text-[11px] sm:text-xs">
+              <thead>
+                <tr class="bg-gray-100 text-gray-600">
+                  <th class="text-left py-1.5 px-3 font-semibold border-b border-gray-200 whitespace-nowrap">Name</th>
+                  <th class="py-1 px-2 font-semibold border-b border-gray-200" title="Graphen (Textaufgabe)"><span class="block text-[10px] whitespace-nowrap">📝 Graphen</span><span class="block">4P</span></th>
+                  <th class="py-1 px-2 font-semibold border-b border-gray-200" title="Dijkstra (Code-Aufgabe)"><span class="block text-[10px] whitespace-nowrap">💻 Dijkstra</span><span class="block">10P</span></th>
+                  <th class="py-1 px-2 font-semibold border-b border-gray-200" title="Netz-Simulation (Workspace)"><span class="block text-[10px] whitespace-nowrap">🐳 Netz</span><span class="block">6P</span></th>
+                  <th class="py-1 px-2 font-bold text-gray-800 border-b border-gray-200 bg-blue-50 whitespace-nowrap" title="Summe">Σ</th>
+                  <th class="py-1 px-2 font-bold text-gray-800 border-b border-gray-200 bg-blue-50 whitespace-nowrap" title="Anteil">%</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="py-1.5 px-3 font-medium text-gray-900 border-b border-gray-100 whitespace-nowrap">Anna Becker</td>
+                  <td class="py-1.5 px-2 text-center font-mono border-b border-gray-100 bg-green-50">4</td>
+                  <td class="py-1.5 px-2 text-center font-mono border-b border-gray-100 bg-green-50">9</td>
+                  <td class="py-1.5 px-2 text-center font-mono border-b border-gray-100 bg-green-50">6</td>
+                  <td class="py-1.5 px-2 text-center font-mono font-bold bg-blue-50 text-green-700">19</td>
+                  <td class="py-1.5 px-2 text-center font-mono font-bold bg-blue-50 text-green-700">95.0%</td>
+                </tr>
+                <tr>
+                  <td class="py-1.5 px-3 font-medium text-gray-900 border-b border-gray-100 whitespace-nowrap">Ben Schulz</td>
+                  <td class="py-1.5 px-2 text-center font-mono border-b border-gray-100 bg-yellow-50">3</td>
+                  <td class="py-1.5 px-2 text-center font-mono border-b border-gray-100 bg-yellow-50">7</td>
+                  <td class="py-1.5 px-2 text-center font-mono border-b border-gray-100 bg-gray-50 text-gray-400">–</td>
+                  <td class="py-1.5 px-2 text-center font-mono font-bold bg-blue-50 text-yellow-700">10</td>
+                  <td class="py-1.5 px-2 text-center font-mono font-bold bg-blue-50 text-yellow-700">50.0%</td>
+                </tr>
+                <tr>
+                  <td class="py-1.5 px-3 font-medium text-gray-900 border-b border-gray-100 whitespace-nowrap">Clara Neumann</td>
+                  <td class="py-1.5 px-2 text-center font-mono border-b border-gray-100 bg-red-50">1</td>
+                  <td class="py-1.5 px-2 text-center font-mono border-b border-gray-100 bg-yellow-50">5</td>
+                  <td class="py-1.5 px-2 text-center font-mono border-b border-gray-100 bg-yellow-50">4</td>
+                  <td class="py-1.5 px-2 text-center font-mono font-bold bg-blue-50 text-yellow-700">10</td>
+                  <td class="py-1.5 px-2 text-center font-mono font-bold bg-blue-50 text-yellow-700">50.0%</td>
+                </tr>
+                <tr>
+                  <td class="py-1.5 px-3 font-medium text-gray-900 whitespace-nowrap">David Okafor</td>
+                  <td class="py-1.5 px-2 text-center font-mono bg-yellow-50">2</td>
+                  <td class="py-1.5 px-2 text-center font-mono bg-red-50">3 🖊️</td>
+                  <td class="py-1.5 px-2 text-center font-mono bg-red-50">2</td>
+                  <td class="py-1.5 px-2 text-center font-mono font-bold bg-blue-50 text-red-700">7</td>
+                  <td class="py-1.5 px-2 text-center font-mono font-bold bg-blue-50 text-red-700">35.0%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 border-t border-gray-100 text-[10px] text-gray-500">
+            <span>🖊️ = Tutor-Bewertung</span>
+            <span>Grün ≥ 80 % · Gelb ≥ 50 % · Rot &lt; 50 %</span>
+          </div>
+          <div class="mx-4 mb-4 rounded-lg bg-blue-50 border border-blue-100 px-3 py-2 text-[11px] leading-relaxed text-gray-700">
+            <span class="font-semibold text-blue-700">🤖 KI-Zusammenfassung:</span>
+            Häufigste Problematik: <em>extract-min</em> wird wie ein Stack
+            (LIFO) implementiert. Vorschlag: 10 Min. Übung dazu in der
+            Sprechstunde.
           </div>
         </div>
 
@@ -376,79 +688,49 @@
     reveals.forEach(function (el) { io.observe(el); });
   }
 
-  /* ── Terminal: Auto-Grading-Session, die sich selbst tippt ── */
-  var term = document.getElementById("about-term");
-  if (term) {
-    var LINES = [
-      { t: "$ grade --aufgabe 12 --student maier", c: "text-slate-400", slow: true },
-      { t: "sandbox: 2 CPU · 512 MB · 30 s", c: "text-slate-500" },
-      { t: "✓ test_01_klein.py   PASS", c: "text-green-400" },
-      { t: "✓ test_02_gewichtet.py PASS", c: "text-green-400" },
-      { t: "✗ test_03_groß.py   FAIL (timeout)", c: "text-red-400" },
-      { t: "→ LLM analysiert Code & Tests …", c: "text-blue-300", slow: true },
-      { t: "→ 6,5 / 10 Punkte", c: "text-blue-300" },
-      { t: "Feedback:", c: "text-slate-500" },
-      { t: "„Dijkstra korrekt — aber der", c: "text-slate-300" },
-      { t: "min()-Scan der Warteschlange kostet O(V)", c: "text-slate-300" },
-      { t: "pro Schritt. Mit heapq: O((V+E)·log V)", c: "text-slate-300" },
-      { t: "— dann läuft auch test_03 durch.“", c: "text-slate-300" }
-    ];
-    if (reduced) {
-      term.innerHTML = LINES.map(function (l) {
-        return '<div class="' + l.c + '">' + l.t + "</div>";
-      }).join("");
-    } else {
-      var cursor = document.createElement("span");
-      cursor.className = "about-cursor";
-      var wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
-      (async function run() {
-        for (;;) {
-          term.innerHTML = "";
-          for (var i = 0; i < LINES.length; i++) {
-            var l = LINES[i];
-            var div = document.createElement("div");
-            div.className = l.c;
-            term.appendChild(div);
-            div.appendChild(cursor);
-            var perChar = l.slow ? 22 : 13;
-            for (var j = 0; j < l.t.length; j++) {
-              div.insertBefore(document.createTextNode(l.t.charAt(j)), cursor);
-              await wait(perChar + Math.random() * 14);
-            }
-            await wait(l.slow ? 600 : 220);
-          }
-          await wait(4500);
-        }
-      })();
-    }
-  }
 
-  /* ── Lehrmaterial: Cycling-Card durch die Material-Typen ───── */
-  var matLabel = document.getElementById("about-mat-label");
-  var matDesc = document.getElementById("about-mat-desc");
-  if (matLabel && matDesc) {
-    var ITEMS = [
-      { l: "Übungsaufgabe", d: "„Floyd–Warshall implementieren“ — aus Thema + Schwierigkeitsgrad generiert, mit Vorlage, 7 Unit-Tests (4 versteckt) und Musterlösung." },
-      { l: "Vorlesungsskript", d: "Kapitel „Kürzeste Pfade“ — Markdown mit LaTeX und Mermaid-Diagrammen, verlinkt mit den Übungsaufgaben, Kapitel für Kapitel freischaltbar." },
-      { l: "Slide-Deck", d: "24 Folien in reveal.js — LLM-gestützt erstellt, im Browser präsentieren, als PDF exportieren." },
-      { l: "Interaktives Applet", d: "Graph-Explorer — aus einer Beschreibung oder einem Referenzbild generiert, interaktiv im Skript eingebettet." }
-    ];
-    var mi = 0;
-    matLabel.textContent = ITEMS[0].l;
-    matDesc.textContent = ITEMS[0].d;
-    if (!reduced) {
-      setInterval(function () {
-        matLabel.style.opacity = "0";
-        matDesc.style.opacity = "0";
-        setTimeout(function () {
-          mi = (mi + 1) % ITEMS.length;
-          matLabel.textContent = ITEMS[mi].l;
-          matDesc.textContent = ITEMS[mi].d;
-          matLabel.style.opacity = "1";
-          matDesc.style.opacity = "1";
-        }, 300);
-      }, 4200);
+  /* ── Lehrmaterial: Slide-Deck-Vorschau (echte Reveal-Instanz, Auto-Advance) ─ */
+  var slidesShell = document.getElementById("about-slides");
+  if (slidesShell && typeof Reveal !== "undefined") {
+    // LaTeX rendern, bevor Reveal initialisiert (KaTeX ist in base.html global)
+    slidesShell.querySelectorAll("[data-katex]").forEach(function (el) {
+      try {
+        katex.render(el.getAttribute("data-katex"), el, { throwOnError: false, displayMode: el.hasAttribute("data-display") });
+      } catch (e) {}
+    });
+    // Gleiche Instanz-Konfiguration wie die Kurs-Kacheln (course/slides.html):
+    // eingebettet, 960×540-Logikkanvas (16:9) — Reveal skaliert den Inhalt
+    // 1:1 auf die Kachelbreite (alles, inkl. Formeln, skaliert mit).
+    var sProg = document.getElementById("about-slide-prog");
+    var sTotal = slidesShell.querySelectorAll(".slides > section").length;
+    var sReveal = new Reveal(slidesShell.querySelector(".reveal"), {
+      embedded: true,
+      keyboard: false,
+      controls: true,
+      controlsTutorial: false,
+      progress: false,
+      center: false,
+      transition: reduced ? "none" : "fade",
+      slideNumber: "c/t",
+      hash: false,
+      history: false,
+      width: 960,
+      height: 540,
+    });
+    function sSync() {
+      var i = sReveal.getIndices().h;
+      if (sProg) { sProg.style.width = ((i + 1) / sTotal * 100) + "%"; }
     }
+    sReveal.on("slidechanged", sSync);
+    sReveal.initialize().then(function () {
+      sSync();
+      if (!reduced) {
+        setInterval(function () {
+          var i = sReveal.getIndices().h;
+          sReveal.slide(i + 1 >= sTotal ? 0 : i + 1);
+        }, 5000);
+      }
+    });
   }
 
   /* ── Gamification: Balken füllt, Medaillen leuchten auf ────── */
@@ -630,6 +912,23 @@
       vio.observe(appletsRoot);
     }
     syncTimer();
+  }
+
+  /* ── Workspace-Mockup: Datei-/Terminal-Ansicht umschalten ───── */
+  var ws = document.getElementById("about-ws");
+  if (ws) {
+    var wsPanes = Array.prototype.slice.call(ws.querySelectorAll(".about-ws-pane"));
+    var wsTermView = document.getElementById("about-ws-termview");
+    var wsFileBtns = Array.prototype.slice.call(ws.querySelectorAll(".about-ws-file[data-file]"));
+    var wsTermBtn = ws.querySelector(".about-ws-file[data-term]");
+    function wsShow(view) {
+      wsPanes.forEach(function (p) { p.classList.toggle("hidden", p.getAttribute("data-file") !== view); });
+      if (wsTermView) { wsTermView.classList.toggle("hidden", view !== "term"); }
+      wsFileBtns.forEach(function (b) { b.classList.toggle("about-ws-file-on", b.getAttribute("data-file") === view); });
+      if (wsTermBtn) { wsTermBtn.classList.toggle("about-ws-file-on", view === "term"); }
+    }
+    wsFileBtns.forEach(function (b) { b.addEventListener("click", function () { wsShow(b.getAttribute("data-file")); }); });
+    if (wsTermBtn) { wsTermBtn.addEventListener("click", function () { wsShow("term"); }); }
   }
 })();
 </script>

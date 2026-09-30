@@ -686,6 +686,7 @@ async def about_page(request: Request, session: Session = Depends(get_session)):
     Eingeloggte Nutzer bekommen den normalen Nav-Context.
     """
     ctx: dict[str, Any] = {"request": request, "page_title": "Über AICampus"}
+    ctx["today_de"] = datetime.now().strftime("%d.%m.%Y")
     try:
         user = await get_current_user(request, session)
     except HTTPException:

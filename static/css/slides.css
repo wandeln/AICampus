@@ -109,7 +109,7 @@
   bottom: 0.45em;
   left: 2.5em;
   right: 2.5em;
-  font-size: 0.32em;
+  font-size: 0.4em;
   line-height: 1.2;
   color: var(--slides-text, #1f2937);
   opacity: 0.55;
@@ -134,7 +134,7 @@ html.print-pdf .reveal .slides .pdf-page > section[data-footer]::after {
   bottom: 0.45em;
   left: 2.5em;
   right: 2.5em;
-  font-size: 0.32em;
+  font-size: 0.4em;
   line-height: 1.2;
   color: var(--slides-text, #1f2937);
   opacity: 0.55;

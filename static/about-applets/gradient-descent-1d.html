@@ -48,7 +48,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 <div class="ctl"><label>α (log)</label><input type="range" id="sl-alpha" min="-3" max="1" step="0.01" value="-1"><span class="val" id="val-alpha">0.10</span></div>
 <div class="ctl"><label>x₀</label><input type="range" id="sl-x0" min="-5" max="5" step="0.1" value="3.0"><span class="val" id="val-x0">3.0</span></div>
 <div class="ctl"><label>Schritte</label><input type="range" id="sl-steps" min="5" max="100" step="1" value="30"><span class="val" id="val-steps">30</span></div>
-<button class="btn btn-p" id="btn-anim">▶</button>
+<button class="btn btn-p" id="btn-anim">⏸</button>
 <button class="btn btn-s" id="btn-step">→</button>
 <button class="btn btn-d" id="btn-reset">↺</button>
 </div>
@@ -116,8 +116,8 @@ st.style.display='inline';
 }
 function reset(){stopAnim();points=[{x:x0,y:getFunc().f(x0)}];currentStep=0;updateChart();updateInfo();}
 function stepOnce(){if(currentStep>=maxSteps)return;var fn=getFunc();var x=points[points.length-1].x;var nx=x-alpha*fn.fp(x);if(!isFinite(nx)||Math.abs(nx)>1e6){nx=nx>0?1e6:-1e6;}points.push({x:nx,y:fn.f(nx)});currentStep++;updateChart();updateInfo();if(currentStep>=maxSteps)stopAnim();}
-function startAnim(){if(animating)return;if(currentStep>=maxSteps)reset();animating=true;document.getElementById('btn-anim').textContent='⏸';function tick(){if(!animating)return;stepOnce();if(animating)animId=requestAnimationFrame(tick);}animId=requestAnimationFrame(tick);}
-function stopAnim(){animating=false;if(animId)cancelAnimationFrame(animId);animId=null;document.getElementById('btn-anim').textContent='▶';}
+function startAnim(){if(animating)return;if(currentStep>=maxSteps)reset();animating=true;document.getElementById('btn-anim').textContent='⏸';function tick(){if(!animating)return;stepOnce();if(animating)animId=setTimeout(tick,200);}tick();}
+function stopAnim(){animating=false;if(animId)clearTimeout(animId);animId=null;document.getElementById('btn-anim').textContent='▶';}
 function toggleAnim(){if(animating)stopAnim();else startAnim();}
 document.getElementById('sel-func').addEventListener('change',function(){funcIdx=parseInt(this.value);updateDerivDisplay();reset();});
 document.getElementById('sl-alpha').addEventListener('input',function(){alpha=Math.pow(10,parseFloat(this.value));document.getElementById('val-alpha').textContent=alpha<0.01?alpha.toFixed(4):alpha.toFixed(2);reset();});
@@ -126,7 +126,7 @@ document.getElementById('sl-steps').addEventListener('input',function(){maxSteps
 document.getElementById('btn-anim').addEventListener('click',toggleAnim);
 document.getElementById('btn-step').addEventListener('click',stepOnce);
 document.getElementById('btn-reset').addEventListener('click',reset);
-initChart();updateDerivDisplay();katex.render("x_{n+1} = x_n - \\alpha \\cdot f'(x_n)",document.getElementById('gd-formula'),{throwOnError:false});reset();
+initChart();updateDerivDisplay();katex.render("x_{n+1} = x_n - \\alpha \\cdot f'(x_n)",document.getElementById('gd-formula'),{throwOnError:false});reset();startAnim();
 })();
 </script>
 </body>
