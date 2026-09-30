@@ -2,7 +2,8 @@
 #
 # Voraussetzungen auf dem Host:
 #   - nvidia-container-toolkit installiert
-#   - sudo nvidia-ctk runtime configure --runtime=docker
+#   - sudo nvidia-ctk runtime configure --runtime=docker (registriert das
+#     „nvidia“-Runtime, das der Agent-Container explizit nutzt — s. unten)
 #
 # Start (zusätzlich zur Basis-Compose):
 #   docker compose -f deploy/compose.compute-only.yml \
@@ -21,6 +22,11 @@
 
 services:
   compute-agent:
+    # Explizit nvidia-runtime: Docker wechselt für GPU-Device-Requests
+    # nicht automatisch hin (mindestens bis v28) — sonst läuft der Agent
+    # auf runc, /dev/nvidia* ist mountet, aber die Treiber-Bibliotheken
+    # fehlen (nvidia-smi schlägt fehl, Health meldet gpu: false).
+    runtime: nvidia
     deploy:
       resources:
         reservations:

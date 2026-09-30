@@ -514,6 +514,32 @@ def _spec_gpus(spec: dict) -> str | list[int]:
     return gpus
 
 
+_NVIDIA_RUNTIME: bool | None = None
+
+
+def nvidia_runtime_available() -> bool:
+    """Hat der Daemon ein „nvidia“-Runtime registriert? (gecacht)
+
+    Docker wechselt für --gpus-Requests nicht automatisch ins
+    nvidia-runtime (mindestens bis v28): Der Container läuft dann auf
+    runc — die /dev/nvidia*-Knoten sind mountet, aber die
+    Treiber-Bibliotheken (NVML/CUDA) fehlen und die GPU ist tot. Bei
+    registriertem nvidia-runtime wird es daher explizit mit --runtime
+    übergeben; ohne Registrierung bleibt das Flag weg (Legacy-Setups
+    injizieren über den Default-Runtime).
+    """
+    global _NVIDIA_RUNTIME
+    if _NVIDIA_RUNTIME is None:
+        try:
+            proc = _docker("info", "--format", "{{json .Runtimes}}",
+                           check=False, timeout=30)
+            runtimes = json.loads(proc.stdout.decode() or "{}")
+            _NVIDIA_RUNTIME = "nvidia" in runtimes
+        except Exception:
+            _NVIDIA_RUNTIME = False
+    return _NVIDIA_RUNTIME
+
+
 def _gpu_args(spec: dict) -> list[str]:
     """--gpus-Flags aus dem GPU-Modus (s. _spec_gpus).
 
@@ -521,19 +547,22 @@ def _gpu_args(spec: dict) -> list[str]:
     [int, …]: explizite Devices — OHNE GPU-Fähigkeit = klarer Fehler
     (Konfig-Fehler der Engine-Regel, kein stiller Fallback).
     "none"/leer: kein Flag.
+    Bei registriertem nvidia-runtime zusätzlich --runtime nvidia
+    (s. nvidia_runtime_available).
     """
     gpus = _spec_gpus(spec)
     if not gpus or gpus == "none":
         return []
+    runtime = ["--runtime", "nvidia"] if nvidia_runtime_available() else []
     if gpus == "all":
-        return ["--gpus", "all"] if gpu_available() else []
+        return (runtime + ["--gpus", "all"]) if gpu_available() else []
     if isinstance(gpus, list) and gpus:
         if not gpu_available():
             raise DockerError(
                 "GPU-Devices angefordert, aber dieser Node hat keine GPU-"
                 f"Fähigkeit (gefordert: {', '.join(map(str, gpus))}) — "
                 "Engine-GPU-Konfiguration prüfen", 409)
-        return ["--gpus", f'"device={",".join(str(g) for g in gpus)}"']
+        return runtime + ["--gpus", f'"device={",".join(str(g) for g in gpus)}"']
     return []
 
 
