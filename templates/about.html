@@ -59,13 +59,13 @@
       KI-Plattform für MINT-Lehre · 100 % auf eurer Hardware
     </p>
     <h1 class="mt-5 text-3xl sm:text-4xl lg:text-5xl font-bold text-gray-800 leading-tight max-w-3xl mx-auto">
-      Künstliche Intelligenz für eure Lehre.<br>
-      <span class="text-blue-700">Alle Daten bleiben bei euch.</span>
+      Künstliche Intelligenz für die Lehre.<br>
+      <span class="text-blue-700">Mehr Zeit für die Studierenden.</span>
     </h1>
     <p class="mt-6 text-lg text-gray-500 leading-relaxed max-w-2xl mx-auto">
-      AICampus erzeugt Übungsaufgaben und Lehrmaterialien, korrigiert Abgaben
+      AICampus erzeugt Lehrmaterialien und Übungsaufgaben, korrigiert Abgaben
       automatisch und führt Studierende an Problemen entlang — betrieben auf
-      euren Servern, ohne Cloud-Abhängigkeiten.
+      euren Servern.
     </p>
     <div class="mt-8 flex flex-wrap justify-center gap-3">
       <a href="https://github.com/wandeln/AICampus/blob/main/docs/installation.md"
@@ -98,7 +98,7 @@
   <section class="mt-14 sm:mt-16 about-reveal">
     <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
       <p class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Datenhoheit</p>
-      <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">Jede Lösung bleibt im Uni-Netzwerk.</h2>
+      <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">Alle Daten bleiben im Uni-Netzwerk.</h2>
       <p class="mt-4 text-gray-600 leading-relaxed max-w-3xl">
         AICampus spricht jedes LLM an, das eine OpenAI-kompatible API bietet —
         vLLM, TGI oder Ollama auf euren GPU-Servern. Einreichungen, Korrekturen
@@ -143,6 +143,40 @@
     </div>
   </section>
 
+  <!-- ── Lehrmaterial ─────────────────────────────────────────── -->
+  <section class="mt-10 sm:mt-12 about-reveal">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
+      <div class="grid lg:grid-cols-2 gap-8 items-center">
+
+        <!-- Cycling-Card: wechselt durch die Material-Typen -->
+        <div class="order-2 lg:order-1 rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+            <span id="about-mat-label" class="about-fade font-mono text-xs uppercase tracking-[0.2em] text-blue-600"></span>
+            <span class="font-mono text-[10px] text-gray-300">4 Material-Typen</span>
+          </div>
+          <div class="p-5">
+            <p id="about-mat-desc" class="about-fade text-gray-700 leading-relaxed min-h-[72px]"></p>
+            <p class="mt-3 text-sm font-medium text-green-600">✓ generiert — bereit zur Prüfung &amp; Freigabe</p>
+          </div>
+        </div>
+
+        <div class="order-1 lg:order-2">
+          <p class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Lehrmaterial</p>
+          <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">
+            Material, das ihr prüft — statt zu schreiben.
+          </h2>
+          <p class="mt-4 text-gray-600 leading-relaxed">
+            Ob hochwertige Vorlesungsskripte mit LaTeX und
+            Mermaid-Diagrammen, Slide-Decks, interaktive Applets oder
+            Übungsaufgaben mit Vorlage, Unit-Tests und Musterlösung — das LLM unterstützt
+            euch, sodass mehr Zeit für die eigentliche Betreuung der Studierenden bleibt.
+          </p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
   <!-- ── Interaktive Applets ──────────────────────────────────── -->
   <section class="mt-10 sm:mt-12 about-reveal">
     <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
@@ -158,7 +192,7 @@
       <div class="mt-8" id="about-applets">
         <div class="relative">
           <div id="about-applet-viewport"
-               class="about-applet-viewport relative min-h-[320px] rounded-lg border border-gray-200 overflow-hidden bg-white">
+               class="about-applet-viewport relative min-h-[200px] rounded-lg border border-gray-200 overflow-hidden bg-white">
             <!-- Slides (Iframes) werden per JS erzeugt — erst beim ersten Anzeigen -->
           </div>
           <button id="about-applet-prev" type="button" aria-label="Vorheriges Applet"
@@ -213,47 +247,6 @@
             <span class="ml-3 text-xs text-gray-500">aicampus — sandbox</span>
           </div>
           <div id="about-term" class="p-4 sm:p-5 min-h-[330px] sm:min-h-[300px] text-slate-200"></div>
-        </div>
-
-      </div>
-    </div>
-  </section>
-
-  <!-- ── Lehrmaterial ─────────────────────────────────────────── -->
-  <section class="mt-10 sm:mt-12 about-reveal">
-    <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
-      <div class="grid lg:grid-cols-2 gap-8 items-center">
-
-        <!-- Cycling-Card: wechselt durch die Material-Typen -->
-        <div class="order-2 lg:order-1 rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-            <span id="about-mat-label" class="about-fade font-mono text-xs uppercase tracking-[0.2em] text-blue-600"></span>
-            <span class="font-mono text-[10px] text-gray-300">4 Material-Typen</span>
-          </div>
-          <div class="p-5">
-            <p id="about-mat-desc" class="about-fade text-gray-700 leading-relaxed min-h-[72px]"></p>
-            <p class="mt-3 text-sm font-medium text-green-600">✓ generiert — bereit zur Prüfung &amp; Freigabe</p>
-          </div>
-        </div>
-
-        <div class="order-1 lg:order-2">
-          <p class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Lehrmaterial</p>
-          <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">
-            Material, das ihr prüft — statt das ihr schreibt.
-          </h2>
-          <p class="mt-4 text-gray-600 leading-relaxed">
-            Aus Thema und Schwierigkeitsgrad erzeugt das LLM komplette
-            Übungsaufgaben — mit Vorlage, Unit-Tests und Musterlösung.
-            Dasselbe Prinzip für Vorlesungsskripte mit LaTeX und
-            Mermaid-Diagrammen, Slide-Decks und interaktive Applets — auch aus
-            einer Skizze oder einem Referenzbild.
-          </p>
-          <p class="mt-3 text-gray-600 leading-relaxed">
-            Jedes Ergebnis landet in eurer Prüfung: anpassen, freigeben,
-            fertig. Und bestehende Skripte und Folien (PDF, PowerPoint, Word)
-            importiert ein Wizard interaktiv in Kurskapitel und Decks —
-            inklusive Quellenbibliothek in BibTeX.
-          </p>
         </div>
 
       </div>
