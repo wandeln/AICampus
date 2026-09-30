@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   {# Browser-Chrom (insb. mobile Addressleiste) passend zur Nav (bg-blue-700) #}
   <meta name="theme-color" content="#1d4ed8">
-  <!-- Favicon (Inline-SVG — verhindert /favicon.ico-404) -->
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎓</text></svg>">
+  <!-- Favicon (eigene Plattform-Icon) -->
+  <link rel="icon" type="image/png" href="{{ asset('aicampus_icon.png') }}">
   <title>AICampus{% block title %} - {{ page_title or "Übungsaufgaben" }}{% endblock %}</title>
 
   <!-- HTMX (BSD-3) — lokal gespiegelt -->
@@ -108,7 +108,7 @@
 
       <!-- Logo / Home -->
       <a href="/" class="text-xl font-bold flex items-center gap-2 hover:opacity-90 transition mr-2">
-        <span>📚</span>
+        <img src="{{ asset('aicampus_icon_bg_white.png') }}" alt="AICampus" class="h-8 w-8 rounded-full">
         <span class="hidden sm:inline">AICampus</span>
         <span class="sm:hidden">AICampus</span>
       </a>
