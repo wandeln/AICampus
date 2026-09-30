@@ -1,0 +1,40 @@
+# SSH-Tunnel WSL → venusberg.informatik.uni-bonn.de (Compute-Agent)
+#
+# Abgeleitet aus deploy/aicampus-compute-tunnel.yongsongpeak.service,
+# angepasst:
+# - User wandel (Pool-Maschine), Key /etc/aicampus/compute_ssh_key
+# - Bind an 0.0.0.0:8702 (nächster Port nach yongsongpeak/8701): AICampus
+#   läuft in einem Docker-Container und erreicht den Tunnel über
+#   host.docker.internal (je nach Container-Konfig die Default-Bridge- oder
+#   Compose-Bridge-IP).
+# - UFW auf dem Host: Docker-Subnetze für Port 8702 freigeben (wie für
+#   8001/8701, docs/installation.md §5), sonst droppt UFW den
+#   Container-Traffic auf den nicht-published Port.
+
+[Unit]
+Description=AICampus Compute SSH Tunnel (0.0.0.0:8702 → venusberg:8700)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ssh \
+  -N \
+  -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=3 \
+  -o ExitOnForwardFailure=yes \
+  -o BatchMode=yes \
+  -o StrictHostKeyChecking=accept-new \
+  -i /etc/aicampus/compute_ssh_key \
+  -L 0.0.0.0:8702:127.0.0.1:8700 \
+  wandel@venusberg.informatik.uni-bonn.de
+Restart=always
+RestartSec=5
+
+# Härten
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
