@@ -284,7 +284,9 @@
   function wsEngineLabel(a) {
     return (a.healthy ? "🟢" : "🔴") + " " + a.name +
       (a.gpu_info ? " · " + a.gpu_info : (a.gpu ? " · GPU" : "")) +
-      (a.healthy ? "" : " (offline)");
+      (a.healthy
+        ? (a.version && !a.version_current ? " · ⚠️ Agent veraltet" : "")
+        : " (offline)");
   }
 
   // Engine-Optionen rendern (gefiltert auf Engines mit installiertem Image)

@@ -296,11 +296,24 @@
     function updateEngineStatus(wrap, st, i) {
       const dot = wrap.querySelector('.eng-dot');
       const gpu = wrap.querySelector('.eng-gpu');
+      const ver = wrap.querySelector('.eng-ver');
       if (!dot) { return; }
       dot.textContent = st ? (st.healthy ? '🟢' : '🔴') : '⚪';
       dot.title = st && !st.healthy ? (st.error || 'offline') : 'Engine-Status';
       gpu.textContent = st ? (st.gpu_info || (st.gpu ? 'GPU' : '')) : '';
       gpu.classList.toggle('hidden', !gpu.textContent);
+      if (ver) {
+        if (st && st.version) {
+          ver.textContent = st.version;
+          ver.title = st.version_current
+            ? 'Agent-Version (Content-Hash des Agent-Quellcodes) — aktuell'
+            : 'Agent-Version VERALTET — Agent-Image neu bauen (deploy/compute-agent-update.sh)';
+          ver.className = 'eng-ver text-[10px] px-1.5 py-0.5 rounded font-mono whitespace-nowrap flex-shrink-0 ' +
+            (st.version_current ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700');
+        } else {
+          ver.classList.add('hidden');
+        }
+      }
       renderEngineGpus(wrap.querySelector('.eng-gpus'), i, st);
     }
 
@@ -429,6 +442,7 @@
           nameField +
           badge +
           '<span class="eng-gpu hidden text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 whitespace-nowrap flex-shrink-0"></span>' +
+          '<span class="eng-ver hidden text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-mono whitespace-nowrap flex-shrink-0"></span>' +
           '<span class="ml-auto flex items-center gap-2 flex-shrink-0">' +
           '<button class="eng-test text-xs px-2 py-1 rounded border border-blue-200 text-blue-600 hover:bg-blue-50" title="Verbindung testen">🧪</button>' +
           '<svg class="eng-chevron h-5 w-5 text-gray-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>' +

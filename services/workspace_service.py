@@ -23,12 +23,14 @@ import tarfile
 import tempfile
 import threading
 import time
+import zlib
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from sqlmodel import Session, select
 
+from compute_agent.version import agent_version
 from config import (
     SUBMISSION_DIR,
     WORKSPACE_DIR,
@@ -454,15 +456,26 @@ class WorkspaceService:
     def status(self, session: Session, course_id: Optional[int] = None) -> dict:
         """Für Admin-Konsole + UI-Banner (degradierter Modus).
         gpu/gpu_info kommen aus dem Health (detektiert) — das alte
-        Registry-Flag wird überschrieben."""
+        Registry-Flag wird überschrieben.
+
+        version/version_current: Content-Hash des Agent-Quellcodes
+        (compute_agent/version.py — dieselbe Funktion, die der Agent
+        über /health meldet). Fehlt die Angabe (alte Agent-Builds
+        ohne Version-Field), bleibt version_current False; die UI
+        zeigt dann einfach kein Versions-Badge.
+        """
+        expected_version = agent_version()
         agents = []
         for a in self.get_agents(session, course_id):
             ok, err = self._agent_healthy(a)
             info = self._agent_health(a) or {}
+            v = info.get("version") or ""
             agents.append({**a, "key": None, "healthy": ok, "error": err,
                            "gpu": bool(info.get("gpu")),
                            "gpu_info": info.get("gpu_info", ""),
-                           "gpus": info.get("gpus") or []})
+                           "gpus": info.get("gpus") or [],
+                           "version": v,
+                           "version_current": bool(v) and v == expected_version})
         return {
             "enabled": self.is_enabled(session, course_id),
             "gpu_enabled": self._gpu_enabled(session, course_id),
@@ -1479,7 +1492,16 @@ class WorkspaceService:
         seen: set[str] = set()
         if submission.workspace_snapshot:
             with tempfile.TemporaryDirectory(prefix="aicampus-grade-") as tmp:
-                self.extract_snapshot(submission.workspace_snapshot, Path(tmp))
+                try:
+                    self.extract_snapshot(
+                        submission.workspace_snapshot, Path(tmp))
+                except (tarfile.TarError, OSError, EOFError, zlib.error):
+                    # Beschädigtes/unvollständiges tar.gz (z. B. durch
+                    # ältere, still abgeschnittene Snapshots) — statt
+                    # kryptischem zlib-Fehler klaren Fehler an die Einreichung.
+                    raise ValueError(
+                        "Student-Snapshot ist beschädigt oder unvollständig — "
+                        "bitte die Lösung erneut einreichen")
                 for p in sorted(Path(tmp).rglob("*")):
                     if not p.is_file():
                         continue
@@ -1544,12 +1566,16 @@ class WorkspaceService:
             with tempfile.TemporaryDirectory(prefix="aicampus-grade-") as tmp:
                 try:
                     self.extract_snapshot(submission.workspace_snapshot, Path(tmp))
-                except (ValueError, tarfile.TarError, OSError):
+                except (ValueError, tarfile.TarError, OSError,
+                        EOFError, zlib.error):
                     return ctx
                 texts = self._collect_texts(Path(tmp))
+                # NUR ✏️-Dateien des Students ans LLM — 🔒 (Task-Vorlage,
+                # z. B. ro-Mount-Inhalte in älteren Snapshots) und 👤
+                # (privat, kommt ohnehin nie ins Volume) bleiben draußen.
                 for rel in [r for r in texts
                             if effective_file_access(
-                                r, file_acc.get(r), fm) == "hidden"]:
+                                r, file_acc.get(r), fm) != "edit"]:
                     del texts[rel]
                 ctx["student_files"] = texts
         total = 0

@@ -24,7 +24,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import Response
 from starlette.websockets import WebSocketDisconnect
 
-from . import auth, config, docker_ops, image_spec, preview, runs, spec, terminal
+from . import auth, config, docker_ops, image_spec, preview, runs, spec, terminal, version
 from .reaper import REGISTRY, reaper_loop
 
 app = FastAPI(title="AICampus Compute-Agent", version="1.0")
@@ -103,6 +103,7 @@ def health(payload: dict = Depends(auth.verify_token)) -> dict:
         "gpu_max_jobs": config.GPU_MAX_JOBS,
         "idle_timeout": config.IDLE_TIMEOUT,
         "workspaces": len(REGISTRY.all_items()),
+        "version": version.agent_version(),
         "time": time.time(),
     }
 
@@ -537,15 +538,18 @@ async def _safe_send_bytes(ws_conn: WebSocket, data: bytes) -> None:
 def snapshot(key: str, payload: dict = Depends(auth.verify_token)) -> Response:
     """tar.gz des /workspace-Volumes (für „Abgeben" + Tutor-Review).
 
-    Cap = Task-Disk-Quota (Fallback: MAX_WORKSPACE_SIZE) — bei
-    Überschreitung schlägt der Snapshot fehl, bis der Student aufräumt.
+    Enthaelt NUR das schreibbare Named-Volume (Student-Dateien) —
+    🔒-ro-Mounts (Assets/Datasets) sind ausgeschlossen. Cap = Task-Disk-
+    Quota (Fallback: MAX_WORKSPACE_SIZE) — bei Überschreitung schlägt
+    der Snapshot fehl, bis der Student aufräumt.
     """
     _op(payload, f"ws:{key}")
     _touch(key)
     spec = ((REGISTRY.get(key) or {}).get("spec") or {})
     quota_mb = spec.get("disk_quota_mb")
     cap = quota_mb * 1024 * 1024 if quota_mb else config.MAX_WORKSPACE_SIZE
-    data = docker_ops.snapshot(key, cap=cap)
+    data = docker_ops.snapshot(
+        key, cap=cap, exclude_paths=spec.get("readonly_paths"))
     return Response(content=data, media_type="application/gzip",
                     headers={"Content-Disposition":
                              f'attachment; filename="{key}-workspace.tar.gz"'})

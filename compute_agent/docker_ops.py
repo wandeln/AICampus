@@ -1387,16 +1387,39 @@ def clean_phantom_mounts(key: str) -> None:
             check=False, timeout=120)
 
 
-def snapshot(key: str, cap: int | None = None) -> bytes:
-    """tar.gz des /workspace-Volumes (mit Größen-Cap)."""
+def snapshot(key: str, cap: int | None = None,
+            exclude_paths: list[str] | None = None) -> bytes:
+    """tar.gz des /workspace-Volumes (mit Größen-Cap).
+
+    exclude_paths: 🔒-ro-Mounts (spec.readonly_paths). Die liegen NICHT
+    im Named-Volume (geteilte Asset-Region, z. B. Datasets aus .init.sh)
+    und zählen weder gegen die Disk-Quota noch zur Abgabe — von der
+    Container-Sicht aus würde tar sie aber trotzdem miterfassen und das
+    Snapshot um mehrere GB aufblähen, daher explizit ausschließen.
+
+    Bei Cap-Erreichung wird der Snapshot abgelehnt, statt still
+    abzuschneiden: ein abgeschnittenes tar.gz wäre bei der Korrektur
+    unlesbar und die Einreichung wäre unwiederbringlich beschädigt.
+    """
     _ensure_running(key)
-    code, out_b, _err, _ = _run_capped(
-        ["docker", "exec", container_name(key),
-         "tar", "-czf", "-", "-C", "/workspace", "."],
-        timeout=600, cap=cap or config.MAX_WORKSPACE_SIZE,
-    )
+    cap = cap or config.MAX_WORKSPACE_SIZE
+    cmd = ["docker", "exec", container_name(key), "tar", "-czf", "-"]
+    # Verankert auf "./<pfad>": pruned exakt den ro-Mount, aber nie
+    # Student-Dateien mit gleichem Namen tiefer im Baum (z. B. src/data).
+    for rp in exclude_paths or []:
+        cmd += ["--exclude", f"./{rp}"]
+    cmd += ["-C", "/workspace", "."]
+    code, out_b, _err, _ = _run_capped(cmd, timeout=600, cap=cap)
     if code != 0:
         raise DockerError("Snapshot fehlgeschlagen", 500)
+    # _run_capped bricht den Stream bei cap ab (Exit-Code bleibt 0, da der
+    # Pipe-Drain tar normal abschließen lässt) → Größen-Check als Guard.
+    if len(out_b) >= cap:
+        raise DockerError(
+            f"Workspace-Snapshot überschreitet das Größenlimit "
+            f"({cap // (1024 * 1024)} MB) — bitte unnötige Dateien "
+            f"(z. B. Datasets, Logs, alte Checkpoints) aus dem "
+            f"Workspace löschen und erneut einreichen", 413)
     return out_b
 
 

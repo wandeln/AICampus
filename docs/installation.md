@@ -250,7 +250,9 @@ verwaltet dabei den **Host-Docker-Daemon** (docker.sock-Mount):
 ```bash
 # Auf dem Compute-Server (beliebiges Linux):
 # 1) Docker installieren (GPU: + nvidia-container-toolkit)
-# 2) Repo hinbekommen (git clone / rsync), z. B. /srv/AICampus
+# 2) Repo per Git holen (sparse — nur der Agent-Code, kein Backend):
+git clone --filter=blob:none --no-checkout https://github.com/wandeln/AICampus.git
+cd AICampus && git sparse-checkout set compute_agent deploy && git checkout main
 # 3) Key hinterlegen — exakt derselbe Key, der in der Engine-Registry
 #    des AICampus-Servers für diese Engine eingetragen ist:
 sudo sh -c 'echo "AGENT_KEY=<Key>" > deploy/.env && chmod 600 deploy/.env'
@@ -272,8 +274,16 @@ docker compose -f deploy/compose.compute-only.yml \
 Ohne `AGENT_KEY` verweigert der Agent-Container den Start (bewusste
 Schutzsperre). GPU-/Queue-Parameter (`GPU_ENABLED`, `GPU_MAX_JOBS`, …)
 können in `deploy/.env` gesetzt oder direkt in der Compose-Datei
-angepasst werden. Update nach Code-Änderungen: Repo aktualisieren →
-`docker compose -f deploy/compose.compute-only.yml up -d --build`.
+angepasst werden.
+
+**Update nach Code-Änderungen:** `bash deploy/compute-agent-update.sh`
+— das Skript holt neue Commits und baut das Agent-Image nur neu, wenn
+sich `compute_agent/` tatsächlich geändert hat (Backend-Updates bleiben
+wirkungslos). Der Agent meldet seine Version (Content-Hash des
+Agent-Quellcodes) über `/health`; die Engine-UI (Admin-Konsole,
+Kurs-Settings, Task-Editor) zeigt pro Engine einen grünen
+Versions-Badge, solange der Agent aktuell ist, sonst eine gelbe
+„veraltet“-Warnung.
 
 Der Agent bindet auf `127.0.0.1:8700` — das ist das Ziel des
 SSH-Tunnels in 4.2.

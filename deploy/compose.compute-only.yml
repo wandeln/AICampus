@@ -7,11 +7,16 @@
 #   1. Docker installieren (bei GPU: + nvidia-container-toolkit +
 #      nvidia-ctk runtime configure; GPU-Checkboxen in der Engine-UI:
 #      zusätzlich GPU-Overlay compose.compute-only.gpu.yml)
-#   2. Repo hinbekommen (git clone / rsync)
+#   2. Repo per Git holen (sparse, nur compute_agent/ + deploy/):
+#      git clone --filter=blob:none --no-checkout <repo>
+#      cd AICampus && git sparse-checkout set compute_agent deploy && git checkout main
+#      (Details: docs/installation.md §4.1)
 #   3. deploy/.env anlegen:     AGENT_KEY=<Key, == COMPUTE_AGENT_KEY in
 #                               AICampus bzw. Key aus der Engine-Registry>
 #      (chmod 600 deploy/.env)
 #   4. Starten (vom Repo-Root): docker compose -f deploy/compose.compute-only.yml up -d --build
+#      Update: bash deploy/compute-agent-update.sh (baut nur neu, wenn
+#      sich compute_agent/ geändert hat)
 #
 #   (Workspace-Images: NICHT vorher bauen — sie werden per Image-Spec-
 #    Installation in der AICampus-UI auf der Engine angelegt,

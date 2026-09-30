@@ -60,6 +60,7 @@ import tarfile
 import tempfile
 import threading
 import time
+import zlib
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -534,20 +535,31 @@ def build_package(task: Task, kind: str,
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 dst.write_bytes(v["disk"].read_bytes())
         elif submission is not None and submission.workspace_snapshot:
-            workspace_service.extract_snapshot(
-                submission.workspace_snapshot, top / "workspace")
-            # 🔒-Dateien stecken nicht zuverlässig im Snapshot (ro-Mounts)
-            # → aus der Task-Disk nachliefern, sofern sie fehlen (Standard-
-            # verhalten für alle ro-Dateien, nicht nur die System-Skripte).
-            for rel, v in ((p, v) for p, v in public.items()
+            try:
+                workspace_service.extract_snapshot(
+                    submission.workspace_snapshot, top / "workspace")
+            except (ValueError, tarfile.TarError, OSError,
+                    EOFError, zlib.error):
+                # z. B. alte, still abgeschnittene Snapshots — klarer
+                # Fehler statt 500 (Endpunkt wandelt ValueError in 400 um).
+                raise ValueError(
+                    "Paket nicht möglich: Der Snapshot der Einreichung ist "
+                    "beschädigt oder unvollständig.")
+            # 🔒-Bind-Mount-Inhalte (z. B. Datasets aus .init.sh) stecken
+            # in älteren Snapshots (tar liest durch die Mounts) → wie im
+            # Live-Zweig entfernen, damit nicht das ganze Dataset mit
+            # heruntergeladen wird; neue Snapshots enthalten sie gar nicht.
+            for p in fmap["hid_paths"] + fmap["ro_paths"]:
+                _remove_path(top / "workspace" / p)
+            # 🔒-Dateien aus der Task-Disk nachliefern (mit 🔒-Cap), sofern
+            # sie fehlen — Standard-Verhalten für alle ro-Dateien, nicht
+            # nur die System-Skripte.
+            for rel, v in ((p, v) for p, v in _ro_capped_write().items()
                            if p in ro_files):
                 dst = top / "workspace" / rel
                 if not dst.is_file():
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     dst.write_bytes(v["disk"].read_bytes())
-            # Defensive: 👤-Pfade gehören NIE in einen workspace/
-            for p in fmap["hid_paths"]:
-                _remove_path(top / "workspace" / p)
         else:
             for rel, v in _ro_capped_write().items():
                 dst = top / "workspace" / rel
