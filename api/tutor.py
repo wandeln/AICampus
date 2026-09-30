@@ -10,6 +10,7 @@ import json
 import logging
 import mimetypes
 import re
+import shutil
 import threading
 import time
 from datetime import datetime, timezone
@@ -34,6 +35,8 @@ from database.models import (
     Task,
     TaskType,
     TaskWorkspaceFile,
+    TaskWorkspaceFolder,
+    TaskWorkspaceOrder,
     User,
     UserCourse,
     WorkspaceRun,
@@ -62,6 +65,7 @@ from services.workspace_service import (
     file_disk_path,
     task_has_init,
     task_init_hash,
+    task_workspace_dir,
     test_run_key,
     workspace_service,
 )
@@ -591,6 +595,42 @@ async def delete_task(
     return {"message": "Aufgabe '" + task.title + "' gelöscht."}
 
 
+def _copy_workspace_content(session: Session, src: Task, dst: Task) -> None:
+    """Workspace-Inhalt der Aufgabe (Disk-Dateien + DB-Rows) auf die Kopie
+    übertragen.
+
+    NICHT kopiert: ``workspace_assets_status`` (Per-Agenten-Buildstatus —
+    die Kopie bekommt ihren eigenen Asset-Sync + Init-Build über
+    ``_schedule_workspace_sync``) und ``WorkspaceRun`` (Lauf-Historie).
+    """
+    src_dir = task_workspace_dir(src.id)
+    if src_dir.is_dir():
+        shutil.copytree(src_dir, task_workspace_dir(dst.id))
+
+    for f in session.exec(
+        select(TaskWorkspaceFile).where(TaskWorkspaceFile.task_id == src.id)
+    ).all():
+        session.add(TaskWorkspaceFile(
+            task_id=dst.id,
+            path=f.path,
+            size=f.size,
+            checksum=f.checksum,
+            access=f.access,
+            is_binary=f.is_binary,
+            sort_order=f.sort_order,
+        ))
+    for fo in session.exec(
+        select(TaskWorkspaceFolder).where(TaskWorkspaceFolder.task_id == src.id)
+    ).all():
+        session.add(TaskWorkspaceFolder(
+            task_id=dst.id, path=fo.path, access=fo.access))
+    for o in session.exec(
+        select(TaskWorkspaceOrder).where(TaskWorkspaceOrder.task_id == src.id)
+    ).all():
+        session.add(TaskWorkspaceOrder(
+            task_id=dst.id, path=o.path, sort_order=o.sort_order))
+
+
 @router.post("/tasks/{task_id}/duplicate")
 async def duplicate_task(
     task_id: int,
@@ -602,6 +642,8 @@ async def duplicate_task(
 
     Kopiert alle Daten der Aufgabe (ohne Einreichungen, Feedback und Hints)
     und fügt die Kopie direkt hinter dem Original ein.
+    Workspace-Aufgaben: zusätzlich Einstellungen, Dateien und Zugriffsklassen;
+    Asset-Sync + Init-Build laufen im Hintergrund für die Kopie.
     """
     task = session.get(Task, task_id)
     if not task:
@@ -644,12 +686,33 @@ async def duplicate_task(
         test_code=task.test_code,
         is_visible=task.is_visible,
         hints_enabled=task.hints_enabled,
+        # Workspace-Einstellungen (für Text/Code-Tasks irrelevant)
+        workspace_timeout=task.workspace_timeout,
+        workspace_cpu=task.workspace_cpu,
+        workspace_memory=task.workspace_memory,
+        workspace_disk_quota=task.workspace_disk_quota,
+        workspace_internet=task.workspace_internet,
+        workspace_main_file=task.workspace_main_file,
+        workspace_engines=task.workspace_engines,
+        workspace_image=task.workspace_image,
         display_order=task.display_order + 1,
     )
     session.add(new_task)
+    session.flush()  # ID für den Workspace-Dateipfad; Fehler → Rollback
+
+    if task.task_type.value == "workspace":
+        try:
+            _copy_workspace_content(session, task, new_task)
+        except Exception:
+            shutil.rmtree(task_workspace_dir(new_task.id), ignore_errors=True)
+            raise
+
     session.commit()
     session.refresh(new_task)
     sync_media_usages(session, task.course_id)
+
+    if task.task_type.value == "workspace":
+        _schedule_workspace_sync(new_task.id)
 
     return {
         "message": f"Aufgabe '{new_task.title}' dupliziert.",
