@@ -16,10 +16,11 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlmodel import Session, func, select
+from sqlmodel import Session, delete, func, select
 
 from database.base import get_session
 from database.models import (
+    ContentVersion,
     CourseMaterial,
     CourseRole,
     GlobalUserRole,
@@ -248,6 +249,14 @@ async def delete_material(
     material = _get_material(session, course_id, material_id)
     label = LABELS[material.material_type]
     title = material.title
+
+    # Slide-Decks: Versions-History mit löschen (Skripte nutzen Kapitel, nicht Material)
+    if material.material_type == MaterialType.SLIDES:
+        session.exec(
+            delete(ContentVersion)
+            .where(ContentVersion.entity_type == "slide_deck")
+            .where(ContentVersion.entity_id == material_id)
+        )
 
     session.delete(material)
     session.commit()

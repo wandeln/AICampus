@@ -14,10 +14,11 @@ from datetime import datetime, timezone
 from typing import Optional, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from database.base import get_session
 from database.models import (
+    ContentVersion,
     Course,
     CourseReference,
     CourseRole,
@@ -899,6 +900,13 @@ async def delete_section(
     ).all():
         q.section_id = None
         session.add(q)
+
+    # Versions-History des Kapitels mit löschen
+    session.exec(
+        delete(ContentVersion)
+        .where(ContentVersion.entity_type == "script_section")
+        .where(ContentVersion.entity_id == section_id)
+    )
 
     session.delete(section)
     session.commit()

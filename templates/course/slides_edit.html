@@ -50,15 +50,13 @@
   <div class="flex items-start justify-between gap-4 mb-4 flex-wrap">
     <div class="min-w-0">
       <div class="flex items-center gap-2 mb-1.5 flex-wrap">
-        <button type="button" onclick="cancelEdit()"
-                class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium transition">
-          Abbrechen
-        </button>
         {% if is_tutor or is_admin %}
-        <button type="button" onclick="saveMaterial()"
+        <button type="button" onclick="finishEdit()"
                 class="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition">
-          💾 Speichern
+          ✅ Fertig
         </button>
+        {# Autosave + Versions-History: window.AV (course/base.html) befüllt den Slot #}
+        <span id="av-slides-slot" class="inline-flex items-center gap-2"></span>
         {% endif %}
       </div>
       <h2 class="text-xl font-bold text-gray-800">{{ material.title }}</h2>
@@ -350,6 +348,9 @@
       loadedTitle = titleInput.value;
       loadedContent = contentGet();
       loadedSummary = summaryInput.value;
+      // Die initiale Ladung (setValue/setInitialContent feuern Change-Events)
+      // ist keine Änderung → Baseline auf den geladenen Stand setzen.
+      av.setBaseline(avPayload());
       renderPreview(contentGet());
     } catch (e) {
       previewEmptyEl.textContent = "Fehler beim Laden des Inhalts.";
@@ -675,6 +676,9 @@
         contentSet(data.content);
         renderPreview(data.content);
       }
+      // LLM-Änderungen sind ebenfalls Änderungen → Auto-Save-Trigger
+      // (Titel-Set ohne input-Event hiermit zusätzlich abdecken)
+      av.onChange();
       // Leere Felder im Response = LLM hat das Feld nicht geändert
       const changed = [], unchanged = [];
       (data.title ? changed : unchanged).push("Titel");
@@ -682,7 +686,7 @@
       let msg = "LLM-Deck generiert";
       if (data.edits_applied > 0) msg += ` (${data.edits_applied} lokale Änderung${data.edits_applied > 1 ? "en" : ""} angewendet)`;
       if (unchanged.length) msg += ` — ${unchanged.join(" & ")} unverändert gelassen`;
-      showToast(msg + " — bitte prüfen und speichern.", "success");
+      showToast(msg + " — bitte prüfen (wird automatisch gespeichert).", "success");
     } catch (err) {
       showToast(err.message, "error");
     } finally {
@@ -828,6 +832,42 @@
   } else {
     textarea.addEventListener("input", schedulePreview); // Live-Preview beim Tippen
   }
+
+  // Autosave + Versions-History (generisches Modul aus course/base.html).
+  // Das Deck existiert immer bereits (Neu-Anlage läuft vorher) → entityId ist
+  // gesetzt; pro Bearbeitungs-Session entsteht eine Version, die durch die
+  // Auto-Saves live geupdatet wird. „Fertig“ (finishEdit) flusht und verlässt
+  // die Seite — Abbrechen/Speichern gibt es damit nicht mehr.
+  const avPayload = () => ({
+    title: titleInput.value,
+    content: contentGet(),
+    summary: summaryInput.value,
+  });
+  const av = AV.create({
+    entityType: "slide_deck",
+    entityId: material.id,
+    getPayload: avPayload,
+    applyPayload: (p) => {
+      titleInput.value = p.title || "";
+      contentSet(p.content || "");
+      summaryInput.value = p.summary || "";
+    },
+    hostEl: document.getElementById("av-slides-slot"),
+  });
+  // Auto-Save-Trigger neben der Live-Preview:
+  if (cmContent) cmContent.on("change", () => av.onChange());
+  else textarea.addEventListener("input", () => av.onChange());
+  titleInput.addEventListener("input", () => av.onChange());
+  summaryInput.addEventListener("input", () => av.onChange());
+
+  window.finishEdit = async function () {
+    const res = await av.finish();
+    if (!res.ok) {
+      showToast("Das letzte Auto-Save ist noch nicht abgeschlossen – bitte kurz warten.", "warning");
+      return;
+    }
+    window.location.href = `/courses/${courseId}/slides`;
+  };
 
   loadContent();
 

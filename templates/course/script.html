@@ -251,7 +251,8 @@
       refreshCourseRefMap();
       sqBuildToc();
 
-      // Karte mit Fade-Out entfernen
+      // Autosave-Controller aufräumen (Panel + Listener), dann Fade-Out
+      if (card._av) { card._av.destroy(); card._av = null; }
       card.style.opacity = '0';
       card.style.transition = 'opacity 0.3s';
       setTimeout(() => card.remove(), 300);
@@ -332,20 +333,20 @@
       </div>`;
   }
 
-  // Edit-Modus: Toolbar-Buttons werden zu Speichern / Abbrechen
+  // Edit-Modus: Autosave läuft automatisch; „Fertig“ beendet den Edit-Modus.
+  // .av-slot wird vom Autosave/Versions-Modul (window.AV) befüllt.
   function sqSetEditToolbar(card) {
     const toolbar = card.querySelector('.sq-toolbar');
     if (!toolbar) return;
     const visible = !!card._visible;
-    // Speichern/Abbrechen links; Auge + Bin bleiben immer rechts
+    // Fertig + Versions-History links; Auge + Bin bleiben immer rechts
     toolbar.innerHTML =
-      '<button type="button" class="sq-save-btn bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition">💾 Speichern</button>' +
-      '<button type="button" class="sq-cancel-btn bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium transition">Abbrechen</button>' +
+      '<button type="button" class="sq-finish-btn bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition">✅ Fertig</button>' +
+      '<span class="av-slot inline-flex items-center gap-2"></span>' +
       '<span class="flex-1"></span>' +
       '<button type="button" class="sq-vis-btn p-1.5 rounded hover:bg-gray-100 transition ' + (visible ? 'text-gray-400 hover:text-blue-600' : 'text-gray-300') + '" title="' + (visible ? 'Kapitel verstecken' : 'Kapitel freischalten') + '">' + sqEyeIcon(visible) + '</button>' +
       '<button type="button" class="sq-del-btn text-red-500 hover:text-red-700 transition p-1.5 rounded hover:bg-red-50 text-sm" title="Kapitel löschen">🗑️</button>';
-    toolbar.querySelector('.sq-save-btn').addEventListener('click', () => sqSaveSection(card));
-    toolbar.querySelector('.sq-cancel-btn').addEventListener('click', () => sqExitEditMode(card));
+    toolbar.querySelector('.sq-finish-btn').addEventListener('click', () => sqFinishEdit(card));
     toolbar.querySelector('.sq-vis-btn').addEventListener('click', () => sqToggleVisibility(card));
     toolbar.querySelector('.sq-del-btn').addEventListener('click', () => sqDeleteSection(card));
   }
@@ -397,11 +398,13 @@
           sectionId: parseInt(sectionId),
           bibliography: true, // Ganzes Kapitel → „Quellen“-Liste in der Preview
           onPreviewRender: () => sqApplyMarks(), // Fragen-Markierungen auch in der Preview
+          onValueChange: () => { if (card._av) card._av.onChange(); },
         });
         const summaryEditor = createMarkdownEditor('sqe-summary-' + key, {
           buttonAnchor: 'sqe-summary-anchor-' + key,
           textareaId: 'sqe-summary-ta-' + key,
           startInPreview: true,
+          onValueChange: () => { if (card._av) card._av.onChange(); },
         });
         card._edit = {
           sectionId: parseInt(sectionId),
@@ -423,9 +426,33 @@
           aiBarTimer: null,
         };
         card._edit.titleInput.value = card.getAttribute('data-section-title') || '';
+        card._edit.titleInput.addEventListener('input', () => { if (card._av) card._av.onChange(); });
         card._edit.aiBtn.addEventListener('click', () => sqAiGenerate(card));
         md.classList.add('hidden');
         sqSetEditToolbar(card);
+        // Autosave + Versions-History: Baseline = gerade geladener Stand
+        card._av = AV.create({
+          entityType: 'script_section',
+          entityId: parseInt(sectionId),
+          getPayload: () => ({
+            title: card._edit.titleInput.value,
+            content: mdEditorVal(card._edit.contentEditor, card._edit.contentTa),
+            summary: mdEditorVal(card._edit.summaryEditor, card._edit.summaryTa),
+          }),
+          applyPayload: (p) => {
+            card._edit.titleInput.value = p.title || '';
+            mdEditorSet(card._edit.contentEditor, card._edit.contentTa, p.content || '');
+            mdEditorSet(card._edit.summaryEditor, card._edit.summaryTa, p.summary || '');
+          },
+          onRestored: () => {
+            // Titel/Inhalt können sich geändert haben → Refmap, Caption, TOC
+            refreshCourseRefMap();
+            const t = card.querySelector('.sq-title');
+            if (t) t.innerHTML = renderCaptionMath(card._edit.titleInput.value);
+            sqBuildToc();
+          },
+          hostEl: card.querySelector('.sq-toolbar .av-slot'),
+        });
       })
       .catch(() => {
         form.remove();
@@ -437,6 +464,7 @@
   function sqExitEditMode(card) {
     const edit = card._edit;
     if (!edit) return;
+    if (card._av) { card._av.destroy(); card._av = null; }
     card._edit = null;
     if (edit.form && edit.form.parentNode) edit.form.remove();
     const md = card.querySelector('.script-chapter-body .markdown-preview');
@@ -444,67 +472,63 @@
     sqSetNormalToolbar(card);
   }
 
-  async function sqSaveSection(card) {
+  // „Fertig“: letztes Auto-Save-Flush auslösen und den Edit-Modus beenden.
+  // Das Speichern selbst läuft über AV (Element + Versions-History).
+  async function sqFinishEdit(card) {
     const edit = card._edit;
-    if (!edit || !edit.titleInput) return;
-    const title = edit.titleInput.value.trim();
-    if (!title) {
-      showToast('Titel darf nicht leer sein.', 'error');
+    if (!edit || !card._av) return;
+    const finishBtn = card.querySelector('.sq-finish-btn');
+    if (finishBtn) finishBtn.disabled = true;
+    let res;
+    try {
+      res = await card._av.finish();
+    } catch (err) {
+      showToast(err.message || 'Fehler beim Speichern.', 'error');
+      if (finishBtn) finishBtn.disabled = false;
       return;
     }
-    const saveBtn = card.querySelector('.sq-save-btn');
-    if (saveBtn) saveBtn.disabled = true;
     const isNew = card.hasAttribute('data-new');
-    const payload = {
-      title,
-      content: mdEditorVal(edit.contentEditor, edit.contentTa),
-      summary: mdEditorVal(edit.summaryEditor, edit.summaryTa),
-      is_visible: !!card._visible,
-    };
-    const url = isNew
-      ? `/api/courses/${courseId}/script-sections`
-      : `/api/script-sections/${edit.sectionId}`;
-    try {
-      const res = await fetch(url, {
-        method: isNew ? 'POST' : 'PUT',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || 'Fehler beim Speichern.');
-      showToast(data.message || (isNew ? 'Kapitel erstellt.' : 'Kapitel gespeichert.'), 'success');
-      if (isNew) {
-        location.reload(); // Reihenfolge/IDs neu laden
+    if (isNew) {
+      if (res.id == null) {
+        // Kein Titel eingegeben → nichts gespeichert; Karte verwerfen
+        // (mit Hinweis, wenn bereits Inhalt tippt wurde).
+        const content = mdEditorVal(edit.contentEditor, edit.contentTa) || '';
+        if (!content.trim() || confirm('Kein Titel eingegeben – das Kapitel bleibt ungespeichert. Verwerfen?')) {
+          if (card._av) { card._av.destroy(); card._av = null; }
+          card.remove();
+        }
         return;
       }
-      // Nummern/TOC haben sich ggf. geändert → Refmap neu laden (wird vom
-      // Re-Rendering und vom TOC-Aufbau verwendet)
-      refreshCourseRefMap();
-      // Frischen Inhalt + Titel laden und neu rendern
-      try {
-        const r = await fetch(`/api/script-sections/${edit.sectionId}`, { credentials: 'same-origin' });
-        if (r.ok) {
-          const fresh = await r.json();
-          const md = card.querySelector('.script-chapter-body .markdown-preview');
-          if (md) {
-            await renderMarkdown(fresh.content || '', md, { sectionId: edit.sectionId, bibliography: true });
-            md.setAttribute('data-loaded', '1');
-          }
-          card.setAttribute('data-section-title', fresh.title);
-          const t = card.querySelector('.sq-title');
-          if (t) t.innerHTML = renderCaptionMath(fresh.title);
-          sqSetCardVisibility(card, fresh.is_visible);
-        }
-      } catch (e) { /* nicht kritisch — die Änderungen sind gespeichert */ }
-      sqExitEditMode(card);
-      const md = card.querySelector('.script-chapter-body .markdown-preview');
-      if (md) sqApplyMarksToSection(md, edit.sectionId);
-      sqBuildToc(); // TOC + Kapitel-Nummern mit der neuen Refmap aktualisieren
-    } catch (err) {
-      showToast(err.message, 'error');
-      if (saveBtn) saveBtn.disabled = false;
+      location.reload(); // Reihenfolge/IDs neu laden
+      return;
     }
+    if (!res.ok) {
+      showToast('Das letzte Auto-Save ist noch nicht abgeschlossen – bitte kurz warten.', 'warning');
+      return;
+    }
+    // Nummern/TOC haben sich ggf. geändert → Refmap neu laden (wird vom
+    // Re-Rendering und vom TOC-Aufbau verwendet)
+    refreshCourseRefMap();
+    // Frischen Inhalt + Titel laden und neu rendern
+    try {
+      const r = await fetch(`/api/script-sections/${edit.sectionId}`, { credentials: 'same-origin' });
+      if (r.ok) {
+        const fresh = await r.json();
+        const md = card.querySelector('.script-chapter-body .markdown-preview');
+        if (md) {
+          await renderMarkdown(fresh.content || '', md, { sectionId: edit.sectionId, bibliography: true });
+          md.setAttribute('data-loaded', '1');
+        }
+        card.setAttribute('data-section-title', fresh.title);
+        const t = card.querySelector('.sq-title');
+        if (t) t.innerHTML = renderCaptionMath(fresh.title);
+        sqSetCardVisibility(card, fresh.is_visible);
+      }
+    } catch (e) { /* nicht kritisch — die Änderungen sind gespeichert */ }
+    sqExitEditMode(card);
+    const md = card.querySelector('.script-chapter-body .markdown-preview');
+    if (md) sqApplyMarksToSection(md, edit.sectionId);
+    sqBuildToc(); // TOC + Kapitel-Nummern mit der neuen Refmap aktualisieren
   }
 
   // LLM-Generierung (gleicher Endpoint wie die Edit-Seite)
@@ -571,6 +595,9 @@
           if (!edit.summaryEditor.isPreview()) edit.summaryEditor.toggleBtn.click();
         })();
       }
+      // LLM-Änderungen sind ebenfalls Änderungen → Auto-Save-Trigger
+      // (Titel-Set ohne input-Event hiermit zusätzlich abdecken)
+      if (card._av) card._av.onChange();
       // Leere Felder im Response = LLM hat das Feld nicht geändert
       const changed = [], unchanged = [];
       if (generateFields.title) (data.title ? changed : unchanged).push('Titel');
@@ -582,7 +609,7 @@
       if (edit.sectionId !== null && unchanged.length) {
         msg += ` — ${unchanged.join(' & ')} unverändert gelassen`;
       }
-      showToast(msg + ' — bitte prüfen und speichern.', 'success');
+      showToast(msg + ' — bitte prüfen (wird automatisch gespeichert).', 'success');
       if (Array.isArray(data.warnings) && data.warnings.length) {
         showToast('⚠️ ' + data.warnings.join(' '), 'warning');
       }
@@ -640,11 +667,13 @@
       startInPreview: true,
       bibliography: true, // Ganzes Kapitel → „Quellen“-Liste in der Preview
       onPreviewRender: () => sqApplyMarks(), // Fragen-Markierungen auch in der Preview
+      onValueChange: () => { if (card._av) card._av.onChange(); },
     });
     const summaryEditor = createMarkdownEditor('sqe-summary-' + key, {
       buttonAnchor: 'sqe-summary-anchor-' + key,
       textareaId: 'sqe-summary-ta-' + key,
       startInPreview: true,
+      onValueChange: () => { if (card._av) card._av.onChange(); },
     });
     card._edit = {
       sectionId: null,
@@ -666,20 +695,63 @@
       aiBarTimer: null,
     };
     card._edit.aiBtn.addEventListener('click', () => sqAiGenerate(card));
+    card._edit.titleInput.addEventListener('input', () => { if (card._av) card._av.onChange(); });
 
-    // Toolbar: Speichern/Abbrechen links + Auge (Sichtbarkeit) rechts —
+    // Toolbar: „Fertig“ + Versions-History links + Auge (Sichtbarkeit) rechts —
     // konsistent zum Edit-Modus bestehender Kapitel
     toolbar.innerHTML =
-      '<button type="button" class="sq-save-btn bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition">💾 Speichern</button>' +
-      '<button type="button" class="sq-cancel-btn bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium transition">Abbrechen</button>' +
+      '<button type="button" class="sq-finish-btn bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition">✅ Fertig</button>' +
+      '<span class="av-slot inline-flex items-center gap-2"></span>' +
       '<span class="flex-1"></span>' +
       '<button type="button" class="sq-vis-btn p-1.5 rounded hover:bg-gray-100 transition text-gray-300" title="Kapitel für Studenten sichtbar machen">' + sqEyeIcon(false) + '</button>';
     toolbar.querySelector('.sq-vis-btn').addEventListener('click', () => {
       // Neukapitel ist noch nicht in der DB → nur lokalen Zustand umschalten
       sqSetCardVisibility(card, !card._visible);
     });
-    toolbar.querySelector('.sq-save-btn').addEventListener('click', () => sqSaveSection(card));
-    toolbar.querySelector('.sq-cancel-btn').addEventListener('click', () => card.remove());
+    toolbar.querySelector('.sq-finish-btn').addEventListener('click', () => sqFinishEdit(card));
+
+    // Autosave + Versions-History: Das Kapitel wird beim ersten Speichern
+    // (d. h. sobald ein Titel da ist) per createEntity in der DB angelegt.
+    card._av = AV.create({
+      entityType: 'script_section',
+      entityId: null,
+      createEntity: async (p) => {
+        const r = await fetch(`/api/courses/${courseId}/script-sections`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: p.title.trim(),
+            content: p.content,
+            summary: p.summary,
+            is_visible: !!card._visible,
+          }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.detail || 'Fehler beim Erstellen des Kapitels.');
+        return data.section || data;
+      },
+      getPayload: () => ({
+        title: card._edit.titleInput.value,
+        content: mdEditorVal(card._edit.contentEditor, card._edit.contentTa),
+        summary: mdEditorVal(card._edit.summaryEditor, card._edit.summaryTa),
+      }),
+      applyPayload: (p) => {
+        card._edit.titleInput.value = p.title || '';
+        mdEditorSet(card._edit.contentEditor, card._edit.contentTa, p.content || '');
+        mdEditorSet(card._edit.summaryEditor, card._edit.summaryTa, p.summary || '');
+      },
+      shouldSave: (p) => !!p.title.trim(), // erst mit Titel anlegen
+      onSaved: ({ created, id }) => {
+        card._edit.sectionId = id;
+        card.setAttribute('data-section-id', id);
+        if (created) {
+          const t = card.querySelector('.sq-title');
+          if (t) t.textContent = card._edit.titleInput.value.trim() || 'Neues Kapitel';
+        }
+      },
+      hostEl: toolbar.querySelector('.av-slot'),
+    });
 
     card.scrollIntoView({ behavior: 'smooth', block: 'center' });
     card._edit.titleInput.focus();

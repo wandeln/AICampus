@@ -66,7 +66,7 @@ from services.slides_service import (
     slide_count,
 )
 
-from api import admin, auth, forum, importer, image_specs, media as media_api, materials as materials_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members
+from api import admin, auth, forum, importer, image_specs, media as media_api, materials as materials_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
 
 
 def _calculate_percentile(my_score: float, other_scores: list[float]) -> int:
@@ -313,6 +313,7 @@ app.include_router(slides_api.router)
 app.include_router(script_api.router)
 app.include_router(forum.router)
 app.include_router(script_questions.router)
+app.include_router(versions_api.router)  # /api/versions/… (Versions-History + Autosave)
 app.include_router(importer.router)
 app.include_router(preview_proxy.router)  # /preview/{task}/{port}/… (same-origin)
 

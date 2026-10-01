@@ -474,6 +474,31 @@ class ScriptSection(ScriptSectionBase, table=True):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# CONTENT VERSIONS (Versions-History für bearbeitbare Elemente)
+# ═══════════════════════════════════════════════════════════════════
+# Generisch über (entity_type, entity_id), damit dieselbe History-Logik für
+# Skript-Kapitel, Slide-Decks und (später) Applets/Aufgaben wiederverwendet
+# werden kann. `snapshot` ist ein JSON-Dict mit den bearbeitbaren Feldern
+# (aktuell: {title, content, summary}); je Entity-Typ entscheidet der
+# Adapter (services/version_service.py), welche Felder auf das Element
+# angewendet werden.
+class ContentVersion(SQLModel, table=True):
+    __tablename__ = "content_versions"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    entity_type: str = Field(max_length=50, index=True)   # z.B. "script_section", "slide_deck"
+    entity_id: int = Field(index=True)
+    # Versionen-Name; leer = Default (Zeitraffer letzter Bearbeitung, updated_at)
+    name: str = Field(default="", max_length=200)
+    # Snapshot der bearbeitbaren Felder im Zeitpunkt des letzten Autosave
+    snapshot: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    created_by: int = Field(foreign_key="users.id")
+    # Anlegt = Start der Bearbeitungs-Session; updated_at = letzter Autosave
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
+# ═══════════════════════════════════════════════════════════════════
 # COURSE MEDIA (Bilder/Applets je Kurs)
 # ═══════════════════════════════════════════════════════════════════
 

@@ -24,6 +24,9 @@
     const courseId = {{ course.id }};
   </script>
 
+  <!-- Autosave + Versions-History (Skript, Slides, später Applets/Aufgaben) -->
+  <script src="{{ asset('js/autosave-versions.js') }}"></script>
+
   <!-- Course Header (Partial: wie auf den Task-Seiten) -->
   {% include "course/_course_header.html" %}
 
