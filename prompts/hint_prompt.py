@@ -62,4 +62,5 @@ WICHTIG:
 4. Sei immer ermutigend und konstruktiv
 5. Passe deine Antwort an den Kontext an: Wenn der Student schon weit ist, gib einen praezisen Hinweis. Wenn er noch am Anfang ist, stelle grundlegendere Fragen.
 6. Beruecksichtige den Hint-Verlauf: Wiederhole keine bereits gegebenen Hinweise
+7. Antworte in der Sprache der Frage des Studenten
 """

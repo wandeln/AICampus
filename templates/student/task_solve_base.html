@@ -588,10 +588,94 @@
     }
   }
 
-  // ─── Submit Solution ────────────────────────────────────────
+  // ─── Submit Solution ────────────────────────────────────────────────
   let gradingTimerInterval = null;
 
+  // Aktives Grading: { submissionId, cancelRequested, cancelling }
+  let gradingState = null;
+  let submitBtnOriginal = null;
+
+  // Submit-Button während des LLM-Gradings in "Abbrechen"-Modus umschalten
+  // (und zurück). Ein Abbruch löscht die Einreichung serverseitig, sodass
+  // sie nicht als Versuch gezählt wird.
+  function setSubmitBtnGradingMode(active) {
+    const btn = document.getElementById("submit-btn");
+    if (!btn) return;
+    if (active) {
+      if (!submitBtnOriginal) {
+        submitBtnOriginal = { html: btn.innerHTML, cls: btn.className };
+      }
+      btn.className = submitBtnOriginal.cls
+        .replace("bg-green-600", "bg-red-600")
+        .replace("hover:bg-green-700", "hover:bg-red-700");
+      btn.innerHTML = '<span>✋</span> Abbrechen (zählt nicht als Versuch)';
+    } else if (submitBtnOriginal) {
+      btn.className = submitBtnOriginal.cls;
+      btn.innerHTML = submitBtnOriginal.html;
+      submitBtnOriginal = null;
+    }
+    btn.disabled = false;
+  }
+
+  async function cancelGrading() {
+    const st = gradingState;
+    if (!st || st.cancelRequested || st.cancelling) return;
+    st.cancelling = true;
+    const btn = document.getElementById("submit-btn");
+    if (btn) btn.disabled = true;
+
+    let ok = false;
+    try {
+      const res = await fetch(`/api/student/submissions/${st.submissionId}/cancel`, {
+        method: "POST",
+        credentials: "same-origin",
+      });
+      if (res.ok) {
+        ok = true;
+      } else if (res.status === 409) {
+        ok = false; // Grading ist parallel fertig geworden
+      } else {
+        let detail = "Abbrechen fehlgeschlagen.";
+        try { detail = (await res.json()).detail || detail; } catch {}
+        st.cancelling = false;
+        if (btn) btn.disabled = false;
+        showToast(detail, "error");
+        return;
+      }
+    } catch {
+      st.cancelling = false;
+      if (btn) btn.disabled = false;
+      showToast("Abbrechen fehlgeschlagen — bitte erneut versuchen.", "error");
+      return;
+    }
+
+    if (!ok) {
+      // 409: Grading war bereits beendet → Polling zeigt das Ergebnis an.
+      st.cancelling = false;
+      showToast("Grading war bereits beendet — der Versuch zählt.", "info");
+      return;
+    }
+
+    // Erfolgreich abgebrochen → UI zurücksetzen. Das Polling bricht über
+    // cancelRequested ab, der Submit-Handler räumt gradingState auf.
+    st.cancelRequested = true;
+    if (gradingTimerInterval) {
+      clearInterval(gradingTimerInterval);
+      gradingTimerInterval = null;
+    }
+    const progressDiv = document.getElementById("grading-progress");
+    if (progressDiv) progressDiv.classList.add("hidden");
+    resetSolveTimer();
+    setSubmitBtnGradingMode(false);
+    showToast("Abgebrochen — diese Einreichung zählt nicht als Versuch.", "info");
+  }
+
   document.getElementById("submit-btn")?.addEventListener("click", async () => {
+    if (gradingState) {
+      await cancelGrading();
+      return;
+    }
+
     const btn = document.getElementById("submit-btn");
     const progressDiv = document.getElementById("grading-progress");
     const timerSpan = document.getElementById("grading-timer");
@@ -669,12 +753,21 @@
       const submissionId = submitData.submission_id;
       const attemptNumber = submitData.attempt_number;
 
+      // Grading läuft → Button wird zum Abbrechen-Button
+      gradingState = {
+        submissionId,
+        attemptNumber,
+        cancelRequested: false,
+        cancelling: false,
+      };
+      setSubmitBtnGradingMode(true);
+
       // ── Step 2: Poll for results ──
       let data = null;
       const maxPollTime = 120; // Sekunden (Timeout)
       const pollInterval = 2;  // Sekunden
 
-      while (elapsed < maxPollTime) {
+      while (elapsed < maxPollTime && !(gradingState && gradingState.cancelRequested)) {
         await new Promise(r => setTimeout(r, pollInterval * 1000));
 
         try {
@@ -692,6 +785,15 @@
         }
       }
 
+      // Abbruch: Einreichung wurde serverseitig verworfen, die UI wurde in
+      // cancelGrading() zurückgesetzt → nur noch State aufräumen.
+      const wasCancelled = !!(gradingState && gradingState.cancelRequested);
+      gradingState = null;
+      if (wasCancelled) {
+        clearInterval(gradingTimerInterval);
+        return;
+      }
+
       clearInterval(gradingTimerInterval);
       progressBar.style.width = "100%";
 
@@ -699,7 +801,7 @@
         progressDiv.classList.add("hidden");
         resetSolveTimer();
         showToast("Grading Timeout — bitte versuche es spaeter erneut.", "error");
-        btn.disabled = false;
+        setSubmitBtnGradingMode(false);
         return;
       }
 
@@ -707,7 +809,7 @@
         progressDiv.classList.add("hidden");
         resetSolveTimer();
         showToast(data.comment || data.message || "Grading-Fehler — bitte versuche es erneut.", "error");
-        btn.disabled = false;
+        setSubmitBtnGradingMode(false);
         return;
       }
 
@@ -825,13 +927,14 @@
       // Update progress bars
       updateProgressBars(data);
 
-      btn.disabled = false;
+      setSubmitBtnGradingMode(false);
 
     } catch (err) {
       clearInterval(gradingTimerInterval);
       progressDiv.classList.add("hidden");
       showToast("Fehler: " + err.message, "error");
-      btn.disabled = false;
+      gradingState = null;
+      setSubmitBtnGradingMode(false);
     }
   });
 

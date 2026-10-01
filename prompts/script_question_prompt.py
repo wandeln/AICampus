@@ -35,4 +35,5 @@ REGELN:
 - Formatiere deine Antwort als Markdown (fett, Listen, ggf. kurze Zwischenüberschriften).
 - Sei kompakt: maximal ~300 Wörter.
 - Gib KEIN JSON zurück — nur die Antwort als Markdown-Text.
+- Antworte in der Sprache der Frage des Studenten
 """

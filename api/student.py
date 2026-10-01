@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import re
+import shutil
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
@@ -19,11 +20,12 @@ from sqlmodel import Session, SQLModel, select
 from starlette.websockets import WebSocketDisconnect
 
 from compute_agent.auth import make_token
+from config import SUBMISSION_DIR
 from database.base import engine, get_session
 from database.models import (
     User, Task, Submission, Feedback, HintExchange, ScriptSection,
     TaskType, SubmissionStatus, FeedbackSource,
-    Course, UserCourse, CourseRole,
+    Course, UserCourse, CourseRole, WorkspaceRun,
 )
 from services.auth_service import decode_access_token, get_current_user
 from services.compute_client import (
@@ -49,6 +51,10 @@ grading_service = GradingService()
 sandbox_runner = SandboxedRunner()
 llm_service = LLMService()
 logger = logging.getLogger(__name__)
+
+# Aktive Grading-Jobs: submission_id → asyncio-Task. Ermöglicht den Abbruch
+# eines laufenden LLM-Gradings (POST /submissions/{id}/cancel).
+_GRADING_TASKS: dict[int, asyncio.Task] = {}
 
 
 # Helper: Extrahiere PublicTest-Klasse aus test_code-String
@@ -282,12 +288,17 @@ async def submit_solution(
     # Grading im Hintergrund starten — spawn_job haelt eine starke Referenz
     # auf den Task, damit er nicht vom GC weggeraeumt wird, waehrend die
     # Antwort generiert wird (asyncio.haelt nur Weak-References auf Tasks).
-    spawn_job(
+    grading_task = spawn_job(
         _run_grading_background(
             task_id=task.id,
             submission_id=submission.id,
             attempt_number=submission.attempt_number,
         )
+    )
+    # Fur den Abbruch registrieren (POST /submissions/{id}/cancel)
+    _GRADING_TASKS[submission.id] = grading_task
+    grading_task.add_done_callback(
+        lambda t, sid=submission.id: _GRADING_TASKS.pop(sid, None)
     )
 
     # Sofort zurueckgeben — Frontend pollt das Ergebnis
@@ -342,6 +353,70 @@ async def _run_grading_background(
                     err_session.commit()
         except Exception:
             pass  # Logging hier waere ideal, aber nicht kritisch
+
+
+# ──────────────────────────────────────────────────────────────
+# CANCEL: Laufendes Grading abbrechen (Einreichung wird verworfen)
+# ──────────────────────────────────────────────────────────────
+
+@router.post("/submissions/{submission_id}/cancel")
+async def cancel_grading(
+    submission_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """
+    Bricht ein laufendes LLM-Grading ab und loescht die Einreichung,
+    damit sie NICHT als Versuch gezaehlt wird.
+
+    Nur moeglich, waehrend der Status PENDING ist (Grading laeuft noch).
+    Danach (graded/overridden) → 409.
+    """
+    submission = session.get(Submission, submission_id)
+    if not submission:
+        raise HTTPException(404, "Einreichung nicht gefunden.")
+    if submission.student_id != user.id:
+        raise HTTPException(403, "Kein Zugriff.")
+    if submission.status != SubmissionStatus.PENDING:
+        raise HTTPException(409, "Grading ist bereits beendet — die Einreichung zählt.")
+
+    # 1) Grading-Task stoppen und (mit Zeitlimit) auf seine Beendigung
+    #    warten, damit er kein Feedback/Status mehr parallel schreibt.
+    #    shield(): Beim Timeout wird nur der Wait abgebrochen, der Task
+    #    räumt sich im Hintergrund auf (z. B. laufendes Workspace-Testskript
+    #    in einem Thread kann nicht sofort gestoppt werden).
+    grading_task = _GRADING_TASKS.pop(submission_id, None)
+    if grading_task and not grading_task.done():
+        grading_task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(grading_task), timeout=10.0)
+        except asyncio.CancelledError:
+            pass  # Task abgebrochen — genau das Ziel
+        except Exception:
+            pass  # z. B. Timeout
+
+    # 2) Status frisch laden: Eventuell hat das Grading parallel fertig
+    #    geschrieben, bevor die Cancellation wirkte.
+    session.refresh(submission)
+    if submission.status != SubmissionStatus.PENDING:
+        raise HTTPException(409, "Grading ist bereits beendet — die Einreichung zählt.")
+
+    # 3) Einreichung loeschen → wird nirgendwo mehr als Versuch gezählt.
+    for fb in list(submission.feedback_list):
+        session.delete(fb)
+    for run in session.exec(
+        select(WorkspaceRun).where(WorkspaceRun.submission_id == submission.id)
+    ).all():
+        run.submission_id = None
+    if submission.workspace_snapshot:
+        # Snapshot (data/submissions/{id}/) von der Platte räumen
+        shutil.rmtree(SUBMISSION_DIR / str(submission.id), ignore_errors=True)
+    session.delete(submission)
+    session.commit()
+
+    return {
+        "message": "Abgebrochen — diese Einreichung zählt nicht als Versuch.",
+    }
 
 
 # ──────────────────────────────────────────────────────────────

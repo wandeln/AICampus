@@ -73,7 +73,8 @@ Dateien editieren und Shell-Skripte ausführen. Jedes für Studierende SICHTBARE
 Container ausführt (bash <skript>). Es dürfen beliebig viele .sh-Skripte geben (je nach Aufgabentyp, z. B.
 run.sh, test.sh, train.sh, tensorboard.sh, marimo.sh, jupyter.sh).
 
-THEMA: {{ topic }}
+THEMA / ANWEISUNG DES TUTORS:
+{{ topic }}
 SCHWIERIGKEIT: {{ difficulty }}
 MAX. PUNKTE: {{ max_points }}
 
@@ -86,6 +87,11 @@ Schlüssel NICHT in ein gemeinsames Wrapper-Objekt. Ein Schlüssel, der NICHT
 auf der Liste steht, wird vom System IGNORIERT — produziere keine solchen
 Schlüssel. Ein Feld, das du weglässt, bleibt unverändert (bestehender Inhalt
 wird behalten).
+Die Anweisung ist entweder das THEMA für eine NEUE Aufgabe oder ein gezielter
+ÄNDERUNGSwunsch an einer BESTEHENDEN Aufgabe. Bei einem Änderungswunsch
+bearbeitest du NUR die Felder und Dateien, die die Anweisung verlangt — alle
+übrigen bestehenden Felder/Dateien NICHT in der Antwort wiederholen (Schlüssel
+weglassen), sie bleiben unverändert.
 Die Reihenfolge der Schlüsselliste ist BEDEUTUNGSVOLL: Arbeite die Felder in
 genau dieser Reihenfolge ab (Implementierung — Dateien/Ordner/Umwelt — zuerst,
 dann Lösungsskizze/Kriterien, dann Aufgabenstellung, Titel), damit spätere
@@ -109,6 +115,7 @@ mit gleichem Namen — jede Spec ist ein Dockerfile, das die Umgebung beschreibt
 - (keine Image-Spec vorhanden)
 {% endif %}
 
+{% if require_image_selection %}
 Umgebungswahl:
 - Wähle das Image (workspace_image) so, dass die Umgebung zur Aufgabe passt
   (Sprache/Pakete) — lies die Dockerfiles der Image-Specs und die
@@ -118,6 +125,10 @@ Umgebungswahl:
   `pip install` nachziehen (wird einmalig in das Task-Image gebaut).
   Größere Umgebungslücken gehören in eine passende/neue Image-Spec
   (proposed_image_spec).
+{% else %}
+Die bestehende Image-/Engine-Wahl der Aufgabe bleibt UNVERÄNDERT — liefere
+workspace_image, workspace_engines und proposed_image_spec NICHT.
+{% endif %}
 
 BEDEUTUNG DER ZULÄSSIGEN SCHLÜSSEL:
 (Beschreibung der oben unter ZULÄSSIGE FELDER aufgeführten Felder — diese
@@ -151,6 +162,9 @@ Testverhalten von test.sh/.test_private.sh).
     hauptsächlich arbeiten (z. B. "main.py").
 - "files": Liste von Objekten im Format
   { "path": …, "content": …, "access": … } — die Dateien der Aufgabe.
+  NUR Dateien anliefern, die NEU erstellt oder GEÄNDERT werden sollen —
+  bestehende Dateien, die die Anweisung nicht berührt, NICHT wiederholen
+  (bleiben unverändert).
   PRO DATEI die Zugriffs-Klasse über "access" (Weglassen = ✏️ editierbar):
   * (weggelassen oder null) → ✏️ EDITIERBAR — Studierende dürfen schreiben.
     Starter-Dateien (Wurzel, z. B. "main.py", "Makefile"): lauffähiges
@@ -259,6 +273,7 @@ Testverhalten von test.sh/.test_private.sh).
   du lieferst, sind nur Quell-/Skript-/Testdateien.
   Nur Textdateien, relative Pfade, max. ~15 Dateien. Shell-Skripte POSIX-kompatibel
   (werden per `bash <skript>` aufgerufen, Shebang optional).
+{% if require_image_selection %}
 - "workspace_image": Name EINES der obigen IMAGE-SPECS (string, PFLICHT).
   Die gewählte Spec muss zum Inhalt passen (Sprache/Pakete) und auf
   mindestens einer der gewählten Engines installiert sein.
@@ -278,6 +293,7 @@ Testverhalten von test.sh/.test_private.sh).
     && rm -rf /var/lib/apt/lists/*-Schicht
   * am Ende: WORKDIR /workspace
   * kein Name im Dockerfile selbst (der Name steht in der Objekt-Eigenschaft)
+{% endif %}
 
 {% if script_chapters %}
 
@@ -400,8 +416,8 @@ Regeln:
   WICHTIG: @fig:label / @eq:label / @code:label / @box:label / @tab:label sind KEIN Code — schreibe sie IMMER als normalen Fließtext, NIEMALS in Backticks (`...`), Code-Blöcke (``` ... ```) oder Anführungszeichen. Nur so werden sie zu klickbaren Referenzen („Abb. N“ / „Gl. N“ / „Code N“ / „Satz N“ / „Tab. N“) aufgelöst.
   Richtig: „wie in @eq:shannon gezeigt“ — Falsch: „wie in `@eq:shannon` gezeigt“
 - Verwende in Markdown $Math$-Notation und Code-Blöcke, wo es hilft.
-- Falls für ein angefordertes Feld bereits Inhalt existiert (s. o.),
-  überarbeite/verbessere ihn gezielt — gestalte die Aufgabe nicht grundlos neu.
+- Falls für ein angefordertes Feld bereits Inhalt existiert (s. o.), ändere ihn
+  NUR, wo die Anweisung es verlangt — gestalte die Aufgabe nicht grundlos neu.
 - Bei lokalen Änderungen an bestehenden DATEIEN nutze „edits“ (s. o.),
   damit der restliche Dateiinhalt garantiert unverändert bleibt.
 - Gib ausschließlich das JSON-Objekt aus — keine Code-Blöcke (```json ... ```),
