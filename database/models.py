@@ -191,7 +191,7 @@ class TaskBase(SQLModel):
     deadline: Optional[str] = Field(default=None)      # ISO-Format: "2025-02-15T23:59"
     code_template: Optional[str] = Field(default=None) # Für Code-Aufgaben
     test_code: Optional[str] = Field(default=None)     # Unit-Tests (einziger String mit PublicTest + PrivateTest)
-    is_visible: bool = Field(default=True)             # Für Studenten sichtbar
+    is_visible: bool = Field(default=False)            # Für Studenten sichtbar (Default: versteckt)
     display_order: int = Field(default=0)              # Anzeigereihenfolge im Kurs
     hints_enabled: bool = Field(default=True)          # Socratic-Hints fuer Studenten
     # Workspace-Aufgaben (task_type=workspace):
@@ -238,7 +238,7 @@ class TaskCreate(SQLModel):
     deadline: Optional[str] = Field(default=None)
     code_template: Optional[str] = Field(default=None)
     test_code: Optional[str] = Field(default=None)
-    is_visible: bool = Field(default=True)
+    is_visible: bool = Field(default=False)
     display_order: int = Field(default=0)
     hints_enabled: bool = Field(default=True)
     # Workspace-Aufgaben (s. TaskBase)
@@ -492,6 +492,10 @@ class ContentVersion(SQLModel, table=True):
     name: str = Field(default="", max_length=200)
     # Snapshot der bearbeitbaren Felder im Zeitpunkt des letzten Autosave
     snapshot: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    # Optionaler Snapshot des Workspace-Dateibaus (nur Task-Versionen mit
+    # Aufgabentyp Workspace): relativer Pfad
+    # version_snapshots/{version_id}/workspace.tar.gz (+ meta.json daneben)
+    file_snapshot: Optional[str] = Field(default=None, max_length=300)
     created_by: int = Field(foreign_key="users.id")
     # Anlegt = Start der Bearbeitungs-Session; updated_at = letzter Autosave
     created_at: datetime = Field(default_factory=datetime.now)

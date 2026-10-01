@@ -45,9 +45,34 @@
     </div>
     {% endif %}
 
-    <h1 class="text-2xl font-bold text-gray-900">
-      {% if task %}{{ task.title }} — Bearbeiten{% else %}Neue Aufgabe erstellen{% endif %}
-    </h1>
+    <div class="flex flex-col gap-3">
+      <h1 class="text-2xl font-bold text-gray-900">
+        {% if task %}{{ task.title }} — Bearbeiten{% else %}Neue Aufgabe erstellen{% endif %}
+      </h1>
+      {% if is_tutor %}
+      <div class="flex items-center gap-2 flex-wrap">
+        <button type="button" onclick="finishTask()"
+                class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+          ✅ Fertig
+        </button>
+        {# Autosave + Versions-History: window.AV (base.html) befüllt den Slot #}
+        <span id="av-task-slot" class="inline-flex items-center gap-2"></span>
+        <button type="button" id="visibility-btn"
+                class="ml-auto text-gray-400 hover:text-blue-600 transition text-lg p-1.5 rounded hover:bg-gray-100"
+                title="{% if task and task.is_visible %}Aufgabe verstecken{% else %}Aufgabe freischalten{% endif %}">
+          {% if task and task.is_visible %}
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+          {% else %}
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+          {% endif %}
+        </button>
+        <a id="student-view-link" href="/courses/{{ course.id }}/tasks/{{ task.id if task else '' }}?as_student=1"
+           class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm font-medium flex items-center gap-2">
+          👁️&#x200B; Student-View
+        </a>
+      </div>
+      {% endif %}
+    </div>
   </div>
 
   <form id="task-form" class="space-y-6" onsubmit="return false;">
@@ -214,31 +239,6 @@
     {# task_detail_workspace.html (Umgebung + Dateien/Workspace) #}
     {% block type_section %}{% endblock %}
 
-    <!-- ─── Actions ────────────────────────────────────────────── -->
-    <div class="flex items-center justify-between">
-      <a href="/courses/{{ course.id }}/tasks" class="text-gray-600 hover:text-gray-800 text-sm">
-        ← Zurück
-      </a>
-      <div class="flex items-center gap-3">
-        <button type="button" id="visibility-btn"
-                class="text-gray-400 hover:text-blue-600 transition text-lg p-1.5 rounded hover:bg-gray-100"
-                title="{% if task %}{{ 'Aufgabe verstecken' if task.is_visible else 'Aufgabe freischalten' }}{% else %}Aufgabe verstecken{% endif %}">
-          {% if task and not task.is_visible %}
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
-          {% else %}
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-          {% endif %}
-        </button>
-        <a id="student-view-link" href="/courses/{{ course.id }}/tasks/{{ task.id }}?as_student=1"
-           class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm font-medium flex items-center gap-2">
-          👁️&#x200B; Student-View
-        </a>
-        <button type="submit" id="save-task-btn"
-                class="bg-green-600 text-white text-sm px-6 py-2 rounded-lg hover:bg-green-700 transition font-semibold">
-          {% if task %}Aufgabe aktualisieren{% else %}Aufgabe erstellen{% endif %}
-        </button>
-      </div>
-    </div>
   </form>
 
 </div>
@@ -292,30 +292,156 @@ class PrivateTest(unittest.TestCase):
 
   // ─── Initialize Markdown Editors ─────────────────────────
   // Description editor (immer) — bibliography: Ganze Aufgabe → „Quellen“-Liste für @cite:-Zitationen
-  const descEditor = createMarkdownEditor('description-editor-container', { buttonAnchor: 'description-preview-anchor', textareaId: 'description-textarea', startInPreview: true, bibliography: true });
+  const descEditor = createMarkdownEditor('description-editor-container', { buttonAnchor: 'description-preview-anchor', textareaId: 'description-textarea', startInPreview: true, bibliography: true, onValueChange: () => av.onChange() });
   // Model solution — immer als Markdown Editor (auch bei Code-Aufgaben)
-  const solEditor = createMarkdownEditor('model-solution-editor-container', { buttonAnchor: 'solution-preview-anchor', startInPreview: true, bibliography: true });
+  const solEditor = createMarkdownEditor('model-solution-editor-container', { buttonAnchor: 'solution-preview-anchor', startInPreview: true, bibliography: true, onValueChange: () => av.onChange() });
+
+  // ─── Auto-Save + Versions-History ─────────────────────────
+  // Speichert bei jeder Änderung (debounced) die Aufgabe + pflegt pro
+  // Bearbeitungs-Session eine Version (🕓-Dropdown: wiederherstellen,
+  // umbenennen, löschen). „✅ Fertig“ (finishTask) flush + Navigation.
+  const isUpdate = {{ "true" if task and task.id else "false" }};
+  // Template-Variante dieser Seite (Typ-Wechsel per Restore → Reload,
+  // damit die passende Sektion/Dateibaum-Vorlage geladen wird).
+  const PAGE_TYPE = {{ tpl_type|tojson }};
+  const av = AV.create({
+    entityType: "task",
+    entityId: (function () {
+      const el = document.querySelector('input[name="task_id"]');
+      return el ? parseInt(el.value, 10) : null;
+    })(),
+    createEntity: async (p) => {
+      const res = await fetch(`/api/courses/${courseId}/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(p),
+        credentials: "same-origin",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Aufgabe konnte nicht angelegt werden (" + res.status + ")");
+      return data.task || data;
+    },
+    getPayload: buildTaskBody,
+    applyPayload: applyPayload,
+    // Nur Titel erforderlich — eine frisch angelegte Aufgabe hat erst mal
+    // keinen Text, das ist legitim (weitere Auto-Saves füllen sie auf).
+    shouldSave: (p) => !!(p && String(p.title || "").trim()),
+    onSaved: (info) => {
+      // Fallback: Falls die Direktanlage auf der „Neue Aufgabe“-Seite
+      // fehlgeschlagen ist, legt der erste Auto-Save die Aufgabe hier an —
+      // dann zur Task-Seite wechseln (Prev/Next, Header, Workspace-Dateibaum).
+      if (info.created) {
+        window.location.replace(`/courses/${courseId}/tasks/${info.id}`);
+      }
+    },
+    onRestored: (v) => {
+      // Typ-Wechsel durch den Restore (z. B. Workspace → Text): passende
+      // Template-Variante neu laden (Sektionen + Dateibaum aus der DB).
+      const pt = v && v.snapshot ? v.snapshot.task_type : null;
+      if (pt && pt !== PAGE_TYPE) {
+        window.location.replace(`/courses/${courseId}/tasks/${av.id}`);
+        return;
+      }
+      // Workspace wurde mit der Version mitgerettet → Dateibereich
+      // (Baum + Editor) vollständig neu laden (ungespeicherter
+      // Editor-Stand wird verworfen — er ist gegenüber dem Restore alt).
+      if (window._wsUI) window._wsUI.restoreReload();
+    },
+    hostEl: document.getElementById("av-task-slot"),
+  });
+  // Datei-Baum-Änderung (Workspace: wsUI.onChanged) → erzwungenes
+  // Auto-Save — das Task-Payload (Felder) bleibt dabei oft unverändert,
+  // aber der aktuelle Datei-Stand muss in der Version landen.
+  window._avTouch = () => { if (av && av.touch) av.touch(); };
+
+  // ─── Neu-Anlage: direkt anlegen (Default-Titel) + zur Task-Seite ──
+  // Die „Neue Aufgabe“-Seite ist nur noch eine Zwischenseite: Die Aufgabe
+  // wird sofort mit Default-Titel angelegt und das Bearbeiten findet auf
+  // /tasks/{id} statt (Prev/Next-Navigation, Workspace-Dateibaum o. ä.).
+  if (!isUpdate) {
+    (async () => {
+      try {
+        const body = buildTaskBody();
+        body.title = String(body.title || "").trim() || "Neue Aufgabe";
+        const res = await fetch(`/api/courses/${courseId}/tasks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          credentials: "same-origin",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || "HTTP " + res.status);
+        window.location.replace(`/courses/${courseId}/tasks/${(data.task || data).id}`);
+      } catch (e) {
+        // Aufgabe bleibt hier unangelegt; der erste Auto-Save (createEntity)
+        // legt sie dann an und wechselt um.
+        showToast("Aufgabe konnte nicht angelegt werden: " + (e.message || ""), "warning");
+      }
+    })();
+  }
+
+  // Feld-Änderungen → Auto-Save
+  ["title", "max_points", "max_attempts", "deadline"].forEach((n) => {
+    const el = document.querySelector(`[name="${n}"]`);
+    if (el) el.addEventListener("input", () => av.onChange());
+  });
+  const hintsChk = document.querySelector('[name="hints_enabled"]');
+  if (hintsChk) hintsChk.addEventListener("change", () => av.onChange());
+  // Workspace-Umfeld (Elemente existieren nur im Workspace-Template)
+  ["ws-env-timeout", "ws-env-cpu", "ws-env-memory", "ws-env-disk"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", () => av.onChange());
+  });
+  const wsIntChk = document.getElementById("ws-env-internet");
+  if (wsIntChk) wsIntChk.addEventListener("change", () => av.onChange());
+  ["ws-spec-select", "ws-engine-select"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", () => av.onChange());
+  });
 
   // ─── Toggle Code Section based on Task Type ─────────────────
+  // Vor der Template-Navigation (Typ-Wechsel) Auto-Save flushen — sonst
+  // lädt das neue Template den alten Typ aus der DB (und die Workspace-
+  // API würde mit „Keine Workspace-Aufgabe“ ablehnen). Das setTimeout
+  // stellt sicher, dass ein von applyPayload (Versions-Restore) dispatchtes
+  // „change“ erst wirkt, wenn das komplette Payload angewendet wurde.
+  async function flushBeforeTypeSwitch() {
+    av.onChange();
+    let res = await av.finish();
+    // Läuft noch ein Save, retryt doAutosave — bis zum Einpendeln warten.
+    let tries = 0;
+    while (!res.ok && tries++ < 20) {
+      await new Promise((r) => setTimeout(r, 500));
+      res = await av.finish();
+    }
+    return res.ok;
+  }
   document.getElementById("task_type_select").addEventListener("change", (e) => {
     const isCode = e.target.value === "code";
     const isWorkspace = e.target.value === "workspace";
 
+    const redirectWithSave = (type) => {
+      setTimeout(async () => {
+        if (!(await flushBeforeTypeSwitch())) {
+          showToast("Speichern des Typ-Wechsels fehlgeschlagen – bitte erneut versuchen.", "error");
+          return;
+        }
+        const url = new URL(location.href);
+        url.searchParams.set("task_type", type);
+        location.href = url.toString();
+      }, 0);
+    };
+
     // Code-Sektionen fehlen in diesem Template (Text-Variante)?
-    // → Navigation auf das Code-Template. (Ungespeicherte Änderungen an
-    //   den Grundfeldern gehen dabei verloren.)
+    // → Navigation auf das Code-Template.
     if (isCode && !document.getElementById("code-section")) {
-      const url = new URL(location.href);
-      url.searchParams.set("task_type", "code");
-      location.href = url.toString();
+      redirectWithSave("code");
       return;
     }
 
     // Workspace-Sektionen fehlen (Text/Code-Variante)? → Workspace-Template
     if (isWorkspace && !document.getElementById("workspace-section")) {
-      const url = new URL(location.href);
-      url.searchParams.set("task_type", "workspace");
-      location.href = url.toString();
+      redirectWithSave("workspace");
       return;
     }
 
@@ -361,6 +487,21 @@ class PrivateTest(unittest.TestCase):
       testCodeCM.save();
       testCodeCM.toTextArea();
       testCodeCM = null;
+    }
+
+    if (isWorkspace) {
+      // In-page-Wechsel (Template enthält die Workspace-Sektionen): erst
+      // speichern (die Stub-Skripte entstehen dabei serverseitig), dann den
+      // Dateibaum neu laden — sonst bliebe der leere Baum stehen.
+      flushBeforeTypeSwitch().then((ok) => {
+        if (!ok) {
+          showToast("Speichern des Typ-Wechsels fehlgeschlagen – bitte erneut versuchen.", "error");
+          return;
+        }
+        if (window._wsUI) window._wsUI.refresh();
+      });
+    } else {
+      av.onChange();
     }
   });
 
@@ -531,6 +672,10 @@ class PrivateTest(unittest.TestCase):
         populated.push(...window._workspaceAiApply(data));
       }
 
+      // LLM hat Felder befüllt → Auto-Save anstoßen (extern gesetzte
+      // Editor-Werte triggern den Change-Listener nicht zuverlässig).
+      av.onChange();
+
       progressDiv.classList.add("hidden");
       btn.disabled = false;
 
@@ -566,11 +711,10 @@ class PrivateTest(unittest.TestCase):
 
 
 
-  // ─── Task speichern ─────────────────────────────────────────
-  const isUpdate = {{ "true" if task and task.id else "false" }};
-
-  // Speichert die Aufgabe (POST/PUT). Gibt die Task-ID zurueck, null bei Fehler.
-  async function saveTask() {
+  // ─── Auto-Save: Payload aus dem Formular bauen ──────────────
+  // Wird von AV.create als getPayload genutzt (synchron, ohne Toasts —
+  // Pflichtfeld-Checks laufen über shouldSave + die Server-Validierung).
+  function buildTaskBody() {
     syncEditorsToTextareas();
 
     const form = document.getElementById("task-form");
@@ -578,13 +722,6 @@ class PrivateTest(unittest.TestCase):
 
     const description = descEditor.getValue();
     const modelSolution = solEditor.getValue();
-
-    // Pflichtfeld-Check per JS: Das "required"-Attribut liegt nicht mehr auf
-    // dem versteckten Textarea (CodeMirror), native Validierung geht nicht.
-    if (descEditor.required && !description.trim()) {
-      showToast("Aufgabenstellung ist erforderlich.", "error");
-      return null;
-    }
 
     const body = {
       title: formData.get("title"),
@@ -597,11 +734,8 @@ class PrivateTest(unittest.TestCase):
     }
 
     const maxPointsRaw = formData.get("max_points");
-    if (maxPointsRaw === null || maxPointsRaw === "" || isNaN(parseInt(maxPointsRaw))) {
-      showToast("Max. Punkte ist erforderlich.", "error");
-      return null;
-    }
-    body.max_points = parseInt(maxPointsRaw);
+    body.max_points = (maxPointsRaw === null || maxPointsRaw === "" || isNaN(parseInt(maxPointsRaw)))
+      ? 0 : parseInt(maxPointsRaw);
 
     const maxAttemptsRaw = formData.get("max_attempts");
     if (maxAttemptsRaw !== null && maxAttemptsRaw !== "") {
@@ -660,78 +794,114 @@ class PrivateTest(unittest.TestCase):
     const hintsCheckbox = document.querySelector('[name="hints_enabled"]');
     body.hints_enabled = hintsCheckbox ? hintsCheckbox.checked : true;
 
-    const btn = document.getElementById("save-task-btn");
-    btn.disabled = true;
-    btn.textContent = "⏳ Wird gespeichert...";
+    return body;
+  }
 
-    const url = isUpdate
-      ? `/api/tasks/{{ task.id }}`
-      : `/api/courses/${courseId}/tasks`;
-    const method = isUpdate ? "PUT" : "POST";
+  // ─── Auto-Save: gespeicherten Stand in die Editoren laden ───
+  // (Versions-Restore. task_type-Wechsel dispatcht "change" → Sektionen
+  //  werden umgeschaltet; bei fehlender Sektion navigiert der Handler
+  //  auf das passende Template.)
+  function applyPayload(p) {
+    const form = document.getElementById("task-form");
+    const titleInput = form.querySelector('input[name="title"]');
+    if (titleInput) titleInput.value = p.title || "";
+    const typeSel = form.querySelector('select[name="task_type"]');
+    if (typeSel && typeSel.value !== (p.task_type || "text")) {
+      typeSel.value = p.task_type || "text";
+      typeSel.dispatchEvent(new Event("change"));
+    }
+    const mp = form.querySelector('input[name="max_points"]');
+    if (mp) mp.value = p.max_points != null ? p.max_points : 10;
+    const ma = form.querySelector('input[name="max_attempts"]');
+    if (ma) ma.value = p.max_attempts != null ? p.max_attempts : "";
+    const dl = form.querySelector('input[name="deadline"]');
+    if (dl) dl.value = p.deadline || "";
+    const hints = form.querySelector('[name="hints_enabled"]');
+    if (hints) hints.checked = p.hints_enabled != null ? !!p.hints_enabled : true;
+    setVisibilityToggle(!!p.is_visible);
 
-    try {
-      const res = await fetch(url, {
-        method: method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        credentials: "same-origin",
-      });
+    // Markdown-Editoren (Aufgabenstellung + Musterlösung)
+    const desc = p.description || "";
+    descEditor.setValue(desc);
+    (async () => {
+      await renderMarkdown(desc, descEditor.previewDiv, { preview: true, bibliography: true });
+      if (!descEditor.isPreview()) descEditor.toggleBtn.click();
+    })();
+    const sol = p.model_solution || "";
+    solEditor.setValue(sol);
+    (async () => {
+      await renderMarkdown(sol, solEditor.previewDiv, { preview: true, bibliography: true });
+      if (!solEditor.isPreview()) solEditor.toggleBtn.click();
+    })();
 
-      const data = await res.json();
-      if (!res.ok) {
-        showToast(data.detail || "Fehler beim Speichern", "error");
-        btn.disabled = false;
-        btn.textContent = isUpdate ? "Aufgabe aktualisieren" : "Aufgabe erstellen";
-        return null;
-      }
+    // Code-Vorlage & Unit-Tests (Elemente existieren nur im Code-Template)
+    const codeTa = document.getElementById("code-template-editor");
+    if (codeTa) {
+      if (codeTemplateCM) codeTemplateCM.setValue(p.code_template || "");
+      else codeTa.value = p.code_template || "";
+    }
+    const testTa = document.getElementById("test-code-editor");
+    if (testTa) {
+      if (testCodeCM) testCodeCM.setValue(p.test_code || "");
+      else testTa.value = p.test_code || "";
+    }
 
-      showToast(data.message || "Erfolgreich gespeichert!", "success");
-      return data.task.id;
-    } catch (err) {
-      showToast("Fehler: " + err.message, "error");
-      btn.disabled = false;
-      btn.textContent = isUpdate ? "Aufgabe aktualisieren" : "Aufgabe erstellen";
-      return null;
+    // Workspace-Umfeld (Hook im Workspace-Template)
+    if ((p.task_type || "text") === "workspace" && typeof window._workspaceApplyEnv === "function") {
+      window._workspaceApplyEnv(p);
     }
   }
 
-  // ─── Submit Form ────────────────────────────────────────────
-  document.getElementById("task-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const id = await saveTask();
-    if (id === null) return;
-    if (isUpdate) {
-      // Reload the page to refresh with saved data, staying on the same task
-      setTimeout(() => window.location.reload(), 800);
-    } else {
-      // Redirect to the new task's page after creating it
-      setTimeout(() => window.location.href = `/courses/${courseId}/tasks/${id}`, 800);
-    }
-  });
+  // ─── Visibility-Toggle (Header) ─────────────────────────────
+  const EYE_ON = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+  const EYE_OFF = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
+  function setVisibilityToggle(visible) {
+    const btn = document.getElementById("visibility-btn");
+    if (!btn) return;
+    btn.innerHTML = visible ? EYE_ON : EYE_OFF;
+    btn.title = visible ? 'Aufgabe verstecken' : 'Aufgabe freischalten';
+  }
 
-  // ─── Student View: zuerst speichern, dann anzeigen ──────────
+  // ─── Fertig: Auto-Save abschließen + navigieren ─────────────
+  window.finishTask = async function () {
+    const res = await av.finish();
+    if (!res.id) {
+      // Noch nie gespeichert (z. B. nur Titel ohne Aufgabenstellung)
+      if (confirm("Die Aufgabe wurde noch nicht gespeichert. Verwerfen und zur Aufgabensammlung zurückkehren?")) {
+        window.location.href = `/courses/${courseId}/tasks`;
+      }
+      return;
+    }
+    if (!res.ok) {
+      showToast("Das letzte Auto-Save ist noch nicht abgeschlossen – bitte kurz warten.", "warning");
+      return;
+    }
+    // Neue Aufgabe → auf die Detail-Seite (Reload mit Task-ID aktiviert
+    // u. a. den Workspace-Dateibaum); bestehende → zur Übersicht.
+    window.location.href = isUpdate
+      ? `/courses/${courseId}/tasks`
+      : `/courses/${courseId}/tasks/${res.id}`;
+  };
+
+  // ─── Student View: erst Auto-Save abschließen, dann anzeigen ─
   const studentViewLink = document.getElementById("student-view-link");
   if (studentViewLink) {
     studentViewLink.addEventListener("click", async (e) => {
       e.preventDefault();
-      const id = await saveTask();
-      if (id === null) return;
-      setTimeout(() => {
-        window.location.href = `/courses/${courseId}/tasks/${id}?as_student=1`;
-      }, 800);
+      const res = await av.finish();
+      if (!res.id || !res.ok) {
+        showToast("Bitte zuerst die Aufgabe speichern, um die Student-View zu öffnen (Auto-Save läuft noch).", "warning");
+        return;
+      }
+      window.location.href = `/courses/${courseId}/tasks/${res.id}?as_student=1`;
     });
   }
 
-  // ─── Visibility Button Toggle ─────────────────────────────
+  // ─── Visibility Button Toggle (Header) ────────────────────
   document.getElementById("visibility-btn").addEventListener("click", function() {
-    const btn = this;
-    const isCurrentlyVisible = !btn.title.includes('freischalten');
-    const isNowVisible = !isCurrentlyVisible;
-    const icon = isNowVisible
-      ? '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>'
-      : '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
-    btn.innerHTML = icon;
-    btn.title = isNowVisible ? 'Aufgabe verstecken' : 'Aufgabe freischalten';
+    const isCurrentlyVisible = !this.title.includes('freischalten');
+    setVisibilityToggle(!isCurrentlyVisible);
+    av.onChange();
   });
 </script>
 {% endblock %}

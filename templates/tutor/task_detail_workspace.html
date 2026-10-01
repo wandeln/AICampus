@@ -32,8 +32,8 @@
           <select id="ws-spec-select" class="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white">
             <option value="">— noch nicht gesetzt —</option>
           </select>
-          {% if task and task.task_type == 'workspace' and not task.workspace_image %}
-          <p class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">⚠️ Noch kein Image (Image-Spec) gesetzt — die Aufgabe ist für Studierende erst nach der Auswahl startbar.</p>
+          {% if (task is none and tpl_type == 'workspace') or (task is not none and task.task_type == 'workspace' and not task.workspace_image) %}
+          <p id="ws-image-missing" class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">⚠️ Noch kein Image (Image-Spec) gesetzt — die Aufgabe ist für Studierende erst nach der Auswahl startbar.</p>
           {% endif %}
           <details id="ws-spec-info" class="hidden mt-1 border border-gray-200 rounded-lg bg-white overflow-hidden">
             <summary class="flex items-center gap-1.5 cursor-pointer select-none px-2 py-1 bg-gray-50 text-[11px] text-gray-600 hover:bg-gray-100">
@@ -49,6 +49,9 @@
             <option value="">— Engine wählen (Pflicht) —</option>
           </select>
           <p id="ws-engine-hint" class="text-[11px] text-gray-400 mt-1">Engine-Pool der Aufgabe — Volumes sind an die Engine gebunden.</p>
+          {% if (task is none and tpl_type == 'workspace') or (task is not none and task.task_type == 'workspace' and not task.workspace_engines) %}
+          <p id="ws-engine-missing" class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">⚠️ Noch keine Compute-Engine zugewiesen — die Aufgabe ist für Studierende erst nach der Auswahl startbar.</p>
+          {% endif %}
         </div>
       </div>
 
@@ -280,6 +283,11 @@
   let WS_ENGINES = [];  // [{name, healthy, gpu, gpu_info, scope, …}]
   let WS_INSTALLED = null; // Set(Engine-Namen) mit gewählter Spec installiert; null = kein Filter
   let wsEngineRefreshP = Promise.resolve();
+  // Versions-Restore: aus dem Snapshot gesetzte Image-/Engine-Auswahl.
+  // Die Selects füllen sich asynchron → Wert puffern und beim Rendern der
+  // Optionslisten anwenden (null = kein Restore-Auftrag).
+  let wsPendingImage = null;
+  let wsPendingEngine = null;
 
   function wsEngineLabel(a) {
     return (a.healthy ? "🟢" : "🔴") + " " + a.name +
@@ -316,14 +324,25 @@
       opt.textContent = wsEngineLabel(a);
       wsEngineSel.appendChild(opt);
     });
-    // Gespeicherte Auswahl beibehalten, falls noch verfügbar
-    const initEng = (WS_ENGINES_INIT && WS_ENGINES_INIT.length) ? String(WS_ENGINES_INIT[0]) : "";
-    const wanted = candidates.some(a => a.name === current) ? current
-                 : (candidates.some(a => a.name === initEng) ? initEng : "");
-    if (wanted) wsEngineSel.value = wanted;
+    if (wsPendingEngine != null) {
+      // Versions-Restore: exakte Snapshot-Auswahl setzen (auch "")
+      if (wsPendingEngine && candidates.some(a => a.name === wsPendingEngine)) {
+        wsEngineSel.value = wsPendingEngine;
+      } else if (!wsPendingEngine) {
+        wsEngineSel.value = "";
+      }
+      wsPendingEngine = null;
+    } else {
+      // Gespeicherte Auswahl beibehalten, falls noch verfügbar
+      const initEng = (WS_ENGINES_INIT && WS_ENGINES_INIT.length) ? String(WS_ENGINES_INIT[0]) : "";
+      const wanted = candidates.some(a => a.name === current) ? current
+                   : (candidates.some(a => a.name === initEng) ? initEng : "");
+      if (wanted) wsEngineSel.value = wanted;
+    }
     wsEngineHintEl.textContent = WS_INSTALLED
       ? "Nur Engines mit installiertem Image der gewählten Spec · GPU wird automatisch erkannt."
       : "Alle Engines verfügbar · GPU wird automatisch erkannt.";
+    wsUpdateMissingHints();
   }
 
   async function wsLoadEngines() {
@@ -370,7 +389,11 @@
       if (!res.ok) { return; }
       const data = await res.json();
       WS_SPECS = data.specs || [];
-      const current = selectName != null ? selectName : wsSpecSel.value;
+      let current = selectName != null ? selectName : wsSpecSel.value;
+      if (wsPendingImage != null) {
+        current = wsPendingImage;  // "" = bewusst kein Image (Restore)
+        wsPendingImage = null;
+      }
       wsSpecSel.innerHTML = '<option value="">— noch nicht gesetzt —</option>';
       WS_SPECS.forEach(s => {
         const opt = document.createElement("option");
@@ -384,6 +407,7 @@
       }
       wsUpdateSpecInfo();
       wsRefreshInstalled();
+      wsUpdateMissingHints();
     } catch (e) { /* Spec-Liste bleibt leer (degradiert) */ }
   }
 
@@ -399,7 +423,9 @@
   wsSpecSel.addEventListener("change", () => {
     wsUpdateSpecInfo();
     wsRefreshInstalled();
+    wsUpdateMissingHints();
   });
+  wsEngineSel.addEventListener("change", wsUpdateMissingHints);
 
   // Save-Hooks (task_detail_base.html liest diese bei task_type=workspace)
   window._workspaceEngineNames = function () {
@@ -408,6 +434,52 @@
   window._workspaceImageName = function () {
     return wsSpecSel.value || null;
   };
+
+  // Versions-Restore: Umgebungsfelder aus einem Snapshot in die UI laden
+  // (task_detail_base.html ruft das in applyPayload für workspace-Aufgaben auf).
+  window._workspaceApplyEnv = function (p) {
+    wsTimeoutInput.value = p.workspace_timeout != null ? p.workspace_timeout : "";
+    wsCpuInput.value = p.workspace_cpu != null ? p.workspace_cpu : "";
+    wsMemoryInput.value = p.workspace_memory != null ? wsMemToGb(p.workspace_memory) : "";
+    wsDiskInput.value = p.workspace_disk_quota != null ? p.workspace_disk_quota : "";
+    wsInternetChk.checked = !!p.workspace_internet;
+
+    wsPendingImage = p.workspace_image || "";
+    wsPendingEngine = (p.workspace_engines && p.workspace_engines.length)
+      ? String(p.workspace_engines[0]) : "";
+    // Main-Datei aus dem Snapshot (nur wenn der Key existiert — ältere
+    // Versionen haben ihn noch nicht). "" = bewusst keine Main-Datei.
+    if ("workspace_main_file" in p) {
+      wsUI.setMainFile(p.workspace_main_file || "");
+    }
+    // Sofort anwenden, wenn die Optionslisten schon geladen sind (sonst
+    // greifen wsLoadSpecs/wsRenderEngineOptions beim asynchronen Laden).
+    const specLoaded = wsSpecSel.options.length > 1;
+    if (specLoaded) {
+      wsSpecSel.value = wsPendingImage
+        && Array.from(wsSpecSel.options).some(o => o.value === wsPendingImage)
+        ? wsPendingImage : "";
+      wsPendingImage = null;
+      wsUpdateSpecInfo();
+      wsRefreshInstalled();
+    }
+    const engLoaded = Array.from(wsEngineSel.options).some(o => o.value !== "");
+    if (engLoaded) {
+      wsEngineSel.value = wsPendingEngine
+        && Array.from(wsEngineSel.options).some(o => o.value === wsPendingEngine)
+        ? wsPendingEngine : "";
+      wsPendingEngine = null;
+    }
+    wsUpdateMissingHints();
+  };
+
+  // „Noch nicht startbar“-Hinweise ausblenden, sobald Image/Engine gewählt
+  function wsUpdateMissingHints() {
+    const imgWarn = document.getElementById("ws-image-missing");
+    if (imgWarn) imgWarn.classList.toggle("hidden", !!wsSpecSel.value);
+    const engWarn = document.getElementById("ws-engine-missing");
+    if (engWarn) engWarn.classList.toggle("hidden", !!wsEngineSel.value);
+  }
 
   // Init: zuerst Engines, dann Specs (der Engine-Filter hängt an beidem)
   wsLoadEngines().then(() => wsLoadSpecs(WS_IMAGE_INIT || null));
@@ -745,7 +817,14 @@
         return { ok: false, reason: src + " ist ein System-Skript und muss in der Wurzel bleiben." };
       return { ok: true };
     },
+    // Datei-/Baum-Änderung → Task-Auto-Save (Versions-Update; bei
+    // Bearbeitungsstart entsteht eine neue Version).
+    onChanged: () => { if (window._avTouch) window._avTouch(); },
   });
+  // Handle für die Typ-Wechsel-Logik im Base-Template: nach dem
+  // Workspace-Wechsel in derselben Seite muss der Dateibaum neu geladen
+  // werden (Stubs entstehen erst serverseitig beim Save).
+  window._wsUI = wsUI;
 
   document.getElementById("ws-files-refresh-btn").addEventListener("click", () => wsUI.refresh());
 

@@ -225,6 +225,12 @@
   //   onViewChanged(view)   fn("editor"|"media") — die Editor-Fläche hat
   //                         gerade den Fokus (Template nutzt das für
   //                         Terminal-/Preview-Views; default: ignoriert)
+  //   onChanged()             fn — der Dateibaum wurde geändert (Datei
+  //                         angelegt/gelöscht/bewegt, Zugriff oder Reihen-
+  //                         folge geändert; alle Operationen enden in
+  //                         refresh()). Template nutzt das, um den
+  //                         Task-Auto-Save zu triggern (Versions-Update);
+  //                         Student: null (ignoriert)
   function init(opts) {
     const {
       treeEl, editorEl, mediaEl = null, apiBase = null,
@@ -240,7 +246,7 @@
       saveStateEl = null,
       emptyMsg = "(keine Dateien)", noTaskMsg = null,
       onMainFileChange = null, onFilesLoaded = null,
-      onViewChanged = null,
+      onViewChanged = null, onChanged = null,
     } = opts;
 
     const state = {
@@ -1500,6 +1506,21 @@
       return !!p && !p.startsWith("/") && !p.split("/").includes("..");
     }
 
+    // ── Baum-Änderungserkennung (onChanged) ─────────────────────
+    // Signatur des Server-Baumzustands (Dateien + Ordner + Order).
+    // Der erste Refresh setzt nur die Basis (ein bloßes Laden der Seite
+    // zählt nicht als Änderung); jede echte Änderung (alle Datei-
+    // Operationen enden in refresh()) feuert den Callback genau einmal.
+    let lastTreeSig = null;
+    function treeSignature() {
+      const byPath = (a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+      return JSON.stringify([
+        [...state.files].sort(byPath),
+        [...state.folders].sort(byPath),
+        state.folderOrder,
+      ]);
+    }
+
     async function refresh(openPath) {
       if (!apiBase) {
         renderTree();
@@ -1528,6 +1549,9 @@
         }
         renderTree();
         if (onFilesLoaded) onFilesLoaded(state.files);
+        const sig = treeSignature();
+        if (lastTreeSig !== null && sig !== lastTreeSig && onChanged) onChanged();
+        lastTreeSig = sig;
         if (openPath) {
           await openFile(openPath);
           return;
@@ -2018,6 +2042,10 @@
       setMainFileState(p);
       renderTree();
       if (onMainFileChange) onMainFileChange(p);
+      // Main-Datei ist nicht Teil des /files-Zustands → die Baum-Signatur
+      // bemerkt den Wechsel nicht; explizit melden (das Feld selbst
+      // wird über das Task-Payload gespeichert).
+      if (onChanged) onChanged();
     }
     function getMainFile() {
       return state.mainFile;
@@ -2037,6 +2065,23 @@
       setSaveState("");
       renderTree();
       if (onViewChanged) onViewChanged("editor");
+    }
+
+    // ── Versionen-Restore ───────────────────────────────────────────
+    // Der Server-Zustand wurde gerade durch eine Version ersetzt →
+    // Dateibereich vollständig neu laden: ungespeicherten Editor-Stand
+    // verwerfen (sonst würde er beim nächsten Datei-Wechsel per Auto-Save
+    // auf den wiederhergestellten Stand zurückschreiben) und die Datei
+    // erneut öffnen (die vorherige, falls sie noch existiert, sonst
+    // Main- bzw. erste Datei — refresh() öffnet sie selbst).
+    async function restoreReload() {
+      if (!apiBase) return;
+      const keep = state.currentFile;
+      clearEditorState();
+      await refresh();
+      if (keep && state.files.some(f => f.path === keep)) {
+        await openFile(keep);
+      }
     }
 
     async function showMediaView(kind, path, res) {
@@ -2379,6 +2424,7 @@
       },
       isDirty: () => state.dirty,
       clearEditorState,
+      restoreReload,
       closeMediaView,
       // CodeMirror neu vermessen (nach Unhide, z. B. Rückkehr aus
       // Terminal-/Preview-View)

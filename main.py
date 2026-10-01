@@ -1745,6 +1745,16 @@ async def task_page(
         session, user, request, course_id, active_tab="tasks",
         role_override=CourseRole.STUDENT if is_student_view else None,
     )
+    if is_student_view:
+        # „Übersicht“ bleibt auch im Student-Preview erreichbar (sonst nur
+        # Tutor/PROF — role_override=STUDENT würde den Tab sonst ausblenden).
+        tab_ctx["tabs"].append({
+            "key": "overview",
+            "icon": "📊",
+            "label": "Übersicht",
+            "url": f"/courses/{course_id}/overview",
+            "active": False,  # hier ist immer der Aufgaben-Tab aktiv
+        })
 
     is_code = task.task_type.value == "code"
     is_workspace = task.task_type.value == "workspace"

@@ -22,6 +22,7 @@
  *     hostEl: toolbarElement,
  *   });
  *   // Beim Editor-Ändern:  av.onChange();
+ *   // Baum-/Datei-Änderung: av.touch();   // Payload gleich, nur Dateien
  *   // „Fertig":            const id = await av.finish();
  *   // Aufräumen:           av.destroy();
  *
@@ -107,6 +108,7 @@
     let dirty = false;
     let saving = false;
     let timer = null;
+    let force = false;  // nächstes Save: samePayload-Check überspringen
     let versions = [];
 
     // ── UI: Button + Status + Panel ──
@@ -148,6 +150,18 @@
       timer = setTimeout(doAutosave, debounceMs);
     }
 
+    // Datei-/Baum-Änderung (z. B. Workspace-Dateibaum): Das Element-Payload
+    // (reguläre Felder) bleibt dabei oft unverändert, aber gespeichert
+    // werden MUSS — der Server erfasst den aktuellen Datei-Stand in der
+    // Version. Discrete Operationen → kürzeres Debounce als onChange.
+    function touch() {
+      dirty = true;
+      force = true;
+      setStatus('pending');
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(doAutosave, 600);
+    }
+
     async function doAutosave() {
       if (timer) { clearTimeout(timer); timer = null; }
       if (saving) {
@@ -156,7 +170,9 @@
         return;
       }
       const payload = getPayload();
-      if (!shouldSave(payload) || samePayload(payload, lastPayload)) {
+      const forced = force;
+      force = false;
+      if (!shouldSave(payload) || (samePayload(payload, lastPayload) && !forced)) {
         dirty = false;
         setStatus('clean');
         return;
@@ -388,6 +404,7 @@
       get versionId() { return versionId; },
       get dirty() { return dirty; },
       onChange,
+      touch,
       finish,
       setBaseline,
       refreshVersions,

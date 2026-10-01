@@ -146,6 +146,9 @@ def migrate_schema():
             "sort_order": "INTEGER",  # manuelle Dateireihenfolge je Ordner (NULL = alphabetisch)
             "access": "VARCHAR(16)",  # explizite Zugriffs-Klasse (NULL=erben; readonly/hidden)
         },
+        "content_versions": {
+            "file_snapshot": "VARCHAR",  # relativer Pfad des Workspace-Dateibau-Snapshots (nur Task-Versionen)
+        },
         "workspace_runs": {
             "submission_id": "INTEGER",  # Grading-/Tutor-Rerun: Link zur Einreichung
         },

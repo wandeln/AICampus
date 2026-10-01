@@ -11,17 +11,17 @@ import logging
 import mimetypes
 import re
 import shutil
-import threading
 import time
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from sqlmodel import Session, SQLModel, select
+from sqlmodel import Session, SQLModel, delete, select
 
 from database.base import engine, get_session
 from database.models import (
+    ContentVersion,
     Course,
     CourseRole,
     CourseSettings,
@@ -59,14 +59,19 @@ from services.workspace_service import (
     MAX_FILE_BYTES,
     MAX_WORKSPACE_TOTAL_BYTES,
     TEST_SOLUTION_SCRIPT,
+    apply_workspace_env_fields as _apply_workspace_env_fields,
+    check_image_spec as _check_image_spec,
     effective_file_access,
     effective_folder_access,
     ensure_fresh_workspace,
     file_disk_path,
+    parse_engine_list as _parse_engine_list,
+    schedule_task_sync as _schedule_workspace_sync,
     task_has_init,
     task_init_hash,
     task_workspace_dir,
     test_run_key,
+    validate_workspace_provided as _validate_workspace_provided,
     workspace_service,
 )
 
@@ -75,13 +80,6 @@ grading_service = GradingService()
 llm_service = LLMService()
 export_service = ExportService()
 logger = logging.getLogger(__name__)
-
-# Starke Referenzen auf laufende Workspace-Sync-Threads (GC-Schutz)
-_workspace_sync_threads: list[threading.Thread] = []
-# Coalescing: bei mehreren File-Änderungen in kurzer Zeit (z. B. Ordner-
-# Umbenennen) läuft nur ein Sync; nach Abschluss wird ggf. erneut angestoßen.
-_workspace_sync_inflight: set[int] = set()
-_workspace_sync_retry: set[int] = set()
 
 
 def _check_course_role(user: User, course_id: int, session: Session):
@@ -104,98 +102,9 @@ def _check_course_role(user: User, course_id: int, session: Session):
 # ═══════════════════════════════════════════════════════════════════
 # WORKSPACE-AUFGABEN (Helfer)
 # ═══════════════════════════════════════════════════════════════════
-
-_WS_MEM_RE = re.compile(r"^\d+(\.\d+)?[bkmg]$", re.IGNORECASE)
-
-
-def _apply_workspace_env_fields(task: Task, body: dict) -> None:
-    """Workspace-Umgebungsfelder validieren & anwenden (nur explizit
-    übergebene Keys). HTTPException 400 bei ungültigen Werten."""
-    if "workspace_timeout" in body and body["workspace_timeout"] is not None:
-        try:
-            t = int(body["workspace_timeout"])
-        except (TypeError, ValueError):
-            raise HTTPException(400, "workspace_timeout muss eine Zahl sein.")
-        if not (1 <= t <= 7200):
-            raise HTTPException(400, "workspace_timeout muss zwischen 1 und 7200 liegen.")
-        task.workspace_timeout = t
-    if "workspace_cpu" in body and body["workspace_cpu"] is not None:
-        try:
-            c = float(body["workspace_cpu"])
-        except (TypeError, ValueError):
-            raise HTTPException(400, "workspace_cpu muss eine Zahl sein.")
-        if not (0 < c <= 32):
-            raise HTTPException(400, "workspace_cpu muss größer 0 (max. 32) sein.")
-        task.workspace_cpu = c
-    if "workspace_memory" in body:
-        m = str(body["workspace_memory"] or "4g").strip().lower().replace(" ", "")
-        if re.match(r"^\d+(\.\d+)?$", m):
-            m += "g"  # UI/LLM senden GB-Zahl (4 → "4g")
-        if not _WS_MEM_RE.match(m):
-            raise HTTPException(400, "workspace_memory: Zahl in GB (z. B. 4) oder String mit Einheit (z. B. '512m').")
-        task.workspace_memory = m
-    if "workspace_disk_quota" in body and body["workspace_disk_quota"] is not None:
-        try:
-            d = float(body["workspace_disk_quota"])
-        except (TypeError, ValueError):
-            raise HTTPException(400, "workspace_disk_quota muss eine Zahl sein.")
-        if not (0 <= d <= 100):
-            raise HTTPException(400, "workspace_disk_quota muss zwischen 0 und 100 GB liegen (0 = ohne Limit).")
-        task.workspace_disk_quota = d
-    if "workspace_internet" in body:
-        task.workspace_internet = bool(body["workspace_internet"])
-    if "workspace_main_file" in body:
-        mf = body["workspace_main_file"]
-        if mf is not None:
-            mf = str(mf).strip()
-            if mf and (mf.startswith("/") or ".." in mf.split("/")):
-                raise HTTPException(400, "workspace_main_file muss ein relativer Pfad sein (kein ..).")
-            task.workspace_main_file = mf or None
-        else:
-            task.workspace_main_file = None
-
-
-def _parse_engine_list(val) -> str | None:
-    """Engine-Liste (UI) → JSON-String (leere Liste → None)."""
-    if val in (None, "", []):
-        return None
-    if not isinstance(val, list):
-        raise HTTPException(400, "workspace_engines muss eine Liste sein")
-    names = [str(n).strip() for n in val if str(n).strip()]
-    return json.dumps(names) if names else None
-
-
-def _enforce_workspace_requirements(session: Session, task: Task) -> None:
-    """Workspace-Aufgabe ist erst lauffähig mit Image-Spec + Engine-Pool.
-
-    Fehlendes Bild/Engine ist kein Zustand, den wir tolerieren: Volumes
-    sind an die Engine gebunden, das Image muss auflösbar sein. Der Tutor
-    korrigiert das über die Task-Edit (Studenten sehen einen
-    Graceful-Fehler via validate_task_ready).
-    """
-    from services import image_spec_service
-    from services.workspace_service import workspace_service
-    if not task.workspace_image:
-        raise HTTPException(
-            400, "Workspace-Aufgabe: bitte eine Image-Spec wählen "
-                 "(Arbeitsumgebung).")
-    if image_spec_service.resolve_spec(
-            session, task.course_id, task.workspace_image) is None:
-        raise HTTPException(
-            400, f"Workspace-Aufgabe: Image-Spec {task.workspace_image!r} "
-                 "existiert nicht (global oder Kurs).")
-    names = workspace_service.task_engine_names(task)
-    if not names:
-        raise HTTPException(
-            400, "Workspace-Aufgabe: bitte mindestens eine Compute-Engine "
-                 "zuweisen (Arbeitsumgebung).")
-    known = {a["name"] for a in
-             workspace_service.get_agents(session, task.course_id)}
-    missing = [n for n in names if n not in known]
-    if missing:
-        raise HTTPException(
-            400, f"Workspace-Aufgabe: Compute-Engine(s) nicht registriert: "
-                 f"{', '.join(missing)}.")
+# Umgebungsfelder/Engine-Liste/Image-Spec/Validierung + Sync-Scheduling
+# leben in services/workspace_service.py (alias-importiert oben), damit
+# auch version_service.py (Versions-Wiederherstellung) sie nutzen kann.
 
 
 def _task_pool_agents(session: Session, task: Task) -> list[dict]:
@@ -206,68 +115,6 @@ def _task_pool_agents(session: Session, task: Task) -> list[dict]:
         by_name = {a["name"]: a for a in agents}
         agents = [by_name[n] for n in engine_names if n in by_name]
     return agents
-
-
-def _check_image_spec(session: Session, course_id: int, name: str | None) -> str | None:
-    """workspace_image validieren (Spec muss global oder Kurs-Scope existieren)."""
-    name = str(name or "").strip()
-    if name:
-        from services import image_spec_service
-        if image_spec_service.resolve_spec(session, course_id, name) is None:
-            raise HTTPException(
-                400, f"Image-Spec {name!r} existiert nicht (global oder Kurs)")
-    return name or None
-
-
-def _schedule_workspace_sync(task_id: int, force: bool = False) -> None:
-    """Task-Save-Seiteneffekte (Asset-Sync + Init-Build) im Hintergrund —
-    eigener Session-Thread, damit die Antwort nicht auf den Agent wartet.
-    Starke Thread-Referenzen, damit nichts weg-GC'd wird.
-
-    force=True (manuelles „Sync & Init“): Init-Build wird erzwungen —
-    .init.sh läuft komplett neu, die alten Init-Artefakte werden zuerst
-    gelöscht und dann neu erzeugt (Manifest = exakt dieses Ergebnis)."""
-
-    def _work() -> None:
-        try:
-            with Session(engine) as bg_session:
-                task = bg_session.get(Task, task_id)
-                if task and task.task_type.value == "workspace":
-                    # „pending"-Marker (Objekt-Format wie on_task_saved):
-                    # Die UI kann „lädt …“ pollen, bis der Sync fertig ist.
-                    if workspace_service.is_enabled(bg_session, task.course_id):
-                        try:
-                            # Derselbe Agent-Satz wie on_task_saved (Engine-Pool
-                            # der Aufgabe, nicht ALLE Kurs-Agents) — sonst zeigt
-                            # die UI beim Pending-Poll Engines an, auf denen
-                            # gar nichts gebaut wird.
-                            task.workspace_assets_status = json.dumps({
-                                a["url"]: {"assets": "pending",
-                                           "task_image": "pending",
-                                           "image": "pending"}
-                                for a in workspace_service.target_agents(bg_session, task)
-                            })
-                            bg_session.add(task)
-                            bg_session.commit()
-                        except Exception:  # noqa: BLE001
-                            pass
-                    try:
-                        workspace_service.on_task_saved(
-                            bg_session, task, force=force)
-                    except Exception as e:  # noqa: BLE001 — Status liegt in workspace_assets_status
-                        logger.warning("Workspace-Sync (task %s) fehlgeschlagen: %s", task_id, e)
-        finally:
-            _workspace_sync_inflight.discard(task_id)
-            if _workspace_sync_retry.discard(task_id):
-                _schedule_workspace_sync(task_id)
-
-    if task_id in _workspace_sync_inflight:
-        _workspace_sync_retry.add(task_id)
-        return
-    _workspace_sync_inflight.add(task_id)
-    t = threading.Thread(target=_work, daemon=True)
-    _workspace_sync_threads.append(t)
-    t.start()
 
 
 async def _load_workspace_task(
@@ -369,7 +216,7 @@ async def create_task(
         deadline=body.get("deadline"),
         code_template=body.get("code_template"),
         test_code=body.get("test_code"),
-        is_visible=body.get("is_visible", True),
+        is_visible=body.get("is_visible", False),  # Default: für Studenten versteckt
         display_order=next_order,
     )
     if task_type == TaskType.WORKSPACE:
@@ -377,13 +224,19 @@ async def create_task(
         task.workspace_engines = _parse_engine_list(body.get("workspace_engines"))
         task.workspace_image = _check_image_spec(session, course_id,
                                                  body.get("workspace_image"))
-        _enforce_workspace_requirements(session, task)
+        _validate_workspace_provided(session, task)
 
     session.add(task)
     session.commit()
     session.refresh(task)
     sync_media_usages(session, course_id)
     if task_type == TaskType.WORKSPACE:
+        # Stub-Skripte sofort (leerer Datei-Baum) — ohne Warten auf den
+        # lauffähigen Zustand (Image/Engine); on_task_saved heilt nach.
+        try:
+            workspace_service.ensure_system_stubs(session, task)
+        except Exception as e:  # noqa: BLE001 — Stubs dürfen die Anlage nicht blockieren
+            logger.warning("System-Stubs (task %s): %s", task.id, e)
         _schedule_workspace_sync(task.id)
 
     return {
@@ -539,12 +392,18 @@ async def update_task(
 
     task.updated_at = datetime.now(timezone.utc)
     if task.task_type == TaskType.WORKSPACE:
-        _enforce_workspace_requirements(session, task)
+        _validate_workspace_provided(session, task)
     session.add(task)
     session.commit()
     session.refresh(task)
     sync_media_usages(session, task.course_id)
     if task.task_type.value == "workspace":
+        # Selbstheilung: Stub-Skripte direkt anlegen, wenn der Datei-Baum
+        # leer ist (z. B. per Typ-Wechsel gerade erst Workspace geworden).
+        try:
+            workspace_service.ensure_system_stubs(session, task)
+        except Exception as e:  # noqa: BLE001 — Stubs dürfen den Save nicht blockieren
+            logger.warning("System-Stubs (task %s): %s", task.id, e)
         _schedule_workspace_sync(task.id)
 
     return {"message": "Aufgabe aktualisiert.", "task": {"id": task.id, "title": task.title}}
@@ -588,6 +447,11 @@ async def delete_task(
         session.delete(sub)
     for hint in task.hint_exchanges:
         session.delete(hint)
+
+    # Versions-History der Aufgabe mit aufräumen
+    session.exec(delete(ContentVersion)
+                 .where(ContentVersion.entity_type == "task")
+                 .where(ContentVersion.entity_id == task.id))
 
     session.delete(task)
     session.commit()
@@ -2508,6 +2372,9 @@ async def sync_workspace(
     """
     task = await _load_workspace_task(task_id, session, user)
     _require_workspace_task(task)
+    not_ready = workspace_service.validate_task_ready(session, task)
+    if not_ready:
+        raise HTTPException(400, not_ready)
     _schedule_workspace_sync(task.id, force=True)
     return {"ok": True, "message": "Sync & Init gestartet."}
 
@@ -2527,6 +2394,9 @@ async def workspace_init_build(
     """
     task = await _load_workspace_task(task_id, session, user)
     _require_workspace_task(task)
+    not_ready = workspace_service.validate_task_ready(session, task)
+    if not_ready:
+        raise HTTPException(400, not_ready)
     _schedule_workspace_sync(task.id, force=True)
     return {"ok": True, "message": "Init-Build gestartet."}
 

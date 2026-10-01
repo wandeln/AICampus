@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import tarfile
 import tempfile
@@ -28,14 +29,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from fastapi import HTTPException
 from sqlmodel import Session, select
 
 from compute_agent.version import agent_version
 from config import (
     SUBMISSION_DIR,
+    VERSION_SNAPSHOT_DIR,
     WORKSPACE_DIR,
 )
+from database.base import engine
 from database.models import (
+    ContentVersion,
     Task,
     TaskWorkspaceFile,
     TaskWorkspaceFolder,
@@ -58,6 +63,186 @@ HEALTH_TTL = 30                 # Health-Cache (Sekunden)
 # Dateilimits
 MAX_FILE_BYTES = 50 * 1024 * 1024            # 50 MB pro Datei
 MAX_WORKSPACE_TOTAL_BYTES = 512 * 1024 * 1024  # 512 MB je Aufgaben-Workspace
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Task-Validierung & Sync-Scheduling
+# ═══════════════════════════════════════════════════════════════════
+# Diese Helfer stehen hier (statt in api/tutor.py), damit auch
+# version_service.py (Versions-Wiederherstellung) sie ohne API-Import
+# wiederverwenden kann. api/tutor.py alias-Importiert sie.
+
+_WS_MEM_RE = re.compile(r"^\d+(\.\d+)?[bkmg]$", re.IGNORECASE)
+
+
+def apply_workspace_env_fields(task: Task, body: dict) -> None:
+    """Workspace-Umgebungsfelder validieren & anwenden (nur explizit
+    übergebene Keys). HTTPException 400 bei ungültigen Werten."""
+    if "workspace_timeout" in body and body["workspace_timeout"] is not None:
+        try:
+            t = int(body["workspace_timeout"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "workspace_timeout muss eine Zahl sein.")
+        if not (1 <= t <= 7200):
+            raise HTTPException(400, "workspace_timeout muss zwischen 1 und 7200 liegen.")
+        task.workspace_timeout = t
+    if "workspace_cpu" in body and body["workspace_cpu"] is not None:
+        try:
+            c = float(body["workspace_cpu"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "workspace_cpu muss eine Zahl sein.")
+        if not (0 < c <= 32):
+            raise HTTPException(400, "workspace_cpu muss größer 0 (max. 32) sein.")
+        task.workspace_cpu = c
+    if "workspace_memory" in body:
+        m = str(body["workspace_memory"] or "4g").strip().lower().replace(" ", "")
+        if re.match(r"^\d+(\.\d+)?$", m):
+            m += "g"  # UI/LLM senden GB-Zahl (4 → "4g")
+        if not _WS_MEM_RE.match(m):
+            raise HTTPException(400, "workspace_memory: Zahl in GB (z. B. 4) oder String mit Einheit (z. B. '512m').")
+        task.workspace_memory = m
+    if "workspace_disk_quota" in body and body["workspace_disk_quota"] is not None:
+        try:
+            d = float(body["workspace_disk_quota"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "workspace_disk_quota muss eine Zahl sein.")
+        if not (0 <= d <= 100):
+            raise HTTPException(400, "workspace_disk_quota muss zwischen 0 und 100 GB liegen (0 = ohne Limit).")
+        task.workspace_disk_quota = d
+    if "workspace_internet" in body:
+        task.workspace_internet = bool(body["workspace_internet"])
+    if "workspace_main_file" in body:
+        mf = body["workspace_main_file"]
+        if mf is not None:
+            mf = str(mf).strip()
+            if mf and (mf.startswith("/") or ".." in mf.split("/")):
+                raise HTTPException(400, "workspace_main_file muss ein relativer Pfad sein (kein ..).")
+            task.workspace_main_file = mf or None
+        else:
+            task.workspace_main_file = None
+
+
+def parse_engine_list(val) -> str | None:
+    """Engine-Liste (UI) → JSON-String (leere Liste → None)."""
+    if val in (None, "", []):
+        return None
+    if not isinstance(val, list):
+        raise HTTPException(400, "workspace_engines muss eine Liste sein")
+    names = [str(n).strip() for n in val if str(n).strip()]
+    return json.dumps(names) if names else None
+
+
+def check_image_spec(session: Session, course_id: int, name: str | None) -> str | None:
+    """workspace_image validieren (Spec muss global oder Kurs-Scope existieren)."""
+    name = str(name or "").strip()
+    if name:
+        from services import image_spec_service
+        if image_spec_service.resolve_spec(session, course_id, name) is None:
+            raise HTTPException(
+                400, f"Image-Spec {name!r} existiert nicht (global oder Kurs)")
+    return name or None
+
+
+def validate_workspace_provided(session: Session, task: Task) -> None:
+    """Validiert NUR die gesetzten Workspace-Werte: Image-Spec muss
+    auflösbar sein, aufgeführte Engines müssen registriert sein
+    (HTTPException 400 bei Tippfehlern).
+
+    Fehlendes Image/Engine ist erlaubt: mit Auto-Save wird die Aufgabe
+    direkt gespeichert, bevor der Tutor Arbeitsumgebung gewählt hat.
+    Der Agent-Sync startet automatisch mit dem ersten lauffähigen Save
+    (Readiness-Gate in schedule_task_sync); bis dahin zeigen UI und
+    Studenten einen Graceful-Hinweis (validate_task_ready).
+    """
+    if task.task_type.value != "workspace":
+        return
+    if task.workspace_image:
+        from services import image_spec_service
+        if image_spec_service.resolve_spec(
+                session, task.course_id, task.workspace_image) is None:
+            raise HTTPException(
+                400, f"Workspace-Aufgabe: Image-Spec {task.workspace_image!r} "
+                     "existiert nicht (global oder Kurs).")
+    names = workspace_service.task_engine_names(task)
+    if names:
+        known = {a["name"] for a in
+                 workspace_service.get_agents(session, task.course_id)}
+        missing = [n for n in names if n not in known]
+        if missing:
+            raise HTTPException(
+                400, f"Workspace-Aufgabe: Compute-Engine(s) nicht registriert: "
+                     f"{', '.join(missing)}.")
+
+
+# Starke Referenzen auf laufende Workspace-Sync-Threads (GC-Schutz)
+_task_sync_threads: list[threading.Thread] = []
+# Coalescing: bei mehreren File-Änderungen in kurzer Zeit (z. B. Ordner-
+# Umbenennen) läuft nur ein Sync; nach Abschluss wird ggf. erneut angestoßen.
+_task_sync_inflight: set[int] = set()
+_task_sync_retry: set[int] = set()
+
+
+def schedule_task_sync(task_id: int, force: bool = False) -> None:
+    """Task-Save-Seiteneffekte (Asset-Sync + Init-Build) im Hintergrund —
+    eigener Session-Thread, damit die Antwort nicht auf den Agent wartet.
+    Starke Thread-Referenzen, damit nichts weg-GC'd wird.
+
+    Readiness-Gate: Ist die Aufgabe noch nicht lauffähig (Image-Spec /
+    Engine-Pool fehlt — möglich, weil Auto-Save vor der Wahl der
+    Arbeitsumgebung speichert), wird der Sync übersprungen. Der erste
+    lauffähige Save (Tutor wählt Image + Engine → Auto-Save) startet ihn
+    dann automatisch.
+
+    force=True (manuelles „Sync & Init“): Init-Build wird erzwungen —
+    .init.sh läuft komplett neu, die alten Init-Artefakte werden zuerst
+    gelöscht und dann neu erzeugt (Manifest = exakt dieses Ergebnis)."""
+
+    def _work() -> None:
+        try:
+            with Session(engine) as bg_session:
+                task = bg_session.get(Task, task_id)
+                if task and task.task_type.value == "workspace":
+                    not_ready = workspace_service.validate_task_ready(bg_session, task)
+                    if not_ready:
+                        logger.info(
+                            "Workspace-Sync (task %s) übersprungen (noch nicht "
+                            "lauffähig): %s", task_id, not_ready)
+                        return
+                    # „pending"-Marker (Objekt-Format wie on_task_saved):
+                    # Die UI kann „lädt …“ pollen, bis der Sync fertig ist.
+                    if workspace_service.is_enabled(bg_session, task.course_id):
+                        try:
+                            # Derselbe Agent-Satz wie on_task_saved (Engine-Pool
+                            # der Aufgabe, nicht ALLE Kurs-Agents) — sonst zeigt
+                            # die UI beim Pending-Poll Engines an, auf denen
+                            # gar nichts gebaut wird.
+                            task.workspace_assets_status = json.dumps({
+                                a["url"]: {"assets": "pending",
+                                           "task_image": "pending",
+                                           "image": "pending"}
+                                for a in workspace_service.target_agents(bg_session, task)
+                            })
+                            bg_session.add(task)
+                            bg_session.commit()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    try:
+                        workspace_service.on_task_saved(
+                            bg_session, task, force=force)
+                    except Exception as e:  # noqa: BLE001 — Status liegt in workspace_assets_status
+                        logger.warning("Workspace-Sync (task %s) fehlgeschlagen: %s", task_id, e)
+        finally:
+            _task_sync_inflight.discard(task_id)
+            if _task_sync_retry.discard(task_id):
+                schedule_task_sync(task_id)
+
+    if task_id in _task_sync_inflight:
+        _task_sync_retry.add(task_id)
+        return
+    _task_sync_inflight.add(task_id)
+    t = threading.Thread(target=_work, daemon=True)
+    _task_sync_threads.append(t)
+    t.start()
 
 
 # ── Pfad-Konvention (einzige Stelle, die sie ableitet) ─────────────
@@ -1290,6 +1475,14 @@ class WorkspaceService:
         base = task_workspace_dir(task.id)
         if base.exists():
             shutil.rmtree(base, ignore_errors=True)
+        # Version-Snapshots der Aufgabe entfernen
+        for v in session.exec(
+            select(ContentVersion)
+            .where(ContentVersion.entity_type == "task")
+            .where(ContentVersion.entity_id == task.id)
+        ).all():
+            if v.file_snapshot:
+                shutil.rmtree(VERSION_SNAPSHOT_DIR / str(v.id), ignore_errors=True)
 
     def delete_task_db_rows(self, session: Session, task: Task) -> None:
         """Workspace-DB-Rows der Aufgabe entfernen.
@@ -1345,6 +1538,175 @@ class WorkspaceService:
                 if member.issym() or member.islnk():
                     raise ValueError(f"Links nicht erlaubt: {member.name}")
             tar.extractall(dest)
+
+    # ═══════════════════════════════════════════════════════════
+    # Version-Snapshots (Workspace-Dateibäume in Task-Versionen)
+    # ═══════════════════════════════════════════════════════════
+
+    def capture_version_snapshot(self, session: Session, task: Task,
+                                 version_id: int) -> Optional[str]:
+        """Workspace-Dateibau der Aufgabe als Version-Snapshot sichern.
+
+        Liefert den relativen Pfad (version_snapshots/{id}/workspace.tar.gz)
+        oder None (Aufgabentyp ≠ Workspace). Überschreibt den Snapshot der
+        Version — außer nichts hat sich geändert (Digest-Check: Auto-Save
+        feuert bei jeder Tipp-Pause, ein Rewrite wäre reine Verschwendung).
+
+        Große Datensätze gehören NICHT hier rein — die werden von
+        .init.sh bei der Initialisierung heruntergeladen (Doku).
+        """
+        if task.task_type.value != "workspace":
+            return None
+        meta = self._version_meta(session, task)
+        digest = self._version_digest(task, meta)
+        vdir = VERSION_SNAPSHOT_DIR / str(version_id)
+        hash_path = vdir / "manifest.sha256"
+        if hash_path.exists() and hash_path.read_text().strip() == digest:
+            return f"version_snapshots/{version_id}/workspace.tar.gz"
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "meta.json").write_text(
+            json.dumps(meta, sort_keys=True, indent=2), encoding="utf-8")
+        base = task_workspace_dir(task.id)
+        tmp = vdir / "workspace.tar.gz.tmp"
+        with tarfile.open(tmp, "w:gz") as tar:
+            if base.exists():
+                for p in sorted(base.rglob("*")):
+                    if p.is_file():
+                        tar.add(p, arcname=p.relative_to(base).as_posix())
+        tmp.replace(vdir / "workspace.tar.gz")
+        hash_path.write_text(digest, encoding="utf-8")
+        return f"version_snapshots/{version_id}/workspace.tar.gz"
+
+    @staticmethod
+    def _version_meta(session: Session, task: Task) -> dict:
+        """Metadaten, die in der DB und NICHT im Dateibau selbst leben
+        (Zugriffsklassen/Sortierung) — sonst gingen sie beim Restore
+        verloren (meta.json neben dem tar)."""
+        return {
+            "files": {
+                f.path: {
+                    "access": f.access,
+                    "is_binary": f.is_binary,
+                    "sort_order": f.sort_order,
+                }
+                for f in WorkspaceService.task_files(session, task)
+            },
+            "folders": {
+                fo.path: {"access": fo.access}
+                for fo in WorkspaceService.task_folders(session, task)
+            },
+            "orders": WorkspaceService.order_map(session, task),
+        }
+
+    @staticmethod
+    def _version_digest(task: Task, meta: dict) -> str:
+        """Fingerprint des Dateibaus (Pfad+Größe+mtime je Datei + JSON-Meta).
+        Dient als Skip-Kriterium für capture_version_snapshot."""
+        base = task_workspace_dir(task.id)
+        entries = []
+        if base.exists():
+            for p in sorted(base.rglob("*")):
+                if p.is_file():
+                    st = p.stat()
+                    entries.append([
+                        p.relative_to(base).as_posix(),
+                        int(st.st_size),
+                        int(st.st_mtime_ns),
+                    ])
+        blob = json.dumps({"files": entries, "meta": meta}, sort_keys=True)
+        return hashlib.sha256(blob.encode()).hexdigest()
+
+    def restore_version_snapshot(self, session: Session, task: Task,
+                                 snapshot_rel: str) -> Optional[Path]:
+        """Version-Snapshot auf den Task-Workspace anwenden: DB-Zeilen +
+        Disk-Dateien durch den Snapshot ersetzen.
+
+        Commitet NICHT — der Caller (Versions-Restore) commitet zusammen
+        mit den Feld-Änderungen (adapter.apply). Liefert den Backup-Pfad
+        des alten Dateibaus (None = war leer); der Caller ist
+        verantwortlich, ihn zu rollbacken (Fehler) oder zu verwerfen
+        (Erfolg). Bei Entpack-Fehler wird der alte Stand automatisch
+        wiederhergestellt.
+        """
+        base = task_workspace_dir(task.id)
+        backup: Optional[Path] = None
+        if base.exists():
+            backup = base.with_name(base.name + ".restore-bak")
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+            shutil.move(str(base), str(backup))
+        for f in self.task_files(session, task):
+            session.delete(f)
+        for fo in self.task_folders(session, task):
+            session.delete(fo)
+        for row in session.exec(
+            select(TaskWorkspaceOrder).where(TaskWorkspaceOrder.task_id == task.id)
+        ).all():
+            session.delete(row)
+        meta_path = snapshot_abs_path(snapshot_rel).parent / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            meta = {}
+        try:
+            self.extract_snapshot(snapshot_rel, base)
+        except Exception:
+            self.rollback_version_snapshot_backup(task.id, backup)
+            raise
+        now = datetime.now()
+        for path, fm in (meta.get("files") or {}).items():
+            p = file_disk_path(task.id, path)
+            session.add(TaskWorkspaceFile(
+                task_id=task.id, path=path,
+                size=int(p.stat().st_size) if p.is_file() else 0,
+                access=fm.get("access"),
+                is_binary=bool(fm.get("is_binary", False)),
+                sort_order=fm.get("sort_order"),
+                updated_at=now,
+            ))
+        for path, fm in (meta.get("folders") or {}).items():
+            session.add(TaskWorkspaceFolder(
+                task_id=task.id, path=path,
+                access=fm.get("access"), updated_at=now))
+        for path, so in (meta.get("orders") or {}).items():
+            session.add(TaskWorkspaceOrder(
+                task_id=task.id, path=path, sort_order=int(so)))
+        return backup
+
+    @staticmethod
+    def rollback_version_snapshot_backup(task_id: int,
+                                         backup: Optional[Path]) -> None:
+        """Backup des alten Dateibaus nach FEHLGESCHLAGENEM Restore
+        zurückführen (aktueller, teils entpackter Zustand wird ersetzt)."""
+        if not backup:
+            return
+        base = task_workspace_dir(task_id)
+        if base.exists():
+            shutil.rmtree(base, ignore_errors=True)
+        try:
+            shutil.move(str(backup), str(base))
+        except OSError:
+            shutil.rmtree(backup, ignore_errors=True)
+
+    @staticmethod
+    def discard_version_snapshot_backup(backup: Optional[Path]) -> None:
+        """Backup nach ERFOLGREICHEM Restore entfernen."""
+        if backup and Path(backup).exists():
+            shutil.rmtree(backup, ignore_errors=True)
+
+    def copy_version_snapshot(self, src_version_id: int,
+                              dst_version_id: int) -> str:
+        """Version-Snapshot kopieren (Restore erzeugt eine neue Version,
+        die denselben Datei-Stand trägt — eigene Kopie = einfache
+        Delete-Semantik)."""
+        src = VERSION_SNAPSHOT_DIR / str(src_version_id)
+        dst = VERSION_SNAPSHOT_DIR / str(dst_version_id)
+        dst.mkdir(parents=True, exist_ok=True)
+        for name in ("workspace.tar.gz", "meta.json", "manifest.sha256"):
+            p = src / name
+            if p.exists():
+                shutil.copy2(p, dst / name)
+        return f"version_snapshots/{dst_version_id}/workspace.tar.gz"
 
     @staticmethod
     def record_run(session: Session, task: Task, student_id: int, command: str,

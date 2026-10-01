@@ -36,6 +36,11 @@ WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 SUBMISSION_DIR = BASE_DIR / "data" / "submissions"
 SUBMISSION_DIR.mkdir(parents=True, exist_ok=True)
 
+# Versions-Snapshots der Workspace-Dateibäume in Task-Versionen:
+# data/version_snapshots/{version_id}/workspace.tar.gz (+ meta.json)
+VERSION_SNAPSHOT_DIR = BASE_DIR / "data" / "version_snapshots"
+VERSION_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+
 # ─── Server ──────────────────────────────────────────
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
