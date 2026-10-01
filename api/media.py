@@ -15,11 +15,11 @@ import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from config import MEDIA_DIR
 from database.base import get_session
-from database.models import CourseMedia, CourseRole, MediaUsage, ScriptSection, User
+from database.models import ContentVersion, CourseMedia, CourseRole, MediaUsage, ScriptSection, User
 from services.auth_service import require_course_access
 from services.llm_service import LLMService
 from services.settings_resolver import get_effective_llm_config
@@ -499,6 +499,12 @@ async def delete_media(
     """Medium löschen (Datei + DB + Usage-Einträge)."""
     media = _get_media(session, course_id, media_id)
 
+    if media.media_type == "applet":
+        session.exec(
+            delete(ContentVersion)
+            .where(ContentVersion.entity_type == "applet")
+            .where(ContentVersion.entity_id == media.id)
+        )
     for u in session.exec(select(MediaUsage).where(MediaUsage.media_id == media.id)).all():
         session.delete(u)
     session.delete(media)

@@ -13,15 +13,22 @@
    API:
    POST /api/courses/{id}/media/applet-llm   → LLM (HTML+Titel+Beschreibung, speichert NICHT)
          Body: {prompt, existing_html?, media_id? ODER image_data_url?}
-   POST /api/courses/{id}/media/applet       → neues Applet-Medium anlegen
+   POST /api/courses/{id}/media/applet       → neues Applet-Medium anlegen (Autosave, neu)
    PUT  /api/courses/{id}/media/{mid}/applet → HTML (+Titel/Beschreibung) ersetzen
    GET  /api/courses/{id}/media/{mid}/applet → Quelle laden (Edit-Modus)
-   ──────────────────────────────────────────────────────────────── #}
+
+   Speichern/Versions-History laufen über die generische Autosave-/Versions-API
+   (autosave-versions.js, entity_type = "applet"): ein Auto-Save speichert
+   Applet UND Version in einem Request. „✅ Fertig“ flush + zurück zur
+   Medienbibliothek.
+   ───────────────────────────────────────────────────────────── #}
 
 {% block course_content %}
 
-<div class="mb-4">
-  <a href="/courses/{{ course.id }}/media" class="text-sm text-blue-600 hover:underline">← Zurück zu den Medien</a>
+<div class="mb-4 flex items-center gap-2">
+  <button id="applet-finish" type="button"
+          class="bg-green-600 hover:bg-green-700 text-white px-4 py-1.5 rounded-lg text-sm font-semibold transition">✅ Fertig</button>
+  <span id="av-applet-slot" class="inline-flex items-center gap-2"></span>
 </div>
 
 {# min-w-0 an beiden Spalten verhindert, dass der CodeMirror-Editor die
@@ -151,8 +158,8 @@
         </div>
         <p class="text-xs text-gray-400">
           {{ "Der aktuelle HTML-Code wird als Kontext übergeben. " if media }}
-          Das Ergebnis landet in Titel, Beschreibung und HTML-Code — bitte prüfen und
-          anschließend speichern. Chart.js, Three.js, Plotly &amp; KaTeX (lokal) stehen dem LLM zur
+          Das Ergebnis landet in Titel, Beschreibung und HTML-Code — bitte prüfen
+          (wird automatisch gespeichert). Chart.js, Three.js, Plotly &amp; KaTeX (lokal) stehen dem LLM zur
           Verfügung. Als Referenz: ein Medium aus der Bibliothek oder ein Foto/Zeichnung —
           auf Wunsch erzeugt das LLM auch eine einfache, nicht-interaktive Skizze (z. B. SVG).
         </p>
@@ -160,7 +167,6 @@
     </div>
 
     <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-      <h2 class="font-bold text-gray-800 mb-3">💾 Speichern</h2>
       <div class="space-y-3">
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Titel</label>
@@ -172,12 +178,8 @@
           <textarea id="applet-description" rows="3" maxlength="2000"
                     class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"></textarea>
         </div>
-        <button id="applet-save" type="button"
-                class="w-full bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed">
-          {{ "💾 Applet in Medienbibliothek speichern" if not media else "💾 Änderungen speichern" }}
-        </button>
         <p class="text-xs text-gray-400">
-          {{ "Es wird ein neues Medium (Typ Applet) in der Medienbibliothek angelegt." if not media else "Der HTML-Code wird am gleichen Pfad ersetzt — Markdown-Referenzen bleiben gültig." }}
+          {{ "Wird automatisch als neues Medium (Typ Applet) in der Medienbibliothek angelegt, sobald Titel und HTML-Code vorliegen." if not media else "Änderungen werden automatisch gespeichert — der HTML-Code bleibt am gleichen Pfad, Markdown-Referenzen bleiben gültig." }}
           Einbetten über <code class="text-[11px] bg-gray-100 rounded px-1">![Titel]({{ media.url if media else '/media/' ~ course.id ~ '/…html' }})</code>
           → rendert in Skript &amp; Aufgaben als interaktive Vorschau.
         </p>
@@ -236,7 +238,6 @@
   const descInput = document.getElementById("applet-description");
   const promptInput = document.getElementById("applet-prompt");
   const generateBtn = document.getElementById("applet-generate");
-  const saveBtn = document.getElementById("applet-save");
   const statusBox = document.getElementById("applet-llm-status");
   const statusText = document.getElementById("applet-llm-status-text");
 
@@ -251,6 +252,46 @@
     lineWrapping: true,
     matchBrackets: true,
   });
+
+  // ─── Autosave + Versions-History (generische AV-Logik) ────────
+  const avPayload = () => ({
+    title: titleInput.value,
+    html: codeCM.getValue(),
+    llm_description: descInput.value,
+  });
+
+  const av = AV.create({
+    entityType: "applet",
+    entityId: mediaId,
+    createEntity: async (p) => {
+      const res = await fetch(`/api/courses/${courseId}/media/applet`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: p.title.trim(),
+          llm_description: p.llm_description.trim(),
+          html: p.html,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Fehler beim Anlegen des Applets.");
+      return data.media || data;
+    },
+    getPayload: avPayload,
+    applyPayload: (p) => {
+      titleInput.value = p.title || "";
+      descInput.value = p.llm_description || "";
+      codeCM.setValue(p.html || "");
+    },
+    shouldSave: (p) => !!p.title.trim() && !!p.html.trim(),
+    onRestored: () => updatePreview(),
+    hostEl: document.getElementById("av-applet-slot"),
+  });
+
+  codeCM.on("change", () => av.onChange());
+  titleInput.addEventListener("input", () => av.onChange());
+  descInput.addEventListener("input", () => av.onChange());
 
   // Auto-Size-Boilerplate (Auto-Size-Teil identisch zum serverseitigen Versand
   // in serve_media, main.py; zusätzlich Konsole-Fehler-Capture für die
@@ -336,7 +377,6 @@
 
   function setBusy(busy, msg) {
     generateBtn.disabled = busy;
-    saveBtn.disabled = busy;
     statusBox.classList.toggle("hidden", !busy);
     if (msg) statusText.textContent = msg;
   }
@@ -720,6 +760,9 @@
       titleInput.value = data.title;
       descInput.value = data.llm_description || "";
       updatePreview();
+      // setValue o. ä. haben onChange-Events ausgelöst → Baseline setzen,
+      // damit das bloße Laden keinen Autosave/keine Version auslöst.
+      av.setBaseline(avPayload());
     } catch (err) {
       showToast(err.message, "error");
     }
@@ -753,8 +796,11 @@
       if (data.title) titleInput.value = data.title;
       if (data.description) descInput.value = data.description;
       updatePreview();
+      // Titel/Beschreibung wurden programmatisch gesetzt (keine input-Events)
+      // → Auto-Save explizit anstoßen.
+      av.onChange();
       const editsMsg = data.edits_applied > 0 ? ` (${data.edits_applied} stellenweise Edits angewendet)` : "";
-      showToast("Applet generiert" + editsMsg + " — bitte prüfen und speichern.", "success");
+      showToast("Applet generiert" + editsMsg + " — bitte prüfen (wird automatisch gespeichert).", "success");
     } catch (err) {
       showToast(err.message, "error");
     } finally {
@@ -762,49 +808,27 @@
     }
   }
 
-  // ─── Speichern (neu anlegen bzw. ersetzen) ────────────────────
+  // ─── „Fertig“: Auto-Save-Flush + zurück zur Medienbibliothek ──
 
-  async function saveApplet() {
-    const title = titleInput.value.trim();
-    const html = codeCM.getValue();
-    if (!title) {
-      showToast("Titel darf nicht leer sein.", "error");
-      return;
-    }
-    if (!html.trim()) {
-      showToast("Der HTML-Code ist leer.", "error");
-      return;
-    }
-    setBusy(true, "Wird gespeichert …");
-    try {
-      const isEdit = mediaId !== null;
-      const res = await fetch(isEdit
-        ? `/api/courses/${courseId}/media/${mediaId}/applet`
-        : `/api/courses/${courseId}/media/applet`, {
-        method: isEdit ? "PUT" : "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: title,
-          llm_description: descInput.value.trim(),
-          html: html,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || "Fehler beim Speichern.");
-      showToast(data.message || "Applet gespeichert.", "success");
-      if (!isEdit) {
+  async function finishApplet() {
+    const res = await av.finish();
+    if (mediaId === null && res.id == null) {
+      // Neues Applet wurde nie gespeichert (z. B. Titel/HTML fehlt)
+      const hasContent = codeCM.getValue().trim() || titleInput.value.trim();
+      if (!hasContent || confirm("Das Applet wurde nicht gespeichert (Titel oder HTML fehlt). Verwerfen?")) {
         window.location.href = `/courses/${courseId}/media`;
       }
-    } catch (err) {
-      showToast(err.message, "error");
-    } finally {
-      setBusy(false);
+      return;
     }
+    if (!res.ok) {
+      showToast("Das letzte Auto-Save ist noch nicht abgeschlossen – bitte kurz warten.", "warning");
+      return;
+    }
+    window.location.href = `/courses/${courseId}/media`;
   }
 
   generateBtn.addEventListener("click", generateApplet);
-  saveBtn.addEventListener("click", saveApplet);
+  document.getElementById("applet-finish").addEventListener("click", finishApplet);
   document.getElementById("applet-preview-refresh").addEventListener("click", updatePreview);
   loadMediaOptions();
   loadApplet();

@@ -1,8 +1,8 @@
 /**
  * autosave-versions.js — wiederverwendbare Autosave- + Versions-History-Logik.
  *
- * Für alle bearbeitbaren Elementtypen (aktuell Skript-Kapitel + Slide-Decks,
- * später u. a. Applets/Aufgaben). Koppelt an die generische Versions-API:
+ * Für alle bearbeitbaren Elementtypen (aktuell Skript-Kapitel, Slide-Decks
+ * + Applets, später u. a. Aufgaben). Koppelt an die generische Versions-API:
  *   GET/POST /api/versions/{entity_type}/{entity_id}
  *   PUT/PATCH/DELETE/POST(restore) /api/versions/{version_id}
  *
@@ -75,7 +75,10 @@
 
   function samePayload(a, b) {
     if (!a || !b) return false;
-    return a.title === b.title && a.content === b.content && a.summary === b.summary;
+    // Payloads stammen jeweils aus derselben getPayload-Funktion → gleiche
+    // Schlüsselreihenfolge, daher ist ein JSON-Vergleich elementtyp-agnostisch
+    // sicher (z. B. auch für Applets: {title, html, llm_description}).
+    return JSON.stringify(a) === JSON.stringify(b);
   }
 
   const STATUS = {

@@ -2,8 +2,8 @@
 Content Versions: generische Versions-History für bearbeitbare Elemente.
 
 Ein `ContentVersion` ist ein Snapshot ({title, content, summary, …}) eines
-Elements. Über (entity_type, entity_id) ist die History elementtyp-agnostisch —
-so können Skript-Kapitel, Slide-Decks und (später) Applets/Aufgaben dieselbe
+Element. Über (entity_type, entity_id) ist die History elementtyp-agnostisch —
+so können Skript-Kapitel, Slide-Decks, Applets und (später) Aufgaben dieselbe
 Logik + dieselben API-Endpoints wiederverwenden.
 
 Wiederverwendung über "Adapter": Jeder Elementtyp registriert drei Funktionen
@@ -30,6 +30,7 @@ from sqlmodel import Session, select
 from database.models import (
     ContentVersion,
     CourseMaterial,
+    CourseMedia,
     CourseRole,
     GlobalUserRole,
     MaterialType,
@@ -37,6 +38,7 @@ from database.models import (
     User,
     UserCourse,
 )
+from services import media_service
 from services.media_service import sync_media_usages
 from services.slides_service import SlideError, parse_slides
 
@@ -108,6 +110,33 @@ def _slide_apply(session: Session, entity: CourseMaterial, snapshot: dict) -> No
     sync_media_usages(session, entity.course_id)
 
 
+def _applet_load(session: Session, entity_id: int):
+    m = session.get(CourseMedia, entity_id)
+    if not m or m.media_type != "applet":
+        return None
+    return m
+
+
+def _applet_apply(session: Session, entity: CourseMedia, snapshot: dict) -> None:
+    title = (snapshot.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "Titel darf nicht leer sein.")
+    html = snapshot.get("html") or ""
+    if not html.strip():
+        raise HTTPException(400, "Der HTML-Code darf nicht leer sein.")
+    # Gleicher Dateipfad → Markdown-Referenzen bleiben gültig.
+    rel_path, mime, size = media_service.replace_applet(entity.file_path, html)
+    entity.title = title
+    entity.file_path = rel_path
+    entity.mime_type = mime
+    entity.file_size = size
+    entity.llm_description = (snapshot.get("llm_description") or "").strip() or None
+    session.add(entity)
+    session.commit()
+    session.refresh(entity)
+    sync_media_usages(session, entity.course_id)
+
+
 ADAPTERS: dict[str, _Adapter] = {
     "script_section": _Adapter(
         type="script_section",
@@ -120,6 +149,12 @@ ADAPTERS: dict[str, _Adapter] = {
         load=_slide_load,
         course_id_of=lambda e: e.course_id,
         apply=_slide_apply,
+    ),
+    "applet": _Adapter(
+        type="applet",
+        load=_applet_load,
+        course_id_of=lambda e: e.course_id,
+        apply=_applet_apply,
     ),
 }
 
