@@ -241,7 +241,15 @@
     }
 
     function renderPanel() {
-      let html = '<div class="px-3 py-2 border-b border-gray-100 bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wide">Versions-History</div>';
+      // Mülleimer: Bulk-Delete aller Versionen ohne eigenen Namen
+      // (die aktuelle Version, Index 0, bleibt stets erhalten).
+      const unlabeledCount = versions.reduce((n, v, i) => n + (i > 0 && !v.name ? 1 : 0), 0);
+      let html = '<div class="px-3 py-2 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-2">' +
+        '<span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Versions-History</span>' +
+        (unlabeledCount > 0
+          ? '<button type="button" data-act="bulk-delete-unlabeled" class="text-gray-400 hover:text-red-600 text-sm px-1.5 py-0.5 rounded hover:bg-red-50 transition" title="Alle Versionen ohne eigenen Namen löschen (die aktuelle Version bleibt erhalten)">🗑️</button>'
+          : '') +
+        '</div>';
       html += '<div class="av-list overflow-y-auto" style="max-height:360px">';
       if (!versions.length) {
         html += '<div class="px-3 py-4 text-sm text-gray-400">' +
@@ -328,6 +336,28 @@
       }
     }
 
+    // Bulk-Delete: alle Versionen ohne eigenen Namen (die aktuelle
+    // Version, Index 0, bleibt stets erhalten).
+    async function bulkDeleteUnlabeled() {
+      const targets = [];
+      versions.forEach((v, i) => { if (i > 0 && !v.name) targets.push(v); });
+      if (!targets.length) return;
+      const n = targets.length;
+      const plural = n === 1 ? '' : 'en';
+      if (!confirm(n + ' Version' + plural + ' ohne eigenen Namen löschen?\nDie aktuelle Version bleibt erhalten.')) return;
+      try {
+        for (const v of targets) {
+          await api.remove(v.id);
+          if (versionId === v.id) versionId = null;
+        }
+        await refreshVersions();
+        showToast(n + ' Version' + plural + ' gelöscht.', 'success');
+      } catch (e) {
+        showToast('Löschen fehlgeschlagen: ' + (e.message || ''), 'error');
+        refreshVersions();
+      }
+    }
+
     function startRename(vid, rowEl) {
       const v = versions.find((x) => x.id === vid);
       if (!v) return;
@@ -369,6 +399,10 @@
 
     // Event-Delegierung im Panel
     panel.addEventListener('click', (e) => {
+      if (e.target.closest('[data-act="bulk-delete-unlabeled"]')) {
+        bulkDeleteUnlabeled();
+        return;
+      }
       const row = e.target.closest('.av-row');
       if (!row) return;
       const vid = parseInt(row.getAttribute('data-vid'), 10);
