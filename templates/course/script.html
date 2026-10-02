@@ -427,6 +427,13 @@
         };
         card._edit.titleInput.value = card.getAttribute('data-section-title') || '';
         card._edit.titleInput.addEventListener('input', () => { if (card._av) card._av.onChange(); });
+        // Kapitel-Titel im Karten-Header live mitnehmen (Math per renderCaptionMath)
+        card._edit.syncTitle = AV.bindTitleSync(card._edit.titleInput, (v) => {
+          const t = v.trim();
+          const el = card.querySelector('.sq-title');
+          if (el) el.innerHTML = renderCaptionMath(t || el.textContent || '');
+          card.setAttribute('data-section-title', t || card.getAttribute('data-section-title') || '');
+        });
         card._edit.aiBtn.addEventListener('click', () => sqAiGenerate(card));
         md.classList.add('hidden');
         sqSetEditToolbar(card);
@@ -443,6 +450,7 @@
             card._edit.titleInput.value = p.title || '';
             mdEditorSet(card._edit.contentEditor, card._edit.contentTa, p.content || '');
             mdEditorSet(card._edit.summaryEditor, card._edit.summaryTa, p.summary || '');
+            card._edit.syncTitle();
           },
           onRestored: () => {
             // Titel/Inhalt können sich geändert haben → Refmap, Caption, TOC
@@ -578,6 +586,7 @@
 
       if (generateFields.title && data.title) {
         edit.titleInput.value = data.title;
+        if (edit.syncTitle) edit.syncTitle();
       }
       // Preview sofort aktualisieren (analog task_detail.html)
       if (generateFields.content && data.content) {
@@ -696,6 +705,17 @@
     };
     card._edit.aiBtn.addEventListener('click', () => sqAiGenerate(card));
     card._edit.titleInput.addEventListener('input', () => { if (card._av) card._av.onChange(); });
+    // Karten-Titel live mitnehmen (grauer Platzhalter → blauer Titel)
+    card._edit.syncTitle = AV.bindTitleSync(card._edit.titleInput, (v) => {
+      const t = v.trim();
+      const el = card.querySelector('.sq-title');
+      if (el) {
+        el.innerHTML = renderCaptionMath(t || 'Neues Kapitel');
+        el.classList.toggle('text-gray-400', !t);
+        el.classList.toggle('text-blue-600', !!t);
+      }
+      card.setAttribute('data-section-title', t || 'Neues Kapitel');
+    });
 
     // Toolbar: „Fertig“ + Versions-History links + Auge (Sichtbarkeit) rechts —
     // konsistent zum Edit-Modus bestehender Kapitel
@@ -740,6 +760,7 @@
         card._edit.titleInput.value = p.title || '';
         mdEditorSet(card._edit.contentEditor, card._edit.contentTa, p.content || '');
         mdEditorSet(card._edit.summaryEditor, card._edit.summaryTa, p.summary || '');
+        card._edit.syncTitle();
       },
       shouldSave: (p) => !!p.title.trim(), // erst mit Titel anlegen
       onSaved: ({ created, id }) => {

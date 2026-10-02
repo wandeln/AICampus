@@ -260,6 +260,15 @@
     llm_description: descInput.value,
   });
 
+  // Titel live synchron halten: Browser-Tab (die Seite zeigt sonst
+  // nirgends den Applet-Titel)
+  const courseName = {{ course.name | tojson }};
+  const originalTab = document.title;
+  const syncAppletTitle = AV.bindTitleSync(titleInput, (v) => {
+    const t = v.trim();
+    document.title = t ? "AICampus - " + t + " — " + courseName : originalTab;
+  });
+
   const av = AV.create({
     entityType: "applet",
     entityId: mediaId,
@@ -283,6 +292,7 @@
       titleInput.value = p.title || "";
       descInput.value = p.llm_description || "";
       codeCM.setValue(p.html || "");
+      syncAppletTitle();
     },
     shouldSave: (p) => !!p.title.trim() && !!p.html.trim(),
     onRestored: () => updatePreview(),
@@ -758,6 +768,7 @@
       if (!res.ok) throw new Error(data.detail || "Fehler beim Laden des Applets.");
       codeCM.setValue(data.html);
       titleInput.value = data.title;
+      syncAppletTitle();
       descInput.value = data.llm_description || "";
       updatePreview();
       // setValue o. ä. haben onChange-Events ausgelöst → Baseline setzen,
@@ -793,7 +804,7 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "LLM-Fehler.");
       codeCM.setValue(data.html);
-      if (data.title) titleInput.value = data.title;
+      if (data.title) { titleInput.value = data.title; syncAppletTitle(); }
       if (data.description) descInput.value = data.description;
       updatePreview();
       // Titel/Beschreibung wurden programmatisch gesetzt (keine input-Events)

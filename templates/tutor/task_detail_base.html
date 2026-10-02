@@ -46,7 +46,7 @@
     {% endif %}
 
     <div class="flex flex-col gap-3">
-      <h1 class="text-2xl font-bold text-gray-900">
+      <h1 id="task-title-heading" class="text-2xl font-bold text-gray-900">
         {% if task %}{{ task.title }} — Bearbeiten{% else %}Neue Aufgabe erstellen{% endif %}
       </h1>
       {% if is_tutor %}
@@ -304,6 +304,17 @@ class PrivateTest(unittest.TestCase):
   // Template-Variante dieser Seite (Typ-Wechsel per Restore → Reload,
   // damit die passende Sektion/Dateibaum-Vorlage geladen wird).
   const PAGE_TYPE = {{ tpl_type|tojson }};
+  // Titel live synchron halten: Kopfzeile + Browser-Tab (bei leerem
+  // Titel bleibt der Ursprungs-Text stehen)
+  const taskTitleHeading = document.getElementById("task-title-heading");
+  const taskTitleInput = document.querySelector('input[name="title"]');
+  const originalTab = document.title;
+  const initialHeading = taskTitleHeading ? taskTitleHeading.textContent.trim() : "";
+  const syncTaskTitle = AV.bindTitleSync(taskTitleInput, (v) => {
+    const t = v.trim();
+    if (taskTitleHeading) taskTitleHeading.textContent = t ? t + " — Bearbeiten" : (initialHeading || "Neue Aufgabe erstellen");
+    document.title = t ? "AICampus - " + t : originalTab;
+  });
   const av = AV.create({
     entityType: "task",
     entityId: (function () {
@@ -626,6 +637,7 @@ class PrivateTest(unittest.TestCase):
 
       if (generateFields.title && data.title) {
         document.querySelector('input[name="title"]').value = data.title;
+        syncTaskTitle();
         populated.push("Titel");
       }
 
@@ -805,6 +817,7 @@ class PrivateTest(unittest.TestCase):
     const form = document.getElementById("task-form");
     const titleInput = form.querySelector('input[name="title"]');
     if (titleInput) titleInput.value = p.title || "";
+    syncTaskTitle();
     const typeSel = form.querySelector('select[name="task_type"]');
     if (typeSel && typeSel.value !== (p.task_type || "text")) {
       typeSel.value = p.task_type || "text";

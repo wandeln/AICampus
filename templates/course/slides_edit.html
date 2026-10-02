@@ -59,7 +59,7 @@
         <span id="av-slides-slot" class="inline-flex items-center gap-2"></span>
         {% endif %}
       </div>
-      <h2 class="text-xl font-bold text-gray-800">{{ material.title }}</h2>
+      <h2 id="material-title-heading" class="text-xl font-bold text-gray-800">{{ material.title }}</h2>
       {% if is_tutor or is_admin %}
       <p class="text-sm text-gray-500 mt-1 flex items-center gap-1.5">
         <span class="inline-flex" style="color: {% if material.is_visible %}#9ca3af{% else %}#d1d5db{% endif %}">
@@ -293,6 +293,7 @@
   // Klammer + Raute“ schreiben — das Template wird pro Request neu
   // geparsed und bricht mit einem Jinja-Kommentar im JS-Code ab (500).
   const material = {{ material | tojson }};  // {id, title, material_type, is_visible}
+  const courseName = {{ course.name | tojson }};
   const theme = {{ slides_theme | tojson }}; // aufgelöstes Folien-Theme
   let currentVisible = material.is_visible;
 
@@ -671,7 +672,7 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "LLM-Generierung fehlgeschlagen.");
 
-      if (data.title) titleInput.value = data.title;
+      if (data.title) { titleInput.value = data.title; syncTitle(); }
       if (data.content) {
         contentSet(data.content);
         renderPreview(data.content);
@@ -843,6 +844,14 @@
     content: contentGet(),
     summary: summaryInput.value,
   });
+  // Titel live synchron halten: Kopfzeile + Browser-Tab
+  const titleHeading = document.getElementById("material-title-heading");
+  const originalTab = document.title;
+  const syncTitle = AV.bindTitleSync(titleInput, (v) => {
+    const t = v.trim();
+    if (titleHeading) titleHeading.textContent = t || material.title;
+    document.title = t ? "AICampus - " + t + " — " + courseName : originalTab;
+  });
   const av = AV.create({
     entityType: "slide_deck",
     entityId: material.id,
@@ -851,6 +860,7 @@
       titleInput.value = p.title || "";
       contentSet(p.content || "");
       summaryInput.value = p.summary || "";
+      syncTitle();
     },
     hostEl: document.getElementById("av-slides-slot"),
   });
