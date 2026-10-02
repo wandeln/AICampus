@@ -11,7 +11,6 @@ import logging
 import mimetypes
 import re
 import shutil
-import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -48,7 +47,6 @@ from services.export_service import ExportService
 from services.grading_service import GradingService
 from services.llm_service import LLMService
 from services.media_service import all_media_for_course, sync_media_usages
-from services.import_service import spawn_job
 from services.references_service import build_references_text
 from services.settings_resolver import get_effective_compute_config, get_effective_llm_config
 from services.workspace_presets import (
@@ -2705,111 +2703,8 @@ async def download_submission_package(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# WORKSPACE: RERUN + RUN-HISTORIE (Tutor)
+# WORKSPACE: RUN-HISTORIE (Tutor)
 # ═══════════════════════════════════════════════════════════════════
-
-async def _run_rerun_background(task_id: int, submission_id: int, run_db_id: int) -> None:
-    """Test-Lauf (hiddenes test_private.sh) einer Einreichung im
-    Hintergrund (eigener Session; spiegelt den Grading-Lauf aus
-    grading_service._grade_workspace)."""
-    from services.compute_client import ComputeAgentError
-    from services.workspace_service import MAX_LOG_CHARS, ensure_fresh_workspace
-
-    with Session(engine) as bg_session:
-        run = bg_session.get(WorkspaceRun, run_db_id)
-        if run is None:
-            return
-        task = bg_session.get(Task, task_id)
-        submission = bg_session.get(Submission, submission_id)
-        if not (task and submission):
-            run.status = WorkspaceRunStatus.KILLED
-            run.stderr = "[rerun] Aufgabe oder Einreichung nicht mehr vorhanden"
-            run.finished_at = datetime.now()
-            bg_session.add(run)
-            bg_session.commit()
-            return
-
-        client = None
-        key = None
-        try:
-            judge = workspace_service.judge_script_path(bg_session, task)
-            command = f"bash {judge}" if judge else None
-            if not command:
-                raise ValueError(
-                    "Kein .test_private.sh (hidden) hinterlegt")
-            agent = workspace_service.pick_task_agent(bg_session, task)
-            if agent is None:
-                raise ValueError("Kein Compute-Agent für diesen Kurs verfügbar")
-            client = workspace_service.client_for(agent)
-            key = workspace_service.grading_key(task, submission.id)
-            run.command = command
-            bg_session.add(run)
-            bg_session.commit()
-
-            starter = workspace_service.grading_starter_files(
-                bg_session, task, submission)
-            folders = workspace_service.materialize_folders(
-                bg_session, task, include_hidden=True)
-            spec_for_agent = workspace_service.workspace_spec_for_agent(
-                bg_session, task, agent)
-            await asyncio.to_thread(
-                ensure_fresh_workspace, client, key, spec_for_agent,
-                starter, folders)
-            result = await asyncio.to_thread(
-                client.exec_sync, key, command, task.workspace_timeout)
-            run.status = (WorkspaceRunStatus.TIMEOUT if result.get("timed_out")
-                          else WorkspaceRunStatus.DONE)
-            run.exit_code = result.get("exit_code")
-            run.stdout = str(result.get("stdout") or "")[-MAX_LOG_CHARS:]
-            run.stderr = str(result.get("stderr") or "")[-MAX_LOG_CHARS:]
-        except Exception as e:  # noqa: BLE001 — Fehler landet in stderr der Run-Row
-            if run.status == WorkspaceRunStatus.RUNNING:
-                run.status = WorkspaceRunStatus.KILLED
-            err = f"[rerun] {e}"
-            run.stderr = (run.stderr + chr(10) + err) if run.stderr else err
-        run.finished_at = datetime.now()
-        bg_session.add(run)
-        bg_session.commit()
-        if client is not None and key is not None:
-            try:
-                await asyncio.to_thread(client.delete_workspace, key)
-            except Exception:  # noqa: BLE001 — Best-Effort-Cleanup
-                pass
-
-
-@router.post("/tasks/{task_id}/submissions/{submission_id}/rerun")
-async def rerun_submission(
-    task_id: int,
-    submission_id: int,
-    session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
-):
-    """Führt den Verify-Lauf einer Workspace-Einreichung neu aus (unabhängiger
-    Testlauf neben dem Grading). Erscheint in der Run-Historie der Einreichung."""
-    task = await _load_workspace_task(task_id, session, user)
-    _require_workspace_task(task)
-    submission = session.get(Submission, submission_id)
-    if not submission or submission.task_id != task.id:
-        raise HTTPException(404, "Einreichung nicht gefunden.")
-    if not submission.workspace_snapshot:
-        raise HTTPException(400, "Kein Workspace-Snapshot bei dieser Einreichung.")
-    if not workspace_service.is_enabled(session, task.course_id):
-        raise HTTPException(503, "Compute für diesen Kurs ist nicht aktiv.")
-
-    run = WorkspaceRun(
-        run_id=f"rerun-{int(time.time() * 1000)}-{submission.id}",
-        task_id=task.id,
-        student_id=submission.student_id,
-        submission_id=submission.id,
-        command="",
-        started_at=datetime.now(),
-        status=WorkspaceRunStatus.RUNNING,
-    )
-    session.add(run)
-    session.commit()
-    session.refresh(run)
-    spawn_job(_run_rerun_background(task.id, submission.id, run.id))
-    return {"run_id": run.id, "status": "running"}
 
 
 @router.get("/tasks/{task_id}/submissions/{submission_id}/runs")
@@ -2819,7 +2714,7 @@ async def list_submission_runs(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Run-Historie einer Einreichung (Grading-Läufe + Tutor-Reruns), neueste zuerst."""
+    """Run-Historie einer Einreichung (Grading-Läufe), neueste zuerst."""
     task = await _load_workspace_task(task_id, session, user)
     _require_workspace_task(task)
     submission = session.get(Submission, submission_id)

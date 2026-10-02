@@ -442,6 +442,18 @@
       }
       card.appendChild(solSection);
 
+      // ── Workspace: Test-Ergebnisse (Grading-Läufe) ─────────────
+      // Direkt unter der Workspace-Ansicht: dieselben stdout/stderr-
+      // Läufe, die auch beim Grading ans LLM gegangen sind.
+      // Jeder Lauf ist eine eigene Aufklappbox; das Label
+      // „🧪 Test-Ergebnisse:" steht als Präfix im Summary.
+      if (isWorkspace && data.task.id && sub.id) {
+        var runsSection = document.createElement('div');
+        runsSection.id = 'ws-runs-' + sub.id;
+        runsSection.className = 'mb-4 space-y-1.5';
+        card.appendChild(runsSection);
+      }
+
       // ── Workspace: Download-Buttons ────────────────────────────
       if (isWorkspace && data.task.id && sub.id) {
         var dlSection = document.createElement('div');
@@ -460,23 +472,6 @@
           '</a>' +
           '</div>';
         card.appendChild(dlSection);
-
-        // ── Workspace: Rerun (Verify) + Run-Historie ────────────
-        var wsSection = document.createElement('div');
-        wsSection.className = 'mb-4';
-        wsSection.innerHTML =
-          '<div class="flex items-center gap-3">' +
-            '<button id="ws-rerun-' + sub.id + '" class="text-emerald-700 hover:text-emerald-900 border border-emerald-300 hover:border-emerald-500 px-3 py-1.5 rounded-lg transition text-sm" ' +
-            'title="Verify-Befehl der Aufgabe in einem frischen Container ausführen (Student-Snapshot + private Tests)">' +
-            '↻ Neu ausführen (Verify)' +
-            '</button>' +
-            '<span id="ws-rerun-status-' + sub.id + '" class="text-xs text-gray-500"></span>' +
-          '</div>' +
-          '<div id="ws-runs-' + sub.id + '" class="mt-2"></div>';
-        card.appendChild(wsSection);
-        wsSection.querySelector('#ws-rerun-' + sub.id).addEventListener('click', function() {
-          wsRerun(data.task.id, sub.id, this);
-        });
       }
 
       // ── Separate LLM and human feedback ────────────────────────
@@ -847,18 +842,19 @@
     });
   }
 
-  // ─── Workspace: Rerun (Verify) + Run-Historie ─────────────────
+  // ─── Workspace: Test-Ergebnisse (Grading-Läufe) ───────────────
 
   function wsRunBadge(status) {
     var styles = {
       running: 'bg-yellow-100 text-yellow-800',
-      done: 'bg-green-100 text-green-800',
       timeout: 'bg-red-100 text-red-800',
       killed: 'bg-gray-200 text-gray-700',
     };
-    var labels = { running: 'läuft …', done: 'erfolgreich', timeout: 'Timeout', killed: 'Fehler' };
-    return '<span class="badge ' + (styles[status] || 'bg-gray-100 text-gray-700') + '">' +
-      (labels[status] || status) + '</span>';
+    var labels = { running: 'läuft …', timeout: 'Timeout', killed: 'Fehler' };
+    // Kein Badge für "done": es bedeutet nur "der Lauf ist abgeschlossen",
+    // nicht "alle Tests bestanden" — dafür steht der Exit-Code.
+    if (!styles[status]) return '';
+    return '<span class="badge ' + styles[status] + '">' + labels[status] + '</span>';
   }
 
   async function wsLoadRuns(taskId, subId) {
@@ -872,17 +868,19 @@
     } catch (e) {
       return;
     }
-    if (!data.runs || data.runs.length === 0) {
-      box.innerHTML = '<div class="text-xs text-gray-400">Noch keine Runs (Grading/Rerun) für diese Einreichung.</div>';
+    var runs = data.runs || [];
+    if (runs.length === 0) {
+      box.innerHTML = '<div class="text-xs text-gray-400">Noch keine Test-Ergebnisse für diese Einreichung.</div>';
       return;
     }
     box.innerHTML = '';
-    data.runs.forEach(function(r) {
+    runs.forEach(function(r) {
       var d = document.createElement('details');
-      d.className = 'bg-gray-50 rounded-lg border border-gray-200 mb-1.5';
+      d.className = 'bg-gray-50 rounded-lg border border-gray-200';
       var ec = (r.exit_code === null || r.exit_code === undefined) ? '—' : r.exit_code;
       d.innerHTML =
         '<summary class="cursor-pointer px-3 py-2 text-sm flex items-center gap-2 flex-wrap">' +
+          '<span class="font-semibold text-gray-600">🧪 Test-Ergebnisse:</span>' +
           wsRunBadge(r.status) +
           '<span class="text-gray-600">' + formatDate(r.started_at) + '</span>' +
           '<span class="text-xs text-gray-400 font-mono">exit ' + ec + '</span>' +
@@ -894,49 +892,6 @@
         '</div>';
       box.appendChild(d);
     });
-  }
-
-  async function wsRerun(taskId, subId, btn) {
-    btn.disabled = true;
-    var statusEl = document.getElementById('ws-rerun-status-' + subId);
-    statusEl.textContent = 'Starte Verify-Lauf …';
-    try {
-      var res = await fetch('/api/tasks/' + taskId + '/submissions/' + subId + '/rerun', { method: 'POST' });
-      var data = await res.json();
-      if (!res.ok) {
-        statusEl.textContent = 'Fehler: ' + (data.detail || res.status);
-        btn.disabled = false;
-        return;
-      }
-    } catch (e) {
-      statusEl.textContent = 'Fehler: ' + e;
-      btn.disabled = false;
-      return;
-    }
-    statusEl.textContent = 'Läuft …';
-    // 3s-Polling (max. 20 min), bis der Run abgeschlossen ist
-    var start = Date.now();
-    var timer = setInterval(async function() {
-      var done = false;
-      try {
-        var rr = await fetch('/api/tasks/' + taskId + '/submissions/' + subId + '/runs');
-        var rd = rr.ok ? await rr.json() : null;
-        if (rd && rd.runs && rd.runs.length > 0) {
-          var latest = rd.runs[0];
-          if (latest.status !== 'running') {
-            done = true;
-            statusEl.textContent = (latest.status === 'done' ? '✅' : '❌') + ' ' +
-              (latest.status === 'done' ? 'Fertig' : latest.status) + ' (exit ' + latest.exit_code + ')';
-          }
-        }
-      } catch (e) { /* transient — nächste Runde */ }
-      if (done || Date.now() - start > 20 * 60 * 1000) {
-        clearInterval(timer);
-        btn.disabled = false;
-        if (!done) statusEl.textContent = '⏳ Läuft noch (>20 min) — Status unten in der Historie';
-        wsLoadRuns(taskId, subId);
-      }
-    }, 3000);
   }
 
   // ─── Initial Load ─────────────────────────────────────────────
