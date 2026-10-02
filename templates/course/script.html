@@ -1792,30 +1792,68 @@
   const SQ_NS_RE = /[\s\u200b\u200c\u200d\u2060\u2061\u2062\u2063\u2064\ufeff]/;
   const SQ_NS_RE_G = new RegExp(SQ_NS_RE.source, 'g');
 
+  // Range in Volltext-Koordinaten (Anfang/Ende im sqBuildTextMap-Volltext)
+  // in Start-/End-Node + Offset umwandeln.
+  function sqRangeFromFull(nodes, fullStart, fullEnd) {
+    let offset = 0;
+    let start = null;
+    let end = null;
+    for (const node of nodes) {
+      const len = node.nodeValue.length;
+      if (!start && offset + len > fullStart) start = { node, offset: fullStart - offset };
+      if (offset + len >= fullEnd) {
+        end = { node, offset: Math.min(fullEnd - offset, len) };
+        break;
+      }
+      offset += len;
+    }
+    if (!start || !end) return null;
+    return { start, end };
+  }
+
   // Suche die Quote im Abschnitts-Text (Whitespace-tolerant, best-effort).
   // innerStart/innerLen: nur einen Teilbereich des Treffers zurückgeben
   // (wenn die „Quote“ ein größerer Kontext ist, der die eigentliche
-  // Auswahl enthält).
+  // Auswahl enthält); ohne innerLen wird der ganze Treffer markiert.
   function sqFindQuoteIn(root, quote, innerStart = 0, innerLen = 0) {
     const target = sqNormalize(quote);
     if (!target) return null;
     const { nodes, norm, pos } = sqBuildTextMap(root);
 
+    // Inner-Range normalisieren: ohne innerLen ist das ganze Ziel die
+    // Quote (ältere Fragen ohne Kontext).
+    const iStart = Math.max(0, Math.min(innerStart, target.length));
+    const iLen = innerLen > 0
+      ? Math.min(innerLen, target.length - iStart)
+      : target.length - iStart;
+    // Projektion des Inner-Range auf NS-Koordinaten (für den Fallback):
+    // nsStart = Anzahl Nicht-NS-Zeichen vor dem Range, nsLen = Anzahl
+    // Nicht-NS-Zeichen im Range.
+    let nsStart = 0;
+    let nsLen = 0;
+    for (let i = 0; i < target.length; i++) {
+      if (SQ_NS_RE.test(target[i])) continue;
+      if (i < iStart) nsStart++;
+      else if (i < iStart + iLen) nsLen++;
+    }
+
     let origStart = null;
     let origEnd = null;
     const idx = norm.indexOf(target);
     if (idx >= 0) {
-      const from = idx + Math.max(0, Math.min(innerStart, target.length));
-      const to = innerLen > 0
-        ? Math.min(from + innerLen, idx + target.length)
-        : idx + target.length;
+      // Exakter Treffer: 1:1-Mapping, Inner-Range direkt verwendbar
+      const from = idx + iStart;
+      const to = from + iLen;
       if (to > from) {
         origStart = pos[from];
         origEnd = pos[to - 1] + 1;
       }
     } else {
       // Fallback: Whitespace/Unsichtbar-Zeichen ignorieren (repariert
-      // ältere Quotes, deren Leerzeichen vom DOM-Text abweichen)
+      // ältere Quotes, deren Leerzeichen vom DOM-Text abweichen).
+      // Der Inner-Range wird über die NS-Projektion auf den Treffer
+      // gemappt – ohne das würde der komplette Kontext (statt der Quote)
+      // markiert.
       const targetNs = target.replace(SQ_NS_RE_G, '');
       if (targetNs.length >= 8) {
         let normNs = '';
@@ -1827,27 +1865,17 @@
         }
         const idxNs = normNs.indexOf(targetNs);
         if (idxNs >= 0) {
-          origStart = posNs[idxNs];
-          origEnd = posNs[idxNs + targetNs.length - 1] + 1;
+          const from = idxNs + nsStart;
+          const to = from + nsLen;
+          if (to > from) {
+            origStart = posNs[from];
+            origEnd = posNs[to - 1] + 1;
+          }
         }
       }
     }
     if (origStart === null || origEnd === null) return null;
-
-    let offset = 0;
-    let start = null;
-    let end = null;
-    for (const node of nodes) {
-      const len = node.nodeValue.length;
-      if (!start && offset + len > origStart) start = { node, offset: origStart - offset };
-      if (offset + len >= origEnd) {
-        end = { node, offset: Math.min(origEnd - offset, len) };
-        break;
-      }
-      offset += len;
-    }
-    if (!start || !end) return null;
-    return { start, end };
+    return sqRangeFromFull(nodes, origStart, origEnd);
   }
 
   // ── Robuste Range-Grenzenlogik ─────────────────────────────────
@@ -2055,16 +2083,87 @@
   }
 
   // Zitierte Stelle einer Frage im Abschnitt suchen.
-  // Mit Kontext: nur dann gefunden, wenn der Kontext noch exakt im Skript
-  // vorkommt — wurde das Skript geändert, bleibt die Stelle unmarkiert
-  // (eine Bare-Quote-Suche würde ggf. an eine falsche Stelle zeigen).
+  // Mit Kontext: gefunden, wenn der Kontext (exakt oder whitespace-
+  // tolerant) noch im Skript vorkommt. Ist der Kontext veraltet (Skript
+  // wurde geändert), wird die Quote anhand des gespeicherten Umfelds
+  // wieder verortet (sqFindStaleQuote) – unmarkiert bleibt die Stelle
+  // nur, wenn die Quote mehrdeutig und kein Umfeld eindeutig genug ist,
+  // damit nie eine falsche Stelle markiert wird.
   // Ohne Kontext (ältere Fragen): bare Quote.
   function sqFindQuestionQuote(contentEl, q) {
     if (!q.quote) return null;
     if (q.quote_ctx) {
-      return sqFindQuoteIn(contentEl, q.quote_ctx, q.quote_off || 0, q.quote.length);
+      const found = sqFindQuoteIn(contentEl, q.quote_ctx, q.quote_off || 0, q.quote.length);
+      if (found) return found;
+      return sqFindStaleQuote(contentEl, q);
     }
     return sqFindQuoteIn(contentEl, q.quote);
+  }
+
+  // Veralteter Kontext (Skript wurde seit der Frage-Anerstellung
+  // geändert): Die Quote selbst suchen und über das gespeicherte Umfeld
+  // (je 120 Zeichen vor/nach der Quote im Kontext) die wahrscheinlichste
+  // Stelle bestimmen. Markiert wird nur, wenn die Quote eindeutig ist
+  // ODER das beste Umfeld deutlich besser passt als ein zufälliger
+  // Treffer (LCS-Ähnlichkeit ≥ SQ_STALE_CTX_MIN_SIMILARITY).
+  const SQ_STALE_CTX_MIN_SIMILARITY = 0.75;
+  function sqFindStaleQuote(contentEl, q) {
+    const t = sqNormalize(q.quote);
+    if (!t) return null;
+    const { nodes, norm, pos } = sqBuildTextMap(contentEl);
+    const occ = [];
+    let idx = 0;
+    while ((idx = norm.indexOf(t, idx)) >= 0) {
+      occ.push(idx);
+      idx += Math.max(1, t.length);
+    }
+    if (occ.length === 0) return null;
+    if (occ.length === 1) {
+      return sqRangeFromFull(nodes, pos[occ[0]], pos[occ[0] + t.length - 1] + 1);
+    }
+    const ctx = sqNormalize(q.quote_ctx);
+    const off = Math.max(0, Math.min(q.quote_off || 0, Math.max(0, ctx.length - t.length)));
+    if (ctx.slice(off, off + t.length) !== t) return null; // inkonsistente Daten
+    let best = null;
+    let bestScore = 0;
+    for (const i of occ) {
+      const score = sqCtxWindowSimilarity(ctx, off, t.length, norm, i);
+      if (score > bestScore) { bestScore = score; best = i; }
+    }
+    if (best === null || bestScore < SQ_STALE_CTX_MIN_SIMILARITY) return null;
+    return sqRangeFromFull(nodes, pos[best], pos[best + t.length - 1] + 1);
+  }
+
+  // Ähnlichkeit (LCS-Anteil) zwischen gespeichertem Umfeld (Kontext je
+  // 120 Zeichen vor/nach der Quote) und dem tatsächlichen Umfeld an
+  // einer Vorkommnis-Stelle im Abschnittstext.
+  function sqCtxWindowSimilarity(ctx, off, quoteLen, norm, occIdx) {
+    const W = 120;
+    const bLen = Math.min(W, off, occIdx);
+    const aLen = Math.min(W, ctx.length - (off + quoteLen), norm.length - (occIdx + quoteLen));
+    const beforeC = ctx.slice(off - bLen, off);
+    const afterC = ctx.slice(off + quoteLen, off + quoteLen + aLen);
+    const beforeD = norm.slice(occIdx - bLen, occIdx);
+    const afterD = norm.slice(occIdx + quoteLen, occIdx + quoteLen + aLen);
+    const total = beforeC.length + afterC.length;
+    if (total === 0) return 0;
+    return (sqLcsLen(beforeC, beforeD) + sqLcsLen(afterC, afterD)) / total;
+  }
+
+  // Länge der längsten gemeinsamen Teilsequenz (DP; Fenster ≤ 120 Zeichen).
+  function sqLcsLen(a, b) {
+    if (!a.length || !b.length) return 0;
+    let prev = new Array(b.length + 1).fill(0);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [0];
+      for (let j = 1; j <= b.length; j++) {
+        cur[j] = a[i - 1] === b[j - 1]
+          ? prev[j - 1] + 1
+          : Math.max(prev[j], cur[j - 1]);
+      }
+      prev = cur;
+    }
+    return prev[b.length];
   }
 
   function sqApplyMarksToSection(contentEl, sectionId) {
