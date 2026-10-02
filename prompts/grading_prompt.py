@@ -53,6 +53,7 @@ Bewertungskriterien:
 
 Sei nicht zu knauserig bei der Punktevergabe, halte dich aber dennoch an die Bewertungskriterien um fair zu bleiben.
 Sei lieber etwas großzügig und erkläre dafür auf motivierende Art, wie Dinge noch verbessert werden könnten, wenn man ganz penibel wäre.
+Bitte Antworte in der Sprache der Aufgabenstellung!
 """
 
 
@@ -110,6 +111,7 @@ Beruecksichtige bei der Bewertung:
 Begründe in deinem motivierendem Feedback genau, wie die Punktebewertung zustande gekommen ist (insbesondere, wofür es wieviele Punkte Abzug gab).
 Sei nicht zu knauserig bei der Punktevergabe, halte dich aber dennoch an die Bewertungskriterien um fair zu bleiben.
 Sei lieber etwas großzügig und erkläre dafür auf motivierende Art, wie Dinge noch verbessert werden könnten, wenn man ganz penibel wäre.
+Bitte Antworte in der Sprache der Aufgabenstellung!
 """
 
 
@@ -170,6 +172,7 @@ Beruecksichtige bei der Bewertung:
 Begründe in deinem motivierendem Feedback genau, wie die Punktebewertung zustande gekommen ist (insbesondere, wofür es wieviele Punkte Abzug gab).
 Sei nicht zu knauserig bei der Punktevergabe, halte dich aber dennoch an die Bewertungskriterien um fair zu bleiben.
 Sei lieber etwas großzügig und erkläre dafür auf motivierende Art, wie Dinge noch verbessert werden könnten, wenn man ganz penibel wäre.
+Bitte Antworte in der Sprache der Aufgabenstellung!
 """
 
 
