@@ -1397,6 +1397,7 @@ async def get_student_submissions(
             "id": sub.id,
             "solution": sub.solution,
             "code_solution": sub.code_solution,
+            "workspace_snapshot": bool(sub.workspace_snapshot),
             "attempt_number": sub.attempt_number,
             "submitted_at": sub.submitted_at.isoformat() if sub.submitted_at else "",
             "status": sub.status.value,

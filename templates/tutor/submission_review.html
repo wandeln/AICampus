@@ -166,6 +166,8 @@
 {% endblock %}
 
 {% block extra_head %}
+<link rel="stylesheet" href="{{ asset('css/workspace.css') }}">
+<script src="{{ asset('js/workspace.js') }}"></script>
 <style>
   :root {
     --navbar-height: 60px;
@@ -380,14 +382,64 @@
       }
       solSection.innerHTML = '<h4 class="text-sm font-semibold text-gray-600 mb-2 flex items-baseline gap-2">Lösung des Students' + timeHtml + '</h4>';
 
-      var solContainer = document.createElement('div');
-      solContainer.className = 'solution-container';
-      if (isCode) {
-        renderMarkdown('```python\n' + sub.code_solution + '\n```', solContainer);
+      if (isWorkspace) {
+        // Read-only Snapshot-Ansicht (gleiche Komponente wie die
+        // Studentenseite; ohne Terminals/Ports/Schreibrechte)
+        var wsBox = document.createElement('div');
+        wsBox.className = 'text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3';
+        wsBox.innerHTML = '📦 Workspace-Abgabe (Snapshot des Containers: ' + escapeHtml(sub.solution || 'deine Dateien') + ')' +
+          '<span class="block text-xs text-indigo-500 mt-0.5">Read-only — Stand zum Einreichzeitpunkt</span>';
+        solSection.appendChild(wsBox);
+
+        if (sub.workspace_snapshot) {
+          var wsWrap = document.createElement('div');
+          wsWrap.className = 'ws-tree-editor-wrap flex flex-col sm:flex-row h-[540px] sm:h-[420px] border border-gray-200 rounded-lg overflow-hidden bg-white';
+          wsWrap.innerHTML =
+            '<div class="flex flex-col h-[220px] sm:h-auto sm:w-56 shrink-0 border-b sm:border-b-0 sm:border-r border-gray-200 bg-gray-50">' +
+            '<div class="flex items-center gap-1 p-1.5 border-b border-gray-200 bg-gray-100">' +
+            '<span class="text-[11px] text-gray-500 truncate flex-1">Dateien zum Einreichzeitpunkt</span>' +
+            '<button type="button" id="ws-files-fullscreen-btn" title="Vollbild" class="ws-tree-btn">⛶</button>' +
+            '</div>' +
+            '<div id="ws-sub-' + sub.id + '-tree" class="flex-1 min-h-0 overflow-y-auto p-1 text-sm">' +
+            '<div class="text-gray-400 text-xs p-1">Dateien werden geladen …</div>' +
+            '</div>' +
+            '</div>' +
+            '<div id="ws-split-handle" class="ws-split-handle" role="separator" title="Ziehen: Baum/Editor vergrößern · Doppelklick: Standardgröße"></div>' +
+            '<div class="flex-1 min-h-0">' +
+            '<div class="ws-editor w-full h-full min-h-0">' +
+            '<textarea id="ws-sub-' + sub.id + '-editor" class="w-full h-full font-mono text-sm" spellcheck="false" placeholder="Datei links auswählen, um sie anzusehen …"></textarea>' +
+            '<div id="ws-sub-' + sub.id + '-media" class="hidden h-full"></div>' +
+            '</div>' +
+            '</div>' +
+            '</div>';
+          solSection.appendChild(wsWrap);
+          if (window.WorkspaceUI) {
+            var wsUi = WorkspaceUI.init({
+              treeEl: wsWrap.querySelector('#ws-sub-' + sub.id + '-tree'),
+              editorEl: wsWrap.querySelector('#ws-sub-' + sub.id + '-editor'),
+              mediaEl: wsWrap.querySelector('#ws-sub-' + sub.id + '-media'),
+              apiBase: '/api/student/submissions/' + sub.id + '/workspace',
+              readOnlyCheck: function () { return true; },
+              emptyMsg: '(keine Dateien in dieser Abgabe)',
+            });
+            wsUi.refresh();
+          }
+        } else {
+          var noSnap = document.createElement('p');
+          noSnap.className = 'text-gray-400 text-sm italic';
+          noSnap.textContent = 'Kein Snapshot erhalten.';
+          solSection.appendChild(noSnap);
+        }
       } else {
-        renderMarkdown(sub.solution, solContainer);
+        var solContainer = document.createElement('div');
+        solContainer.className = 'solution-container';
+        if (isCode) {
+          renderMarkdown('```python\n' + sub.code_solution + '\n```', solContainer);
+        } else {
+          renderMarkdown(sub.solution, solContainer);
+        }
+        solSection.appendChild(solContainer);
       }
-      solSection.appendChild(solContainer);
       card.appendChild(solSection);
 
       // ── Workspace: Download-Buttons ────────────────────────────
@@ -425,7 +477,6 @@
         wsSection.querySelector('#ws-rerun-' + sub.id).addEventListener('click', function() {
           wsRerun(data.task.id, sub.id, this);
         });
-        wsLoadRuns(data.task.id, sub.id);
       }
 
       // ── Separate LLM and human feedback ────────────────────────
@@ -551,6 +602,12 @@
       card.appendChild(editPanel);
 
       container.appendChild(card);
+      // Run-Historie erst nach dem Einfügen in das DOM laden —
+      // wsLoadRuns findet die Box per getElementById, das liefert für
+      // noch getrennte Karten null (und bricht stumm ab).
+      if (isWorkspace && data.task.id && sub.id) {
+        wsLoadRuns(data.task.id, sub.id);
+      }
       subIndex++;
     });
   }

@@ -363,7 +363,12 @@
     // Orientation folgt dem Layout-Breakpoint (sm = 640 px):
     // Desktop (Zeilen) ändert die Breite des Tree-Panels,
     // Mobile (Spalten) seine Höhe. Doppelklick = Standardgröße.
-    const splitHandle = document.getElementById("ws-split-handle");
+    // Scoped auf DIESE Instanz (Tree-Wrapper statt Dokument): Task-Seiten
+    // können neben dem Live-Workspace mehrere read-only Abgabe-Workspaces
+    // betten — gleiche IDs, jede Instanz findet ihre eigenen Elemente.
+    const instanceWrap = treeEl ? treeEl.closest(".ws-tree-editor-wrap") : null;
+    const splitHandle = instanceWrap
+      ? instanceWrap.querySelector("#ws-split-handle") : null;
     const splitPanel = splitHandle && treeEl ? treeEl.parentElement : null;
     const splitWrap = splitHandle ? splitHandle.closest(".ws-tree-editor-wrap") : null;
     const SPLIT_MIN = 180;
@@ -427,8 +432,10 @@
     // Toggle-Button in der Tree-Toolbar (beide Templates). ESC beendet
     // den Modus — das CodeMirror-Search-Dialog konsumiert ESC vor uns
     // (e_stop → stopPropagation), daher keine Kollision.
-    const fsBtn = document.getElementById("ws-fullscreen-btn") ||
-                  document.getElementById("ws-files-fullscreen-btn");
+    const fsBtn = instanceWrap
+      ? (instanceWrap.querySelector("#ws-fullscreen-btn") ||
+         instanceWrap.querySelector("#ws-files-fullscreen-btn"))
+      : null;
     const fsWrap = fsBtn ? fsBtn.closest(".ws-tree-editor-wrap") : null;
     function setFullscreen(on) {
       if (!fsWrap) return;

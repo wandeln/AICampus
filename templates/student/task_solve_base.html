@@ -252,9 +252,52 @@
                 </div>
               {% elif task.task_type == 'workspace' %}
                 {% if sub.workspace_snapshot %}
-                <div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3">
+                <div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3">
                   📦 Workspace-Abgabe (Snapshot des Containers: {{ (sub.solution or 'deine Dateien') }})
+                  <span class="block text-xs text-indigo-500 mt-0.5">
+                    Read-only — Stand zum Einreichzeitpunkt
+                  </span>
                 </div>
+                <!-- Read-only Workspace (gleiche Komponente wie Live-IDE,
+                     ohne Terminals/Ports/Schreibrechte; Snapshot = unveränderbar) -->
+                <div class="ws-tree-editor-wrap flex flex-col sm:flex-row h-[540px] sm:h-[420px] border border-gray-200 rounded-lg overflow-hidden bg-white">
+                  <div class="flex flex-col h-[220px] sm:h-auto sm:w-56 shrink-0 border-b sm:border-b-0 sm:border-r border-gray-200 bg-gray-50">
+                    <div class="flex items-center gap-1 p-1.5 border-b border-gray-200 bg-gray-100">
+                      <span class="text-[11px] text-gray-500 truncate flex-1">Dateien zum Einreichzeitpunkt</span>
+                      <button type="button" id="ws-files-fullscreen-btn" title="Vollbild" class="ws-tree-btn">⛶</button>
+                    </div>
+                    <div id="ws-sub-{{ sub.id }}-tree" class="flex-1 min-h-0 overflow-y-auto p-1 text-sm">
+                      <div class="text-gray-400 text-xs p-1">Dateien werden geladen …</div>
+                    </div>
+                  </div>
+                  <div id="ws-split-handle" class="ws-split-handle"
+                       role="separator"
+                       title="Ziehen: Baum/Editor vergrößern · Doppelklick: Standardgröße"></div>
+                  <div class="flex-1 min-h-0">
+                    <div class="ws-editor w-full h-full min-h-0">
+                      <textarea id="ws-sub-{{ sub.id }}-editor" class="w-full h-full font-mono text-sm" spellcheck="false"
+                                placeholder="Datei links auswählen, um sie anzusehen …"></textarea>
+                      <div id="ws-sub-{{ sub.id }}-media" class="hidden h-full"></div>
+                    </div>
+                  </div>
+                </div>
+                <script>
+                  (function () {
+                    var t = document.getElementById("ws-sub-{{ sub.id }}-tree");
+                    var e = document.getElementById("ws-sub-{{ sub.id }}-editor");
+                    var m = document.getElementById("ws-sub-{{ sub.id }}-media");
+                    if (!t || !e || !window.WorkspaceUI) return;
+                    var ui = WorkspaceUI.init({
+                      treeEl: t,
+                      editorEl: e,
+                      mediaEl: m,
+                      apiBase: "/api/student/submissions/{{ sub.id }}/workspace",
+                      readOnlyCheck: function () { return true; },
+                      emptyMsg: "(keine Dateien in dieser Abgabe)",
+                    });
+                    ui.refresh();  // init lädt keine Dateien selbst
+                  })();
+                </script>
                 {% else %}
                 <p class="text-gray-400 text-sm italic">Kein Snapshot erhalten.</p>
                 {% endif %}
@@ -834,8 +877,32 @@
       let solutionJson = encodeURIComponent(JSON.stringify(submittedText));
 
       let solutionHtml = '';
-      {% if task.task_type == 'code' %}
-      solutionHtml = '<div class="solution-container"><template class="markdown-solution" type="application/json" data-raw="' + solutionJson + '"></template></div>';
+      {% if task.task_type == 'workspace' %}
+      // Workspace: eingebettete read-only Snapshot-Ansicht (gleiche
+      // Komponente wie die Live-IDE, ohne Terminals/Ports/Schreibrechte)
+      solutionHtml =
+        '<div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3">' +
+        '📦 Workspace-Abgabe (Snapshot des Containers: ' + escapeHtml(submittedText) + ')' +
+        '<span class="block text-xs text-indigo-500 mt-0.5">Read-only — Stand zum Einreichzeitpunkt</span>' +
+        '</div>' +
+        '<div class="ws-tree-editor-wrap flex flex-col sm:flex-row h-[540px] sm:h-[420px] border border-gray-200 rounded-lg overflow-hidden bg-white">' +
+        '<div class="flex flex-col h-[220px] sm:h-auto sm:w-56 shrink-0 border-b sm:border-b-0 sm:border-r border-gray-200 bg-gray-50">' +
+        '<div class="flex items-center gap-1 p-1.5 border-b border-gray-200 bg-gray-100">' +
+        '<span class="text-[11px] text-gray-500 truncate flex-1">Dateien zum Einreichzeitpunkt</span>' +
+        '<button type="button" id="ws-files-fullscreen-btn" title="Vollbild" class="ws-tree-btn">⛶</button>' +
+        '</div>' +
+        '<div id="ws-sub-' + submissionId + '-tree" class="flex-1 min-h-0 overflow-y-auto p-1 text-sm">' +
+        '<div class="text-gray-400 text-xs p-1">Dateien werden geladen …</div>' +
+        '</div>' +
+        '</div>' +
+        '<div id="ws-split-handle" class="ws-split-handle" role="separator" title="Ziehen: Baum/Editor vergrößern · Doppelklick: Standardgröße"></div>' +
+        '<div class="flex-1 min-h-0">' +
+        '<div class="ws-editor w-full h-full min-h-0">' +
+        '<textarea id="ws-sub-' + submissionId + '-editor" class="w-full h-full font-mono text-sm" spellcheck="false" placeholder="Datei links auswählen, um sie anzusehen …"></textarea>' +
+        '<div id="ws-sub-' + submissionId + '-media" class="hidden h-full"></div>' +
+        '</div>' +
+        '</div>' +
+        '</div>';
       {% else %}
       solutionHtml = '<div class="solution-container"><template class="markdown-solution" type="application/json" data-raw="' + solutionJson + '"></template></div>';
       {% endif %}
@@ -923,6 +990,28 @@
           }
         });
       }
+
+      {% if task.task_type == 'workspace' %}
+      // Read-only Snapshot-Workspace in der neuen Karte laden
+      // (insertAdjacentHTML führt <script> nicht aus → init direkt rufen;
+      // init lädt keine Dateien selbst, refresh() ist nötig)
+      if (newCard && window.WorkspaceUI) {
+        const wsTree = newCard.querySelector('#ws-sub-' + submissionId + '-tree');
+        const wsEditor = newCard.querySelector('#ws-sub-' + submissionId + '-editor');
+        const wsMedia = newCard.querySelector('#ws-sub-' + submissionId + '-media');
+        if (wsTree && wsEditor) {
+          const wsUi = WorkspaceUI.init({
+            treeEl: wsTree,
+            editorEl: wsEditor,
+            mediaEl: wsMedia,
+            apiBase: '/api/student/submissions/' + submissionId + '/workspace',
+            readOnlyCheck: function () { return true; },
+            emptyMsg: '(keine Dateien in dieser Abgabe)',
+          });
+          wsUi.refresh();
+        }
+      }
+      {% endif %}
 
       // Update progress bars
       updateProgressBars(data);

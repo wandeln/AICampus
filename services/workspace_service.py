@@ -477,6 +477,57 @@ def snapshot_abs_path(snapshot_rel: str) -> Path:
     return WORKSPACE_DIR.parent / snapshot_rel
 
 
+def snapshot_list_files(snapshot_rel: str) -> list[dict]:
+    """Dateiliste eines Workspace-Snapshots (read-only, z. B. Abgabe-Ansicht).
+
+    Liefert [{path, size, is_binary}]. Namens-Normalisierung streicht nur
+    einen exakten „./“-Prefix — NICHT lstrip("./"), das würde führende
+    Dots wegnehmen (.gitignore → gitignore).
+    """
+    p = snapshot_abs_path(snapshot_rel)
+    if not p.is_file():
+        raise HTTPException(404, "Snapshot nicht gefunden.")
+    files = []
+    with tarfile.open(p, "r:gz") as tar:
+        for m in tar.getmembers():
+            if not m.isfile():
+                continue
+            name = m.name.removeprefix("./")
+            name = name.replace("\\", "/").lstrip("/")
+            if not name or any(x == ".." for x in name.split("/")):
+                continue
+            is_binary = False
+            try:
+                f = tar.extractfile(m)
+                if f is not None:
+                    is_binary = b"\x00" in f.read(1024)
+            except (OSError, EOFError):
+                pass
+            files.append({"path": name, "size": m.size, "is_binary": is_binary})
+    return files
+
+
+def snapshot_read_file(snapshot_rel: str, path: str) -> Optional[bytes]:
+    """Inhalt einer Datei aus dem Snapshot (None = nicht enthalten)."""
+    p = snapshot_abs_path(snapshot_rel)
+    if not p.is_file():
+        raise HTTPException(404, "Snapshot nicht gefunden.")
+    with tarfile.open(p, "r:gz") as tar:
+        member = None
+        for candidate in (path, "./" + path):
+            try:
+                member = tar.getmember(candidate)
+                break
+            except KeyError:
+                continue
+        if member is None or not member.isfile():
+            return None
+        f = tar.extractfile(member)
+        if f is None:
+            return None
+        return f.read()
+
+
 # ── Task-Image (.init.sh-Build, 1× je (Task, init-Hash)) ─────────
 
 def task_has_init(task: Task) -> bool:

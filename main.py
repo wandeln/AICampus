@@ -382,7 +382,6 @@ def _course_tab_context(
     course_id: int,
     active_tab: str,
     page_title: str | None = None,
-    role_override: CourseRole | None = None,
 ) -> tuple[UserCourse | None, dict[str, Any]]:
     """Gemeinsamer Template-Kontext für alle Kurs-Tab-Seiten.
 
@@ -391,10 +390,6 @@ def _course_tab_context(
     erweiterbar). Die Zugriffskontrolle (wer darf welche Seite öffnen)
     bleibt Aufgabe der Route: `membership` kann None sein (z. B. Admin
     ohne Membership auf der Mitglieder-Seite).
-
-    `role_override`: Tabs wie für eine andere Rolle anzeigen (z. B.
-    STUDENT für den Tutor-Preview mit ?as_student=1) — keine
-    Zugriffswirkung, rein fürs Template.
     """
     course = session.get(Course, course_id)
     if not course:
@@ -408,8 +403,6 @@ def _course_tab_context(
 
     is_admin = user.role == GlobalUserRole.ADMIN
     role = membership.role_in_course if membership else None
-    if role_override is not None:
-        role = role_override
     is_tutor = role in (CourseRole.PROF, CourseRole.TUTOR)
     is_prof = role == CourseRole.PROF
 
@@ -1739,22 +1732,12 @@ async def task_page(
     # Tutoren koennen mit ?as_student=1 die Aufgabe aus Studentensicht sehen
     is_student_view = is_tutor and request.query_params.get("as_student") in ("1", "true")
 
-    # Kurs-Tab-Leiste: „Aufgaben" ist aktiv; im as_student-Preview zeigen
-    # die Tabs dieselbe Sichtbarkeit wie für Studierende.
+    # Kurs-Tab-Leiste: „Aufgaben" ist aktiv. Die Tabs zeigen immer die
+    # eigentliche Rolle des Nutzers — der as_student-Preview betrifft nur
+    # den Inhalt der Aufgaben-Seite, nicht die Navigation.
     _tab_membership, tab_ctx = _course_tab_context(
         session, user, request, course_id, active_tab="tasks",
-        role_override=CourseRole.STUDENT if is_student_view else None,
     )
-    if is_student_view:
-        # „Übersicht“ bleibt auch im Student-Preview erreichbar (sonst nur
-        # Tutor/PROF — role_override=STUDENT würde den Tab sonst ausblenden).
-        tab_ctx["tabs"].append({
-            "key": "overview",
-            "icon": "📊",
-            "label": "Übersicht",
-            "url": f"/courses/{course_id}/overview",
-            "active": False,  # hier ist immer der Aufgaben-Tab aktiv
-        })
 
     is_code = task.task_type.value == "code"
     is_workspace = task.task_type.value == "workspace"
@@ -2068,6 +2051,9 @@ async def submission_review_page(
             "task_title": task.title,
             "task_type_display": task_type_display,
             "task_type": task.task_type.value,
+            # Code-Mirror-Shim für Code-/Workspace-Abgaben (Read-only-Editor
+            # in der Lösungsdarstellung, s. base.html {% if code_editor %})
+            "code_editor": task.task_type.value in ("code", "workspace"),
             "max_points": task.max_points,
             "student_name": student.name,
             "student_username": student.username,

@@ -9,6 +9,8 @@ import json
 import logging
 import re
 import shutil
+import tarfile
+import zlib
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
@@ -25,7 +27,7 @@ from database.base import engine, get_session
 from database.models import (
     User, Task, Submission, Feedback, HintExchange, ScriptSection,
     TaskType, SubmissionStatus, FeedbackSource,
-    Course, UserCourse, CourseRole, WorkspaceRun,
+    Course, UserCourse, CourseRole, WorkspaceRun, GlobalUserRole,
 )
 from services.auth_service import decode_access_token, get_current_user
 from services.compute_client import (
@@ -42,6 +44,9 @@ from services.workspace_service import (
     MAX_FILE_BYTES,
     effective_file_access,
     effective_folder_access,
+    file_disk_path,
+    snapshot_list_files,
+    snapshot_read_file,
     workspace_key,
     workspace_service,
 )
@@ -563,6 +568,170 @@ async def get_submission_result(
     response["task_group_avg"] = task_group_avg
 
     return response
+
+
+# =================================================================
+# WORKSPACE-ABGABEN (read-only Ansicht des Snapshot je Einreichung)
+#
+# Student (eigene Abgaben) und Tutor/PROF (Review) sehen nachträglich
+# den Workspace-Stand beim Einreichen: Dateibaum + Editor, ohne
+# Terminals/Ports/Aufgabenstellung.
+# =================================================================
+
+def _load_submission_workspace(
+    submission_id: int, session: Session, user: User
+) -> tuple[Submission, Task, str]:
+    """Workspace-Einreichung mit Snapshot laden (404/403/400).
+
+    Zugriff: der Student selbst oder PROF/Tutor/Global-Admin des Kurses
+    (Tutor-Review). Liefert (Submission, Task, Snapshot-Pfad) — der Pfad
+    ist dabei verifiziert (sonst HTTP-Error)."""
+    submission = session.get(Submission, submission_id)
+    if not submission:
+        raise HTTPException(404, "Einreichung nicht gefunden.")
+    task = session.get(Task, submission.task_id)
+    if not task:
+        raise HTTPException(404, "Aufgabe nicht gefunden.")
+    if submission.student_id != user.id:
+        # Review-Zugriff: PROF/Tutor des Kurses oder Global-Admin
+        allowed = user.role == GlobalUserRole.ADMIN
+        if not allowed:
+            membership = session.exec(
+                select(UserCourse)
+                .where(UserCourse.user_id == user.id)
+                .where(UserCourse.course_id == task.course_id)
+            ).first()
+            allowed = bool(
+                membership
+                and membership.role_in_course
+                in (CourseRole.PROF, CourseRole.TUTOR)
+            )
+        if not allowed:
+            raise HTTPException(403, "Nur Zugriff auf eigene Einreichungen.")
+    snapshot = submission.workspace_snapshot
+    if task.task_type.value != "workspace" or not snapshot:
+        raise HTTPException(400, "Kein Workspace-Snapshot vorhanden.")
+    return submission, task, snapshot
+
+
+def _read_readonly_task_file(session: Session, task: Task,
+                             path: str) -> Optional[bytes]:
+    """Read-only-Mount-Datei aus dem Server-Task-Dir lesen.
+
+    Liefert None, wenn der Pfad keine read-only Task-Datei ist (oder die
+    Datei auf der Platte fehlt) — dann greift kein Fallback."""
+    row = workspace_service.get_task_file(session, task, path)
+    if not row:
+        return None
+    fm = workspace_service.folder_map(session, task)
+    if effective_file_access(path, row.access, fm) != "readonly":
+        return None
+    p = file_disk_path(task.id, path)
+    if not p.is_file():
+        return None
+    return p.read_bytes()
+
+
+@router.get("/submissions/{submission_id}/workspace/files")
+async def submission_workspace_files(
+    submission_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Dateibaum des Workspace-Snapshots (read-only, Stand bei Einreichung)."""
+    _submission, task, snapshot = _load_submission_workspace(submission_id, session, user)
+    try:
+        raw = await asyncio.to_thread(snapshot_list_files, snapshot)
+    except (OSError, tarfile.TarError, EOFError, zlib.error, ValueError):
+        raise HTTPException(422, "Snapshot nicht lesbar (Datei beschädigt?).")
+    # Zugriffs-Klassen + Sortierung aus der Task-DB (gleiche Baum-Icons
+    # wie im Live-Workspace); Dateien, die nicht mehr in der Task gepflegt
+    # werden, fallen auf edit zurück.
+    fm = workspace_service.folder_map(session, task)
+    file_rows = {f.path: f
+                 for f in workspace_service.task_files(session, task)}
+    # Read-only-Mount-Dateien (Skripte, Datasets …) liegen NICHT im
+    # Snapshot (im Container ist es ein separater ro-Mount) — sie werden
+    # aus dem Task-Dir auf dem Server ergänzt (aktuelle Fassung, kein
+    # zusätzlicher Speicher). Im Snapshot vorhandene Pfade gewinnen.
+    snap_paths = {f["path"] for f in raw}
+    for row in file_rows.values():
+        if row.path in snap_paths:
+            continue
+        if effective_file_access(row.path, row.access, fm) != "readonly":
+            continue
+        dp = file_disk_path(task.id, row.path)
+        if not dp.is_file():
+            continue
+        is_binary = False
+        try:
+            with open(dp, "rb") as fh:
+                is_binary = b"\x00" in fh.read(1024)
+            raw.append({"path": row.path, "size": dp.stat().st_size,
+                        "is_binary": is_binary})
+        except OSError:
+            continue
+    for f in raw:
+        p = f["path"]
+        row = file_rows.get(p)
+        f["access"] = effective_file_access(p, row.access if row else None, fm)
+        f["file_access"] = row.access if row else None
+        f["sort_order"] = row.sort_order if row else None
+    # Ordner: explizite Klassen-Zeilen der Task + alle Teilverzeichnisse
+    # aus den Snapshot-Pfaden (leere Ordner bleiben sichtbar).
+    folder_paths = set(fm)
+    for f in raw:
+        parts = f["path"].split("/")
+        for i in range(1, len(parts)):
+            folder_paths.add("/".join(parts[:i]))
+    out_folders = [{
+        "path": p,
+        "access": effective_folder_access(p, fm),
+        "own": fm.get(p),
+    } for p in sorted(folder_paths)
+        if effective_folder_access(p, fm) != "hidden"]
+    return JSONResponse(
+        content={
+            "files": raw,
+            "folders": out_folders,
+            "folder_order": workspace_service.order_map(session, task),
+            "total": sum(f["size"] for f in raw),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/submissions/{submission_id}/workspace/files/{path:path}")
+async def submission_workspace_file(
+    submission_id: int,
+    path: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Datei-Inhalt aus dem Snapshot (für den Editor). Binarys: octet-stream."""
+    _submission, task, snapshot = _load_submission_workspace(submission_id, session, user)
+    p = _safe_ws_path(path)
+    try:
+        data = await asyncio.to_thread(snapshot_read_file, snapshot, p)
+    except (OSError, tarfile.TarError, EOFError, zlib.error, ValueError):
+        raise HTTPException(422, "Snapshot nicht lesbar (Datei beschädigt?).")
+    if data is None:
+        # Fallback: Read-only-Mount-Dateien fehlen im Snapshot → aus dem
+        # Server-Task-Dir (aktuelle Fassung) laden.
+        data = await asyncio.to_thread(_read_readonly_task_file, session, task, p)
+    if data is None:
+        raise HTTPException(404, "Datei nicht gefunden.")
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(413, "Datei zu groß für den Editor (max. 50 MB).")
+    is_binary = b"\x00" in data[:1024]
+    headers = {"Cache-Control": "no-store"}
+    if is_binary:
+        headers["Content-Disposition"] = f'attachment; filename="{p.split("/")[-1]}"'
+    return Response(
+        content=data,
+        media_type="application/octet-stream" if is_binary else "text/plain; charset=utf-8",
+        headers=headers,
+    )
 
 
 # =================================================================
