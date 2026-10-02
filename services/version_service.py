@@ -322,7 +322,18 @@ def list_versions(session: Session, user: User, entity_type: str, entity_id: int
         .where(ContentVersion.entity_id == entity_id)
         .order_by(ContentVersion.updated_at.desc(), ContentVersion.id.desc())  # type: ignore[attr-defined]
     ).all()
-    return [_version_to_dict(v) for v in rows]
+    # Autor je Version (created_by) — einmalige Batch-Lookup der Namen.
+    user_ids = {v.created_by for v in rows if v.created_by}
+    authors = ({
+        u.id: (u.name or u.username)
+        for u in session.exec(select(User).where(User.id.in_(user_ids))).all()  # type: ignore[attr-defined]
+    } if user_ids else {})
+    out = []
+    for v in rows:
+        d = _version_to_dict(v)
+        d["author"] = authors.get(v.created_by)
+        out.append(d)
+    return out
 
 
 def create_version(session: Session, user: User, entity_type: str, entity_id: int, snapshot: dict) -> dict:

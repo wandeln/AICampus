@@ -28,7 +28,9 @@
  *
  * Semantik History: Pro Bearbeitungs-Session eine Version (wird beim ersten
  * Autosave angelegt und durch subsequente Autosaves geupdatet). Restore
- * hinterlegt den alten Stand als neue (aktuelle) Version.
+ * hinterlegt den alten Stand als neue (aktuelle) Version. Umbenennen der
+ * aktuellen Version schließt sie ab — die nächste Änderung beginnt eine
+ * neue Version.
  */
 (function () {
   const AV = {};
@@ -110,6 +112,7 @@
     let timer = null;
     let force = false;  // nächstes Save: samePayload-Check überspringen
     let versions = [];
+    let renaming = false;  // Rename-Input aktiv (Panel muss nicht schließen)
 
     // ── UI: Button + Status + Panel ──
     const btn = document.createElement('button');
@@ -264,7 +267,7 @@
             '<div class="text-sm text-gray-800 truncate">' + esc(displayName(v)) +
               (current ? ' <span class="ml-1 text-[10px] font-semibold text-blue-600 bg-blue-100 rounded px-1 py-0.5 align-middle">aktuell</span>' : '') +
             '</div>' +
-            '<div class="text-[11px] text-gray-400">' + (v.name ? AV.fmtTime(v.updated_at) : 'Stand: ' + AV.fmtTime(v.updated_at)) + '</div>' +
+            '<div class="text-[11px] text-gray-400">' + (v.name ? AV.fmtTime(v.updated_at) : 'Stand: ' + AV.fmtTime(v.updated_at)) + (v.author ? ' · ' + esc(v.author) : '') + '</div>' +
           '</div>' +
           '<button type="button" class="av-rename opacity-0 group-hover:opacity-100 text-gray-400 hover:text-blue-600 text-sm px-1.5 py-1 rounded hover:bg-blue-50" data-act="rename" title="Umbenennen">✏️</button>' +
           '<button type="button" class="av-delete opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600 text-sm px-1.5 py-1 rounded hover:bg-red-50" data-act="delete" title="Version löschen">✖</button>' +
@@ -371,16 +374,22 @@
       input.className = 'w-full text-sm border border-blue-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-400';
       nameWrap.innerHTML = '';
       nameWrap.appendChild(input);
+      renaming = true;  // Panel muss währenddessen nicht schließen (u. a.
+      // mobile: virtuelle Tastatur löst resize/scroll aus)
       input.focus();
       input.select();
       let done = false;
       const commit = async (save) => {
         if (done) return;
         done = true;
+        renaming = false;
         const newName = save ? input.value.trim() : v.name;
         if (save && newName !== v.name) {
           try {
             await api.rename(vid, newName);
+            // Benannte Version ist „abgeschlossen“: das nächste Speichern
+            // legt eine neue Version an, statt die benannte zu aktualisieren.
+            if (vid === versionId) versionId = null;
             await refreshVersions();
           } catch (e) {
             showToast('Umbenennen fehlgeschlagen: ' + (e.message || ''), 'error');
@@ -423,12 +432,30 @@
       }
     };
     const onDocKey = (e) => {
-      if (e.key === 'Escape') closePanel();
+      // Während Rename: Escape gehört zum Input (bricht nur den Rename ab).
+      if (e.key === 'Escape' && !renaming) closePanel();
+    };
+    // Das Panel ist fixed positioniert: Scrollen der Seite (außerhalb des
+    // Panels) schließt es. Ausnahme: Scrollen *im* Panel (Versionsliste)
+    // darf es nicht schließen.
+    const onScroll = (e) => {
+      if (panel.style.display !== 'block') return;
+      const t = e.target;
+      if (t instanceof Element && panel.contains(t)) return;  // Listen-Scroll
+      // Rename aktiv (mobil: Tastatur-Einblendung → scroll/resize):
+      // nicht schließen, nur am Button ausrichten.
+      if (renaming) { positionPanel(); return; }
+      closePanel();
+    };
+    const onResize = () => {
+      if (panel.style.display !== 'block') return;
+      if (renaming) { positionPanel(); return; }
+      closePanel();
     };
     document.addEventListener('click', onDocClick);
     document.addEventListener('keydown', onDocKey);
-    window.addEventListener('scroll', closePanel, true);
-    window.addEventListener('resize', closePanel);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
 
     // ── Initial: Baseline setzen (aktueller Editor-Stand) ──
     try { setBaseline(getPayload()); } catch (e) { /* Editor noch nicht bereit */ }
@@ -449,8 +476,8 @@
         if (timer) { clearTimeout(timer); timer = null; }
         document.removeEventListener('click', onDocClick);
         document.removeEventListener('keydown', onDocKey);
-        window.removeEventListener('scroll', closePanel, true);
-        window.removeEventListener('resize', closePanel);
+        window.removeEventListener('scroll', onScroll, true);
+        window.removeEventListener('resize', onResize);
         closePanel();
         if (btn.parentNode) btn.parentNode.removeChild(btn);
         if (statusEl.parentNode) statusEl.parentNode.removeChild(statusEl);
@@ -460,4 +487,16 @@
   }
 
   AV.create = createController;
+
+  // ── Titel-Sync ──────────────────────────────────────────────────
+  // Hält den auf der Seite angezeigten Titel (Überschrift / Browser-Tab)
+  // mit einem Titel-Eingabefeld synchron: `apply(value)` wird bei jedem
+  // input-Event aufgerufen. Die zurückgegebene Funktion zusätzlich
+  // manuell aufrufen, wann immer das Eingabefeld programmatisch gesetzt
+  // wird (LLM-Befüllung, Restore …).
+  AV.bindTitleSync = (input, apply) => {
+    const sync = () => apply(input.value);
+    if (input) input.addEventListener("input", sync);
+    return sync;
+  };
 })();
