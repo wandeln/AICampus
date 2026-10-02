@@ -1153,6 +1153,9 @@
     const n = wsUI.files.length;
     return "📦 Workspace: " + n + " Datei(en)";
   };
+  // Ausstehenden (debounced) Autosave vor der Einreichung synchron
+  // speichern — Liefert true, wenn der Workspace aktuell ist.
+  window._workspaceFlush = () => wsUI.saveFile();
 
   // ─── Buttons ──────────────────────────────────────────────────
   document.getElementById("ws-tree-refresh-btn").addEventListener("click", () => wsUI.refresh());

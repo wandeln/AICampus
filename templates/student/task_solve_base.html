@@ -735,6 +735,17 @@
       submittedText = body.solution;
     {% elif task.task_type == 'workspace' %}
       // Workspace: Lösung = Container-Snapshot (serverseitig beim Submit).
+      // Debounced Autosave vorher flushen — sonst fehlt im Snapshot die
+      // letzte Änderung, wenn direkt nach dem Tippen eingereicht wird.
+      if (window._workspaceFlush) {
+        btn.disabled = true;
+        const saved = await window._workspaceFlush();
+        if (!saved) {
+          btn.disabled = false;
+          showToast("Einreichung abgebrochen — die Datei konnte nicht gespeichert werden.", "error");
+          return;
+        }
+      }
       // sub.solution dient nur als Kurzbeschreibung für die Historie-Anzeige.
       submittedText = window._workspaceSubmitLabel ? window._workspaceSubmitLabel() : "Workspace-Abgabe";
       body.solution = submittedText;
