@@ -112,6 +112,9 @@
 @media print {
   nav, footer, button { display: none !important; }
   main { padding: 0 !important; }
+  /* Tabellen-Scrollfläche: im Druck nicht kappen — die Tabelle läuft
+     unverändert über (wie vor der Scrollfläche). */
+  .aicampus-table-scroll { overflow: visible !important; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -319,6 +322,28 @@
 .markdown-preview table:not(.hljs-ln) td {
   padding: 0.5rem 0.75rem !important;
   border: 1px solid #e5e7eb !important;
+}
+
+/* Überbreite Tabellen (viele Spalten): Horizontal-Scrollfläche mit
+   dezenter, schmaßer Scrollbar (Styling unten bei .katex-display).
+   Der Wrapper wird um jede .markdown-preview-Tabelle gebaut (markdown-
+   renderer.js, hljs-ln-Tabellen ausgenommen): die Tabelle scrollt in x
+   (Trackpad/Mausrad/Touch) — im Slide-Kontext ebenfalls, Reveal lässt
+   Wheel/Touch über scrollbaren Kindern nativ scrollen (wie bei
+   {.height=Y}-Codeblöcken). */
+.markdown-preview .aicampus-table-scroll {
+  /* position:relative ist bewusst gesetzt: KaTeX legt in jede Formel ein
+     verborgenes MathML-Fallback-Span (span.katex-mathml) mit position:absolute
+     und ohne Offset. Ohne positionierten Vorfahren ist dessen Containing Block
+     der Viewport — die 1px-Box entkommt dann allen overflow-Clips (auch dem
+     Wrapper selbst) und streckt die Dokument-Breite, wenn sie in einer
+     Tabellenzelle hinter der sichtbaren Wrapper-Kante liegt (→ die ganze Seite
+     war horizontal scrollbar). Mit position:relative wird der Wrapper zum
+     Containing Block und hält die Boxen in der scrollenden Fläche.
+     Ohne Offsets ändert das selbst am Layout nichts. */
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 /* ─── Links & Images ─────────────────────────────────────────── */
@@ -652,6 +677,34 @@
   overflow-x: auto !important;
   overflow-y: hidden !important;
   padding: 0.5rem 0 !important;
+}
+
+/* Dezente, schmale Scrollbars für die Horizontal-Scrollflächen im
+   Markdown-Inhalt (Tabellen, überbreite Display-Formeln): keine Track,
+   dünner runder Thumb, beim Hover etwas dunkler. (::-webkit-scrollbar:
+   height = Höhe der horizontalen Scrollbar.) */
+.markdown-preview .aicampus-table-scroll,
+.markdown-preview .katex-display {
+  scrollbar-width: thin;                   /* Firefox */
+  scrollbar-color: #d1d5db transparent;    /* Firefox: Thumb / Track */
+}
+.markdown-preview .aicampus-table-scroll::-webkit-scrollbar,
+.markdown-preview .katex-display::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.markdown-preview .aicampus-table-scroll::-webkit-scrollbar-track,
+.markdown-preview .katex-display::-webkit-scrollbar-track {
+  background: transparent;
+}
+.markdown-preview .aicampus-table-scroll::-webkit-scrollbar-thumb,
+.markdown-preview .katex-display::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 9999px;
+}
+.markdown-preview .aicampus-table-scroll::-webkit-scrollbar-thumb:hover,
+.markdown-preview .katex-display::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
 }
 
 /* ═══════════════════════════════════════════════════════════════

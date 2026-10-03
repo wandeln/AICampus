@@ -2225,6 +2225,17 @@ async function renderMarkdown(text, targetElement, options = {}) {
   }
 
   targetElement.innerHTML = `<div class="markdown-preview">${html}</div>`;
+  // Überbreite Tabellen (viele Spalten): Horizontal-Scrollfläche mit
+  // dezentem, schmalen Scrollbar (CSS .aicampus-table-scroll, main.css) —
+  // die Tabelle scrollt in x (Trackpad/Mausrad/Touch), statt über den
+  // Container/über den Slide-Rand zu ragen. hljs-ln (Code-Zeilennummern-)
+  // Tabelle ausgenommen: sie gehört zum <pre>-Layout.
+  targetElement.querySelectorAll('.markdown-preview table:not(.hljs-ln)').forEach((tbl) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'aicampus-table-scroll';
+    tbl.parentNode.insertBefore(wrap, tbl);
+    wrap.appendChild(tbl);
+  });
   _cleanupBlockArtifacts(targetElement);
   if (slideMode) _applyFragmentMarkers(targetElement);
   // Code-LaTeX (z. B. Pseudo-Code): im Skript direkt auf der finalen DOM
