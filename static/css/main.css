@@ -465,13 +465,26 @@
 .aicampus-equation {
   position: relative;
   scroll-margin-top: 100px;
+  /* Formel und Nummer nebeneinander (Flex): Die Nummer reserviert immer
+     ihren Platz am rechten Rand. Überbreite Formeln werden in
+     .katex-display (overflow-x:auto) genau dort geclippt/gescrollt, wo die
+     Nummer beginnt — Überlappen ist damit in jeder Viewport-Größe
+     ausgeschlossen, ohne dass JS den Overflow-Status messen müsste. */
+  display: flex;
+  align-items: center;
+}
+
+/* Formel nimmt die verbleibende Breite ein; min-width:0 erlaubt das
+   Schrumpfen unter die Inhaltsbreite (sonst würde die Formel statt zu
+   scrollen über den Container ragen). */
+.aicampus-equation .katex-display {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .aicampus-equation .aicampus-eq-num {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
+  flex: 0 0 auto;
+  margin-left: 0.75rem;
   font-size: 0.875rem;
   color: #6b7280;
 }
