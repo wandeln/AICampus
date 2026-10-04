@@ -364,6 +364,36 @@ def grade_mc(data: dict, answers: list) -> dict:
     }
 
 
+def mc_report_summary(mc_result: dict) -> list[str]:
+    """Kompakte Text-Zusammenfassung eines MC-Ergebnisses (grade_mc-Rückgabe)
+    für LLM-Reports: pro Frage eine Zeile mit Status und Punkten; bei falsch
+    zusätzlich die gewählten bzw. korrekten Optionen (gekürzt) und das
+    hinterlegte Feedback zu den falsch beantworteten Optionen (fp/fn).
+
+    Wird NUR von den Report-Generatoren an das LLM übergeben — das
+    Feedback.comment bleibt leer, die Feedback-UI zeigt ihn nicht an."""
+    lines = []
+    questions = mc_result.get("questions") or []
+    for r in questions:
+        mark = "✓" if r["correct"] else "✗"
+        line = (f"[MC] Frage {r['index'] + 1}/{len(questions)}: {mark} "
+                f"({int(r['earned'])}/{int(r['points'])} P.)")
+        if not r["correct"]:
+            options = r.get("options") or []
+            selected = [_option_snippet(o["text"]) for o in options if o["selected"]]
+            correct = [_option_snippet(o["text"]) for o in options if o["correct"]]
+            if selected:
+                line += f" — gewählt: {', '.join(selected)}"
+            if correct:
+                line += f"; richtig war: {', '.join(correct)}"
+            fbs = [o.get("feedback", "") for o in options
+                   if o["status"] in ("fp", "fn") and o.get("feedback")]
+            if fbs:
+                line += "; Feedback: " + " | ".join(f[:120] for f in fbs[:4])
+        lines.append(line)
+    return lines
+
+
 def parse_student_answers(code_solution: Optional[str]) -> Optional[list]:
     """Strukturierte MC-Antworten aus Submission.code_solution lesen.
 

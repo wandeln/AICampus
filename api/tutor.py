@@ -48,6 +48,7 @@ from services.grading_service import GradingService
 from services.llm_service import LLMService
 from services.mc_service import (
     McValidationError,
+    mc_report_summary,
     mc_total_points,
     parse_mc_data,
     student_view as _mc_student_view,
@@ -1875,11 +1876,22 @@ async def generate_course_report(
             if solve_times:
                 students_lines.append(f"  Bearbeitungsdauer: Ø {avg_time/60:.1f}min, Max {max_time/60:.1f}min")
 
-            # Feedback-Kommentare der letzten Submission
+            # Feedback-Kommentare der letzten Submission (leere Kommentare
+            # überspringen — bei MC ist der Kommentar per Design leer)
             for fb in latest_sub.feedback_list:
+                if not fb.comment:
+                    continue
                 source_label = "LLM" if fb.source == FeedbackSource.LLM else "Tutor"
-                fb_comment = fb.comment[:300] if fb.comment else "(keinen Kommentar)"
-                students_lines.append(f"  [{source_label}]: {fb_comment}")
+                students_lines.append(f"  [{source_label}]: {fb.comment[:300]}")
+
+            # MC: Feedback-Texte liegen in mc_result → kompakte Zusammenfassung
+            # für das LLM (wird NICHT in der Feedback-UI angezeigt)
+            if task.task_type.value == "mc" and latest_sub.mc_result:
+                try:
+                    mc_lines = mc_report_summary(json.loads(latest_sub.mc_result))
+                    students_lines.extend("  " + ln for ln in mc_lines)
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
             # Hinweis-Anfragen für diese Aufgabe
             hints = session.exec(
