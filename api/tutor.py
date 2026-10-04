@@ -1550,6 +1550,10 @@ async def get_student_submissions(
             "id": sub.id,
             "solution": sub.solution,
             "code_solution": sub.code_solution,
+            # MC: persistiertes Grading-Ergebnis (JSON-String) — die
+            # Review-Seite rendert daraus dieselbe Karte wie die
+            # Student-View (bleibt stabil bei späteren Aufgaben-Edits).
+            "mc_result": sub.mc_result,
             "workspace_snapshot": bool(sub.workspace_snapshot),
             "attempt_number": sub.attempt_number,
             "submitted_at": sub.submitted_at.isoformat() if sub.submitted_at else "",
@@ -1603,7 +1607,8 @@ async def add_feedback_to_submission(
     points = float(body.get("points_earned", 0))
     comment = body.get("comment", "").strip()
 
-    if not comment:
+    # MC: Auto-Bewertung ohne Kommentar ist üblich → leeres Feedback erlaubt
+    if not comment and task.task_type.value != "mc":
         raise HTTPException(400, "Feedback-Text darf nicht leer sein.")
 
     if points < 0 or points > task.max_points:

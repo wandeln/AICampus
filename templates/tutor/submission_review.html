@@ -233,26 +233,24 @@
   var studentsList = [];
   var currentStudentIndex = -1;
 
-  // MC-Fragen (vollständig, Tutor-Only: Correct-Flags + Feedback) aus
-  // dem Jinja-Kontext — die gewählte Auswahl steckt pro Einreichung in
-  // sub.code_solution als "mc:v1:<json>" (z. B. mc:v1:[[0],[1,3]]).
-  var MC_REVIEW_DATA = {{ mc_data | tojson if mc_data else 'null' }};
-
+  // MC: Persistiertes Grading-Ergebnis der Einreichung (sub.mc_result,
+  // JSON-String) als Karte rendern — identisch zur Student-View
+  // (renderMcResultCard in task_solve_base.html). Das Ergebnis wird beim
+  // Einreichen serverseitig berechnet und gespeichert, daher bleibt die
+  // Anzeige stabil, auch wenn die Aufgabe später bearbeitet wird.
   function renderMcSubmission(sub, container) {
-    var selected = null;
+    var res = null;
     try {
-      if (sub.code_solution && sub.code_solution.indexOf('mc:v1:') === 0) {
-        selected = JSON.parse(sub.code_solution.slice(6));
-      }
-    } catch (e) { selected = null; }
+      if (sub.mc_result) res = JSON.parse(sub.mc_result);
+    } catch (e) { res = null; }
 
-    // Kein strukturiertes Payload (z. B. manuell geändert) → Fallback
-    if (!MC_REVIEW_DATA || !Array.isArray(selected)) {
-      renderMarkdown(sub.solution || '(keine strukturierten Antworten)', container);
+    // Kein persistiertes Ergebnis (z. B. alte Einreichung) → Fallback
+    if (!res || !Array.isArray(res.questions)) {
+      renderMarkdown(sub.solution || '(kein Ergebnis vorhanden)', container);
       return;
     }
 
-    var cls = {
+    var statusCls = {
       tp: 'border-green-500 bg-green-50',
       fp: 'border-red-400 bg-red-50',
       fn: 'border-orange-300 bg-orange-50',
@@ -271,47 +269,38 @@
       tn: 'Falsche Antwort (nicht ausgewählt)',
     };
     var html = '';
-    MC_REVIEW_DATA.questions.forEach(function (q, qi) {
-      var sel = Array.isArray(selected[qi]) ? selected[qi].slice().sort(function(a,b){return a-b;}) : [];
-      var correctSet = [];
-      q.options.forEach(function (o, i) { if (o.correct) correctSet.push(i); });
-      correctSet.sort(function(a,b){return a-b;});
-      var isCorrect = sel.length === correctSet.length && sel.every(function (v, i) { return v === correctSet[i]; });
-      var qMd = encodeURIComponent(JSON.stringify(q.question || ''));
-      html += '<div class="border rounded-lg p-3 mb-2 ' + (isCorrect ? 'border-green-500 bg-green-50/50' : 'border-red-400 bg-red-50/50') + '">'
-        + '<div class="flex items-center justify-between mb-1">'
-        + '<span class="text-sm font-semibold ' + (isCorrect ? 'text-green-800' : 'text-red-800') + '">'
-        + (isCorrect ? '✅' : '❌') + ' Frage ' + (qi + 1) + ' <span class="text-gray-400 font-normal">(' + (q.points || 0) + ' P)</span></span>'
-        + '</div>'
-        + '<div class="mc-q-md mb-2" data-raw="' + qMd + '"></div>'
-        + '<div class="space-y-1.5">';
-      q.options.forEach(function (o, oi) {
-        var isSelected = sel.indexOf(oi) >= 0;
-        var st = (isSelected && o.correct) ? 'tp' : (isSelected ? 'fp' : (o.correct ? 'fn' : 'tn'));
+    res.questions.forEach(function (q) {
+      var earned = q.correct ? '+' + q.points + ' P'
+        : (q.earned < 0 ? q.earned + ' P (Abzug)' : '+0 P');
+      html += '<div class="border rounded-lg p-3 mb-2 ' + (q.correct ? 'border-green-500 bg-green-50/50' : 'border-red-400 bg-red-50/50') + '">'
+        + '<div class="flex items-center justify-between mb-2">'
+        + '<span class="text-sm font-semibold ' + (q.correct ? 'text-green-800' : 'text-red-800') + '">'
+        + (q.correct ? '✅' : '❌') + ' Frage ' + (q.index + 1) + (q.multi_select ? ' (Mehrfachauswahl)' : '') + '</span>'
+        + '<span class="text-xs font-medium ' + (q.correct ? 'text-green-700' : 'text-red-700') + '">' + earned + ' von ' + q.points + ' P</span>'
+        + '</div><div class="space-y-1.5">';
+      (q.options || []).forEach(function (o) {
         var oMd = encodeURIComponent(JSON.stringify(o.text || ''));
-        // Feedback (MC_REVIEW_DATA enthält auch feedback_wrong):
-        // Multi: tp/tn → feedback, fp/fn → feedback_wrong; Single: nur
-        // die ausgewählte Option. Leeres Feld → „Richtig“/„Falsch“ —
-        // außer bei tn (falsche Option korrekt nicht gewählt): dort nur
-        // explizites Feedback, sonst gar keine Feedback-Zeile.
-        var fb = q.multi_select
-          ? ((st === 'tp' || st === 'tn') ? (o.feedback || '') : (o.feedback_wrong || ''))
-          : (isSelected ? (o.feedback || '') : '');
-        var fbText = fb || ((st === 'tn') ? '' : (o.correct ? 'Richtig' : 'Falsch'));
-        var showFb = q.multi_select ? !!fbText : isSelected;
-        var fbMd = encodeURIComponent(JSON.stringify(fbText));
-        html += '<div class="flex items-start gap-2 rounded-lg border p-2 ' + (cls[st] || cls.tn) + '" title="' + (statusTitle[st] || '') + '">'
-          + '<input type="' + (q.multi_select ? 'checkbox' : 'radio') + '"' + (isSelected ? ' checked' : '') + ' tabindex="-1" class="mt-1 h-4 w-4 shrink-0 text-blue-600 border-gray-300 pointer-events-none">'
-          + '<div class="flex-1 min-w-0"><span class="mc-opt-md text-sm" data-raw="' + oMd + '"></span></div>'
-          + (showFb ? '<div class="text-xs mt-1 ' + (fbCls[st] || fbCls.tn) + '"><span class="mc-opt-fb" data-raw="' + fbMd + '"></span></div>' : '')
-          + '</div>'
-          + '</div>';
+        // Feedback kommt serverseitig aufgelöst (Multi: korrekt/falsch
+        // behandelt; Single: nur ausgewählte Option liefert Text).
+        // Leeres Feld → System-Default „Richtig“/„Falsch“ — außer bei
+        // tn (falsche Option korrekt nicht gewählt): dort nur explizites
+        // Feedback, sonst gar keine Feedback-Zeile.
+        var fbText = o.feedback
+          || (o.status === 'tn' ? '' : (o.correct ? 'Richtig' : 'Falsch'));
+        var showFb = q.multi_select ? !!fbText : !!o.selected;
+        var fb = encodeURIComponent(JSON.stringify(fbText));
+        html += '<div class="flex items-start gap-2 rounded-lg border p-2 ' + (statusCls[o.status] || statusCls.tn) + '" title="' + (statusTitle[o.status] || '') + '">'
+          + '<input type="' + (q.multi_select ? 'checkbox' : 'radio') + '"' + (o.selected ? ' checked' : '') + ' tabindex="-1" class="mt-1 h-4 w-4 shrink-0 text-blue-600 border-gray-300 pointer-events-none">'
+          + '<div class="flex-1 min-w-0">'
+          + '<div class="text-sm ' + (o.status === 'tn' ? 'text-gray-500' : 'text-gray-800') + '"><span class="mc-opt-md" data-raw="' + oMd + '"></span></div>'
+          + (showFb ? '<div class="text-xs mt-1 ' + (fbCls[o.status] || fbCls.tn) + '"><span class="mc-opt-fb" data-raw="' + fb + '"></span></div>' : '')
+          + '</div></div>';
       });
       html += '</div></div>';
     });
     container.innerHTML = html;
-    // Fragetexte + Options-Texte + Feedback als Markdown/LaTeX rendern
-    container.querySelectorAll('.mc-q-md, .mc-opt-md, .mc-opt-fb').forEach(function (span) {
+    // Options-Texte + Feedback als Markdown/LaTeX rendern
+    container.querySelectorAll('.mc-opt-md, .mc-opt-fb').forEach(function (span) {
       try {
         var txt = JSON.parse(decodeURIComponent(span.getAttribute('data-raw') || "''"));
         if (txt) renderMarkdown(txt, span);
@@ -522,8 +511,8 @@
           solSection.appendChild(noSnap);
         }
       } else if (isMc) {
-        // MC: Fragen + Optionen mit der gewählten Auswahl des Students
-        // markieren (Daten aus dem Jinja-Kontext, Auswahl aus mc:v1:<json>)
+        // MC: Persistiertes Grading-Ergebnis rendern (gleiche Karte wie
+        // in der Student-View)
         var mcContainer = document.createElement('div');
         mcContainer.className = 'solution-container';
         renderMcSubmission(sub, mcContainer);

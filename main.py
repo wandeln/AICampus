@@ -2103,9 +2103,6 @@ async def submission_review_page(
             "task_title": task.title,
             "task_type_display": task_type_display,
             "task_type": task.task_type.value,
-            # MC: vollständige Daten (Tutor-Only-Page) — die Review-Seite
-            # markiert die gewählten Optionen der Einreichung
-            "mc_data": _mc_context(task, True),
             # Code-Mirror-Shim für Code-/Workspace-Abgaben (Read-only-Editor
             # in der Lösungsdarstellung, s. base.html {% if code_editor %})
             "code_editor": task.task_type.value in ("code", "workspace"),
