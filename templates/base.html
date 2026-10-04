@@ -125,66 +125,111 @@
      Live-Dashboard zur Präsentation/Slide-Einbettung). #}
   {% block main_nav %}
   <!-- ─── Navigation ──────────────────────────────────────────── -->
-  <nav class="sticky top-0 z-50 bg-blue-700 text-white shadow-lg" style="overflow-x:auto;scrollbar-width:none">
-    <div class="container mx-auto px-4 py-3 flex items-center justify-between">
+  <nav class="sticky top-0 z-50 bg-blue-700 text-white shadow-lg">
+    <div class="container mx-auto px-4 py-1 flex items-center justify-between">
 
       <!-- Logo / Home -->
-      <a href="/" class="text-xl font-bold flex items-center gap-2 hover:opacity-90 transition mr-2">
+      <a href="/" class="text-xl font-bold flex items-center gap-2 hover:opacity-90 transition mr-2 py-2">
         <img src="{{ asset('aicampus_icon_bg_white.png') }}" alt="AICampus" class="h-8 w-8 rounded-full">
         <span class="hidden sm:inline">AICampus</span>
         <span class="sm:hidden">AICampus</span>
       </a>
 
-      <!-- Desktop Navigation -->
+      {# Desktop Navigation: nur noch das Account-Menü (Avatar-Klick).
+         Kurs-Auswahl, Admin-Konsole und Abmelden sitzen jetzt im
+         Dropdown (#user-menu). Das nav hat bewusst KEIN overflow-x:auto:
+         sonst würde das absolut positionierte Dropdown abgeschnitten. #}
       {% if current_user %}
-      <div class="hidden sm:flex items-center gap-4">
-        {% if courses %}
-        <select
-          id="course-select"
-          class="bg-blue-600 text-white border border-blue-500 rounded px-3 py-1 text-sm hover:bg-blue-500 transition"
-          onchange="window.location.href = this.value ? '/courses/' + this.value : '/'"
+      <div class="relative" id="user-menu-wrap">
+        <button
+          type="button"
+          id="user-menu-btn"
+          class="hidden sm:flex items-center gap-2 text-sm rounded-lg px-2 py-2 hover:bg-blue-600/70 transition"
+          aria-haspopup="true"
+          aria-expanded="false"
+          onclick="toggleUserMenu()"
         >
-          <option value="">— Kurs wählen —</option>
-          {% for course in courses %}
-          <option value="{{ course.id }}"
-                  {% if selected_course_id == course.id %}selected{% endif %}>
-            {{ course.name }}
-          </option>
-          {% endfor %}
-        </select>
-        {% endif %}
-
-        <!-- User Info -->
-        <a href="/settings" class="flex items-center gap-2 text-sm hover:opacity-80 transition" id="user-info">
-          <span class="nav-avatar flex items-center justify-center w-7 h-7">
+          <span class="nav-avatar flex items-center justify-center w-8 h-8">
             {% if current_user.avatar %}
-            <img src="{{ current_user.avatar }}" alt="" class="w-7 h-7 rounded-full object-cover border border-blue-300">
+            <img src="{{ current_user.avatar }}" alt="" class="w-8 h-8 rounded-full object-cover border border-blue-300">
             {% else %}
             <span>👤</span>
             {% endif %}
           </span>
-          <span>{{ current_user.name }}</span>
+          <span class="max-w-[140px] truncate">{{ current_user.name }}</span>
           <span class="bg-blue-500 px-2 py-0.5 rounded text-xs font-semibold">
             {{ current_user.role }}
           </span>
-        </a>
-
-        <!-- Admin Console Link (nur für ADMINs) -->
-        {% if is_admin %}
-        <a href="/admin" class="bg-yellow-500 text-yellow-900 px-3 py-1 rounded text-sm font-semibold hover:bg-yellow-400 transition">
-          🔧 Admin-Konsole
-        </a>
-        {% endif %}
-
-        <!-- Logout -->
-        <button
-          hx-post="/api/auth/logout"
-          hx-swap="none"
-          hx-on::after-request="window.location.href = '/login'"
-          class="text-blue-200 hover:text-white transition ml-2 mr-4"
-        >
-          🔑 Abmelden
+          <svg id="user-menu-caret" class="w-3.5 h-3.5 text-blue-300 transition-transform duration-200" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/>
+          </svg>
         </button>
+
+        <!-- Account-Dropdown (blau, runde Ecken): öffnet sich unter dem
+             Account-Button; schließt über Klick außerhalb oder Escape -->
+        <div id="user-menu" class="hidden absolute right-0 top-full mt-2 w-72 rounded-xl bg-blue-700 border border-blue-500/50 shadow-2xl p-1.5">
+          {% if courses %}
+          {# "Kurs wählen" als Untermenü (Dropdown-in-Dropdown):
+             Per Hover öffnet sich links ein Flyout mit der Kursliste.
+             Das 12-px-Rücksetz (mr-3) liegt IM Hover-Bereich des äußeren
+             Divs, damit beim Überfahren keine Hover-Lücke auftritt. #}
+          <div class="relative group/course">
+            <button type="button"
+              class="flex w-full items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-blue-100 hover:bg-blue-600 transition cursor-pointer">
+              <span class="w-4 shrink-0 min-w-0 text-center">📚</span>
+              <span class="flex-1 text-left">Kurs wählen</span>
+              <svg class="w-3.5 h-3.5 text-blue-300" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path fill-rule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.83 10l3.94 3.71a.75.75 0 11-1.04 1.04l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clip-rule="evenodd"/>
+              </svg>
+            </button>
+
+            {# -top-[7px] gleicht die Menükante aus (1px Border + 6px p-1.5),
+               damit das Flyout auf gleicher Höhe wie das Menü sitzt. #}
+            <div class="absolute right-full -top-[7px] z-50 hidden group-hover/course:block">
+              <div class="user-menu-course-scroll mr-3 w-56 max-h-80 overflow-y-auto rounded-xl bg-blue-700 border border-blue-500/50 shadow-2xl p-1.5">
+                {% if selected_course_id %}
+                <a href="/" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-blue-100 hover:bg-blue-600 transition">
+                  <span class="w-4 shrink-0 min-w-0 text-center">🏠</span>
+                  <span class="truncate">Kursübersicht</span>
+                </a>
+                {% endif %}
+                {% for course in courses %}
+                <a href="/courses/{{ course.id }}"
+                   class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition
+                          {% if selected_course_id == course.id %}bg-blue-600 text-white font-medium
+                          {% else %}text-blue-100 hover:bg-blue-600{% endif %}">
+                  <span class="w-4 shrink-0 min-w-0 text-center">{% if selected_course_id == course.id %}✓{% endif %}</span>
+                  <span class="truncate">{{ course.name }}</span>
+                </a>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+          <div class="h-px bg-blue-500/50 mx-2 my-1.5"></div>
+          {% endif %}
+
+          <a href="/settings" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-blue-100 hover:bg-blue-600 transition">
+            <span class="w-4 shrink-0 min-w-0 text-center">⚙️</span>
+            <span>Account-Einstellungen</span>
+          </a>
+          {% if is_admin %}
+          <a href="/admin" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-semibold bg-yellow-500 text-yellow-900 hover:bg-yellow-400 transition">
+            <span class="w-4 shrink-0 min-w-0 text-center">🔧</span>
+            <span>Admin-Konsole</span>
+          </a>
+          {% endif %}
+          <button
+            type="button"
+            hx-post="/api/auth/logout"
+            hx-swap="none"
+            hx-on::after-request="window.location.href = '/login'"
+            onclick="closeUserMenu()"
+            class="flex w-full items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-blue-100 hover:bg-blue-600 transition text-left"
+          >
+            <span class="w-4 shrink-0 min-w-0 text-center">🔑</span>
+            <span>Abmelden</span>
+          </button>
+        </div>
       </div>
 
       <!-- Mobile Burger Button -->
@@ -248,6 +293,34 @@
       </div>
     </div>
     {% endif %}
+
+    {# Account-Dropdown (Desktop-Nav): Toggle per Klick, schließen über
+       Klick außerhalb, Escape oder die Abmelden-Aktion. #}
+    <script>
+      function setUserMenuOpen(open) {
+        const menu = document.getElementById("user-menu");
+        const btn = document.getElementById("user-menu-btn");
+        if (!menu || !btn) return;
+        menu.classList.toggle("hidden", !open);
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+        const caret = document.getElementById("user-menu-caret");
+        if (caret) caret.style.transform = open ? "rotate(180deg)" : "";
+      }
+      function toggleUserMenu() {
+        const menu = document.getElementById("user-menu");
+        if (menu) setUserMenuOpen(menu.classList.contains("hidden"));
+      }
+      function closeUserMenu() {
+        setUserMenuOpen(false);
+      }
+      document.addEventListener("click", (e) => {
+        const wrap = document.getElementById("user-menu-wrap");
+        if (wrap && !wrap.contains(e.target)) closeUserMenu();
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeUserMenu();
+      });
+    </script>
   </nav>
   {% endblock %}
 
