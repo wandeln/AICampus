@@ -27,7 +27,7 @@ import hashlib
 import json
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import TemplateNotFound
@@ -265,6 +265,20 @@ def _asset(path: str) -> str:
 templates.env.globals["asset"] = _asset
 
 
+def _public_base_url(request: Request) -> str:
+    """Öffentliche Basis-URL (canonical, og:url, Sitemap-Verweis).
+
+    Hinter nginx kommt der Request mit X-Forwarded-Proto — das Scheme
+    daraus nehmen (request.url.scheme würde hier 'http' melden).
+    """
+    proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    scheme = proto if proto in ("http", "https") else request.url.scheme
+    return f"{scheme}://{request.url.netloc}/"
+
+
+templates.env.globals["public_base_url"] = _public_base_url
+
+
 @app.middleware("http")
 async def _no_store_for_html(request: Request, call_next):
     """HTML-Seiten nie cachen (auch nicht heuristisch).
@@ -277,6 +291,18 @@ async def _no_store_for_html(request: Request, call_next):
     ctype = response.headers.get("content-type", "")
     if "text/html" in ctype and not request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.middleware("http")
+async def _noindex_api_docs(request: Request, call_next):
+    """Swagger/ReDoc/OpenAPI vor dem Index schützen.
+
+    Die API-Doku ist öffentlich erreichbar; X-Robots-Tag ergänzt die
+    Disallow-Regeln in robots.txt (beides zusammen ist robuster)."""
+    response = await call_next(request)
+    if request.url.path in ("/docs", "/redoc", "/openapi.json"):
+        response.headers["X-Robots-Tag"] = "noindex"
     return response
 
 
@@ -685,7 +711,17 @@ async def about_page(request: Request, session: Session = Depends(get_session)):
     Landing-Page für Gäste: wer nicht eingeloggt ist, landet über / hier.
     Eingeloggte Nutzer bekommen den normalen Nav-Context.
     """
-    ctx: dict[str, Any] = {"request": request, "page_title": "Über AICampus"}
+    ctx: dict[str, Any] = {
+        "request": request,
+        # og:title der Landing-Page (der <title>-Tag kommt aus dem
+        # title-Block in about.html — die beiden dürfen abweichen).
+        "page_title": "AICampus – KI-Plattform für MINT-Lehre mit lokalen LLMs",
+        "page_description": (
+            "AICampus erzeugt KI-gestützt Lehrmaterialien und Übungsaufgaben, "
+            "korrigiert Abgaben automatisch und gibt Studierenden sofortiges "
+            "Feedback — betrieben mit lokalen LLMs auf eigenen Servern, ohne Cloud."
+        ),
+    }
     ctx["today_de"] = datetime.now().strftime("%d.%m.%Y")
     try:
         user = await get_current_user(request, session)
@@ -700,6 +736,59 @@ async def about_page(request: Request, session: Session = Depends(get_session)):
             "is_admin": user.role == GlobalUserRole.ADMIN,
         })
     return templates.TemplateResponse("about.html", ctx)
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt(request: Request):
+    """Crawler-Steuerung: nur die öffentliche Landing-Seite indexieren.
+
+    App-Bereiche sind hinter Login (Crawler bekommen 302→/login); die
+    Disallow-Regeln hier vermeiden, dass Crawler sie trotzdem anfragen.
+    """
+    return PlainTextResponse(
+        "User-agent: *\n"
+        "Allow: /\n"
+        "\n"
+        "# Login/Registrierung + Kurs-Invite (kein Indexierungswert, noindex-Meta in den Templates)\n"
+        "Disallow: /login\n"
+        "Disallow: /signup\n"
+        "Disallow: /join\n"
+        "# App-Interna: API, Swagger-Doku, authentifizierte Dateien, Workspace-Previews\n"
+        "Disallow: /api/\n"
+        "Disallow: /docs\n"
+        "Disallow: /redoc\n"
+        "Disallow: /openapi.json\n"
+        "Disallow: /media/\n"
+        "Disallow: /avatars/\n"
+        "Disallow: /preview/\n"
+        "\n"
+        f"Sitemap: {_public_base_url(request)}sitemap.xml\n"
+    )
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+async def sitemap_xml(request: Request):
+    """Sitemap der indexierbaren (öffentlichen) Seiten.
+
+    Bei neuen indexierbaren Seiten (z. B. publizierte Doku) hier
+    weitere <url>-Einträge ergänzen.
+    """
+    base = _public_base_url(request)
+    lastmod = datetime.now().strftime("%Y-%m-%d")
+    return Response(
+        content=(
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n"
+            "  <url>\n"
+            f"    <loc>{base}about</loc>\n"
+            f"    <lastmod>{lastmod}</lastmod>\n"
+            "    <changefreq>monthly</changefreq>\n"
+            "    <priority>1.0</priority>\n"
+            "  </url>\n"
+            "</urlset>\n"
+        ),
+        media_type="application/xml; charset=utf-8",
+    )
 
 
 async def _do_login(

@@ -682,6 +682,8 @@ async def preview_http(task_id: int, rest: str, request: Request,
                  b"content-security-policy-report-only"):
             continue
         hdrs[n.decode("latin-1")] = v.decode("latin-1")
+    # Preview-Subdomains zeigen Workspace-Apps (User-Content) → nie indexieren
+    hdrs["x-robots-tag"] = "noindex, nofollow"
     decoder = _ChunkedDecoder() if is_chunked else None
 
     async def _body():

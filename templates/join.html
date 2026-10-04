@@ -1,5 +1,12 @@
 {% extends "base.html" %}
 
+{% block title %} - Kurs beitreten{% endblock %}
+
+{% block extra_head %}
+{# Invite-Seiten zeigen den Kursnamen und sind per-Invite — nie indexieren #}
+<meta name="robots" content="noindex, nofollow">
+{% endblock %}
+
 {% block content %}
 <div class="max-w-2xl mx-auto">
 

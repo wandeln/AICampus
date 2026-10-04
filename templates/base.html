@@ -9,6 +9,24 @@
   <link rel="icon" type="image/png" href="{{ asset('aicampus_icon.png') }}">
   <title>AICampus{% block title %} - {{ page_title or "Übungsaufgaben" }}{% endblock %}</title>
 
+  {# ─── SEO ────────────────────────────────────────────────────────
+     Pro Seite über den Template-Kontext (Routes in main.py):
+       page_title       → og:title (Default: "AICampus")
+       page_description → meta description (Default: Projektpitch)
+     canonical/og:url: öffentliche Basis-URL (X-Forwarded-Proto,
+     s. _public_base_url in main.py) + aktueller Pfad. #}
+  {% set seo_desc = page_description or "AICampus – KI-Plattform für die MINT-Lehre: KI-generierte Übungsaufgaben, automatisches Feedback und Kursmaterial — lokal mit eigenen LLMs, ohne Cloud." %}
+  <meta name="description" content="{{ seo_desc }}">
+  <link rel="canonical" href="{{ public_base_url(request) ~ request.url.path.lstrip('/') }}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="AICampus">
+  <meta property="og:locale" content="de_DE">
+  <meta property="og:title" content="{{ page_title or 'AICampus' }}">
+  <meta property="og:description" content="{{ seo_desc }}">
+  <meta property="og:url" content="{{ public_base_url(request) ~ request.url.path.lstrip('/') }}">
+  <meta property="og:image" content="{{ public_base_url(request) }}static/aicampus_icon.png">
+  <meta name="twitter:card" content="summary">
+
   <!-- HTMX (BSD-3) — lokal gespiegelt -->
   <script src="{{ asset('vendor/htmx.min.js') }}"></script>
 

@@ -2,6 +2,11 @@
 
 {% block title %} - Login{% endblock %}
 
+{% block extra_head %}
+{# Kein Indexierungswert (kein öffentlicher Content) — doppelt mit robots.txt #}
+<meta name="robots" content="noindex, nofollow">
+{% endblock %}
+
 {% block content %}
 <div class="min-h-[80vh] flex items-center justify-center">
   <div class="w-full max-w-md">
