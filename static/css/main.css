@@ -720,6 +720,28 @@
   background: #9ca3af;
 }
 
+/* Account-Menü (Main-Nav): Kurs-Flyout wird bei vielen Kursen scrollbar.
+   Gleiches dezentem Muster wie die Markdown-Scrollflächen (thin, transparenter
+   Track, runder Thumb) — der Thumb ist wegen der dunkelblauen Menüfläche
+   halbtransparentes Weiß. */
+.user-menu-course-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+}
+.user-menu-course-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.user-menu-course-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.user-menu-course-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 9999px;
+}
+.user-menu-course-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Mermaid Diagrams
    ═══════════════════════════════════════════════════════════════ */
