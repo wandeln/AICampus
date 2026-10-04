@@ -11,6 +11,7 @@ import logging
 import mimetypes
 import re
 import shutil
+import statistics
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -770,16 +771,19 @@ def _annotation_matches(annotation: Optional[str], filter_text: str) -> bool:
     return all(any(word.startswith(term) for word in words) for term in terms)
 
 
-@router.get("/courses/{course_id}/overview")
-async def get_course_overview(
+def _overview_data(
+    session: Session,
     course_id: int,
-    request: Request,
-    session: Session = Depends(get_session),
-    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF, CourseRole.TUTOR)),
+    filter_text: str,
+    type_filter: str,
+    annotation_filter: str,
 ):
-    """Übersichtstabelle: Alle Studenten x Aufgaben mit Punkten."""
-    user, _ = user_and_course
+    """Gemeinsame Berechnung für Punkteübersicht + Live-Dashboard.
 
+    Liefert die sichtbaren Aufgaben (nach Titel/Typ gefiltert), die
+    Studenten (nach Annotation gefiltert) und die Punkte der jeweils
+    letzten Einreichung pro Student/Aufgabe.
+    """
     # Alle sichtbaren Aufgaben des Kurses
     tasks = session.exec(
         select(Task)
@@ -788,26 +792,16 @@ async def get_course_overview(
         .order_by(Task.display_order.asc())  # type: ignore[attr-defined]
     ).all()
 
-    # Alle Studenten des Kurses
+    # Alle Studenten des Kurses (Annotations-Filter, z.B. Übungsgruppe)
     memberships = session.exec(
         select(UserCourse)
         .where(UserCourse.course_id == course_id)
         .where(UserCourse.role_in_course == CourseRole.STUDENT)
     ).all()
-
-    # Annotations-Filter (z.B. Übungsgruppe): mehrere Leerzeichen-getrennte
-    # Wörter, jedes muss als Wort in der Annotation vorkommen (AND).
-    annotation_filter = request.query_params.get("annotation_filter", "").strip()
     if annotation_filter:
         memberships = [m for m in memberships if _annotation_matches(m.annotation, annotation_filter)]
 
-    students = [m.user for m in memberships]
-    annotation_by_user = {m.user_id: m.annotation for m in memberships}
-
-    # Filter aus Query-Parametern
-    filter_text = request.query_params.get("filter_text", "").strip()
-    type_filter = request.query_params.get("type_filter", "").strip()
-
+    # Aufgaben-Filter
     if filter_text:
         tasks = [t for t in tasks if filter_text.lower() in t.title.lower()]
     if type_filter:
@@ -818,15 +812,15 @@ async def get_course_overview(
     has_override = {}  # { student_id: { task_id: bool } }
     has_submitted = {}  # { student_id: { task_id: bool } }
 
-    for student in students:
-        scores[student.id] = {}
-        has_override[student.id] = {}
-        has_submitted[student.id] = {}
+    for m in memberships:
+        scores[m.user_id] = {}
+        has_override[m.user_id] = {}
+        has_submitted[m.user_id] = {}
         for task in tasks:
             subs = session.exec(
                 select(Submission)
                 .where(Submission.task_id == task.id)
-                .where(Submission.student_id == student.id)
+                .where(Submission.student_id == m.user_id)
                 .order_by(Submission.submitted_at.desc())  # type: ignore[attr-defined]
             ).all()
 
@@ -835,7 +829,7 @@ async def get_course_overview(
             override_exists = False
             if subs:
                 latest_sub = subs[0]  # newest
-                has_submitted[student.id][task.id] = True
+                has_submitted[m.user_id][task.id] = True
                 for fb in latest_sub.feedback_list:
                     if fb.source == FeedbackSource.HUMAN:
                         human_points = max(human_points, fb.points_earned)
@@ -844,20 +838,43 @@ async def get_course_overview(
                         llm_points = max(llm_points, fb.points_earned)
 
             point_val = human_points if override_exists else llm_points
-            scores[student.id][task.id] = point_val
-            has_override[student.id][task.id] = override_exists
+            scores[m.user_id][task.id] = point_val
+            has_override[m.user_id][task.id] = override_exists
+
+    max_total = sum(t.max_points for t in tasks)
+    return tasks, memberships, scores, has_override, has_submitted, max_total
+
+
+@router.get("/courses/{course_id}/overview")
+async def get_course_overview(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF, CourseRole.TUTOR)),
+):
+    """Übersichtstabelle: Alle Studenten x Aufgaben mit Punkten."""
+    _user, _ = user_and_course
+
+    # Filter aus Query-Parametern
+    filter_text = request.query_params.get("filter_text", "").strip()
+    type_filter = request.query_params.get("type_filter", "").strip()
+    annotation_filter = request.query_params.get("annotation_filter", "").strip()
+
+    tasks, memberships, scores, has_override, has_submitted, max_total = _overview_data(
+        session, course_id, filter_text, type_filter, annotation_filter
+    )
 
     # Gesamtprozent pro Student
-    max_total = sum(t.max_points for t in tasks)
     student_list = []
-    for student in students:
+    for m in memberships:
+        student = m.user
         total = sum(scores[student.id].get(t.id, 0) for t in tasks)
         student_list.append({
             "id": student.id,
             "username": student.username,
             "name": student.name,
             "total_points": total,
-            "annotation": annotation_by_user.get(student.id),
+            "annotation": m.annotation,
         })
 
     return {
@@ -875,6 +892,92 @@ async def get_course_overview(
         "has_override": has_override,
         "has_submitted": has_submitted,
         "max_total": max_total,
+    }
+
+
+# ─── Live-Dashboard (anonymisiert) ────────────────────────────────────────
+
+# k-Anonymität: Matcht der Filter weniger Personen als dieser Schwellwert,
+# würden die Kennzahlen faktisch Einzeldaten einer Person offenlegen →
+# in dem Fall zeigt das Dashboard keine Werte an.
+LIVE_MIN_SAMPLES = 3
+
+LIVE_HIST_BINS = 10
+LIVE_HIST_LABELS = [f"{i * 10}–{i * 10 + 10}" for i in range(LIVE_HIST_BINS - 1)] + ["90–100"]
+
+
+def _histogram_counts(percentages: list[float]) -> list[int]:
+    """Werte im Bereich [0, 1] in 10 Histogramm-Bins (0–10 %, 10–20 %, …)."""
+    counts = [0] * LIVE_HIST_BINS
+    for p in percentages:
+        idx = min(LIVE_HIST_BINS - 1, max(0, int(p * LIVE_HIST_BINS)))
+        counts[idx] += 1
+    return counts
+
+
+@router.get("/courses/{course_id}/live-stats")
+async def get_course_live_stats(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF, CourseRole.TUTOR)),
+):
+    """Aggregierte Kennzahlen für das anonymisierte Live-Dashboard.
+
+    Bewusst ohne jede studentenidentifizierenden Daten (keine Namen, keine
+    IDs) — nur Summenwerte und Histogramme über den gefilterten Kreis.
+    """
+    _user, _ = user_and_course
+
+    filter_text = request.query_params.get("filter_text", "").strip()
+    type_filter = request.query_params.get("type_filter", "").strip()
+    annotation_filter = request.query_params.get("annotation_filter", "").strip()
+
+    tasks, memberships, scores, _has_override, has_submitted, max_total = _overview_data(
+        session, course_id, filter_text, type_filter, annotation_filter
+    )
+
+    count = len(memberships)
+    if count < LIVE_MIN_SAMPLES:
+        return {"available": False, "count": count, "min_samples": LIVE_MIN_SAMPLES}
+
+    totals = [sum(scores[m.user_id].get(t.id, 0) for t in tasks) for m in memberships]
+    passed50 = sum(1 for total in totals if max_total > 0 and total / max_total >= 0.5)
+    total_pct = [total / max_total if max_total > 0 else 0.0 for total in totals]
+
+    tasks_payload = []
+    for task in tasks:
+        submitted = [
+            scores[m.user_id][task.id]
+            for m in memberships
+            if has_submitted[m.user_id].get(task.id)
+        ]
+        pct_vals = [p / task.max_points if task.max_points > 0 else 0.0 for p in submitted]
+        tasks_payload.append({
+            "title": task.title,
+            "task_type": task.task_type.value,
+            "max_points": task.max_points,
+            "submitted": len(submitted),
+            "avg": round(sum(submitted) / len(submitted), 1) if submitted else None,
+            "median": round(statistics.median(submitted), 1) if submitted else None,
+            "histogram": _histogram_counts(pct_vals),
+        })
+
+    return {
+        "available": True,
+        "count": count,
+        "max_total": max_total,
+        "stats": {
+            "avg": round(sum(totals) / count, 1),
+            "median": round(statistics.median(totals), 1),
+            "min": min(totals),
+            "max": max(totals),
+            "passed50": passed50,
+        },
+        "hist_labels": LIVE_HIST_LABELS,
+        "total_histogram": _histogram_counts(total_pct),
+        "tasks": tasks_payload,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 

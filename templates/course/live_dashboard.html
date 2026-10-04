@@ -1,0 +1,350 @@
+{% extends "base.html" %}
+
+{# ─────────────────────────────────────────────────────────────────────
+   Anonymisiertes Live-Dashboard: Kennzahlen + Histogramme für den Kurs,
+   aber OHNE studentenidentifizierende Daten (auch nicht im JS).
+   Zugriff: PROF/Tutor/Global-Admin; alle anderen sehen eine freundliche
+   Zugriffs-Sperre (z.B. Student, der den Link aus den Slides folgt).
+   Filter kommen als URL-Query-Parameter (Link ist damit teilbar / in
+   Slides einbettbar) und können auf der Seite geändert werden.
+   ───────────────────────────────────────────────────────────────────── #}
+
+{# Seiten-Chrom (Nav/Footer) komplett weglassen — die Seite wird
+   vorgestellt und in Slides eingebettet; auch die Zugriffs-Sperre
+   (z. B. für Studenten) bleibt dadurch aufgeräumt. #}
+{% block main_nav %}{% endblock %}
+{% block site_footer %}{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto">
+
+{% if can_view %}
+
+  <script>
+    const courseId = {{ course.id }};
+  </script>
+
+  <!-- Header -->
+  <div class="flex items-start justify-between flex-wrap gap-3 mb-6">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-900 flex items-center gap-3 flex-wrap">
+        📊 Live-Dashboard
+        <span class="inline-flex items-center gap-1.5 bg-red-50 border border-red-200 text-red-600 text-xs font-bold px-2.5 py-1 rounded-full">
+          <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span> LIVE
+        </span>
+      </h1>
+      <p class="text-sm text-gray-500 mt-1">
+        {{ course.name }}
+      </p>
+    </div>
+    <div class="flex items-center gap-2 flex-wrap">
+      <span id="last-updated" class="text-xs text-gray-400 mr-1"></span>
+      <button id="refresh-btn" title="Jetzt aktualisieren"
+              class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition">⟳ Aktualisieren</button>
+      <button id="copy-snippet-btn" title="Markdown-Snippet für die Slides kopieren (Iframe-Embed mit den aktiven Filtern)"
+              class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition">📋 Snippet kopieren</button>
+      <a href="/courses/{{ course.id }}/overview"
+         class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition">← Zur Übersicht</a>
+    </div>
+  </div>
+
+  <!-- Summary Stats (wie in der Punkteübersicht) -->
+  <div id="summary-stats" class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+    <p class="text-gray-400 col-span-4">Wird geladen…</p>
+  </div>
+
+  <!-- Filter (wie in der Punkteübersicht) -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+    <div class="flex items-center gap-4 flex-wrap">
+      <div class="flex-1 min-w-[200px]">
+        <label class="block text-sm font-medium text-gray-700 mb-1">Aufgaben-Suche</label>
+        <input type="text" id="filter-input" placeholder="z.B. Blatt1, Rekursion..."
+               class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1"
+               title="Studenten nach Annotation in der Mitgliederübersicht filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht vom Wortanfang (z.B. 'ÜG' → 'ÜG1' und 'ÜG-1').">Annotation / Übungsgruppe</label>
+        <input type="text" id="annotation-filter" placeholder="z.B. ÜG-1"
+               class="border border-gray-300 rounded-lg px-3 py-2 text-sm w-[240px] focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Aufgabentyp</label>
+        <select id="type-filter" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          <option value="">Alle</option>
+          <option value="text">Textaufgaben</option>
+          <option value="code">Codeaufgaben</option>
+          <option value="workspace">Workspace-Aufgaben</option>
+          <option value="mc">Multiple-Choice-Aufgaben</option>
+        </select>
+      </div>
+      <div class="flex items-end">
+        <button id="clear-filter-btn" class="text-gray-500 hover:text-gray-700 text-sm px-3 py-2" style="margin-top:20px">✕ Filter löschen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Filter zu eng (k-Anonymität) -->
+  <div id="too-small-warning" class="hidden bg-yellow-50 border border-yellow-300 rounded-xl p-5 mb-6 text-yellow-800 text-sm">
+    <strong>⚠️ Filter ist zu eng:</strong> <span id="too-small-count"></span> — bei weniger als 3 Personen
+    werden aus Datenschutzgründen keine Kennzahlen angezeigt, damit keine Einzelperson zuordenbar wäre.
+  </div>
+
+  <!-- Histogramme -->
+  <div id="charts-area">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
+        <h2 class="text-lg font-bold text-gray-900">Punktverteilung (Gesamt)</h2>
+        <span id="total-caption" class="text-sm text-gray-500"></span>
+      </div>
+      <div style="height:280px">
+        <canvas id="hist-total"></canvas>
+      </div>
+    </div>
+
+    <h2 class="text-lg font-bold text-gray-900 mb-3">Pro Aufgabe</h2>
+    <div id="task-charts" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+  </div>
+
+{% else %}
+
+  <!-- Kein Zugriff (z.B. Student): freundliche Meldung statt 403 -->
+  <div class="max-w-2xl mx-auto mt-10">
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-10 text-center">
+      <div class="text-6xl mb-5">📊</div>
+      <h1 class="text-2xl font-bold text-gray-900 mb-4">Live-Dashboard für Dozierende &amp; Tutoren</h1>
+      <p class="text-gray-600 leading-relaxed mb-3">
+        Auf dieser Seite sehen nur Dozierende und Tutoren <strong>anonymisierte</strong> Kennzahlen des
+        Kurses {{ course.name }} — Punkteschnitt, Verteilung und Vergleiche zwischen den Aufgaben.
+      </p>
+      <p class="text-gray-600 leading-relaxed mb-6">
+        Es sind keine Namen und keine individuellen Ergebnisse enthalten — deine eigenen Ergebnisse
+        siehst du wie gewohnt in der Aufgabenübersicht. 👇
+      </p>
+      <a href="/courses/{{ course.id }}/tasks"
+         class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 rounded-lg transition">
+        Zur Aufgabenübersicht →
+      </a>
+    </div>
+  </div>
+
+{% endif %}
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+{% if can_view %}
+<!-- Chart.js (MIT) — lokal gespiegelt -->
+<script src="{{ asset('vendor/chart.umd.js') }}"></script>
+<script>
+  const REFRESH_MS = 10000;
+  const HIST_LABELS = ['0–10', '10–20', '20–30', '30–40', '40–50', '50–60', '60–70', '70–80', '80–90', '90–100'];
+
+  const filterInput = document.getElementById('filter-input');
+  const typeFilter = document.getElementById('type-filter');
+  const annotationFilter = document.getElementById('annotation-filter');
+
+  // Initiale Filter aus der URL (Link z. B. aus den Slides)
+  const _initParams = new URLSearchParams(location.search);
+  filterInput.value = _initParams.get('filter_text') || '';
+  typeFilter.value = _initParams.get('type_filter') || '';
+  annotationFilter.value = _initParams.get('annotation_filter') || '';
+
+  let totalChart = null;
+  let taskCharts = [];
+  let busy = false;
+
+  function currentParams() {
+    const p = new URLSearchParams();
+    const ft = filterInput.value.trim();
+    const tf = typeFilter.value;
+    const af = annotationFilter.value.trim();
+    if (ft) p.set('filter_text', ft);
+    if (tf) p.set('type_filter', tf);
+    if (af) p.set('annotation_filter', af);
+    return p;
+  }
+
+  // URL mit den Filtern in Sync halten → Link ist jederzeit teilbar/einbettbar
+  function syncUrl() {
+    const qs = currentParams().toString();
+    history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
+  }
+
+  function destroyTaskCharts() {
+    taskCharts.forEach(c => c.destroy());
+    taskCharts = [];
+    document.getElementById('task-charts').innerHTML = '';
+  }
+
+  function makeBarChart(canvas, counts, color) {
+    return new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: HIST_LABELS,
+        datasets: [{ data: counts, backgroundColor: color, borderRadius: 4 }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        animation: { duration: 250 },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => items[0].label + ' % der Maximalpunkte',
+              label: (item) => item.parsed.y + ' Student' + (item.parsed.y === 1 ? '' : 'en'),
+            },
+          },
+        },
+        scales: {
+          y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'Studenten' } },
+          x: { ticks: { font: { size: 10 } }, title: { display: true, text: '% der Maximalpunkte' } },
+        },
+      },
+    });
+  }
+
+  function renderStats(data) {
+    const s = data.stats;
+    const statsDiv = document.getElementById('summary-stats');
+    const avgPct = data.max_total > 0 ? (s.avg / data.max_total * 100) : 0;
+    const medPct = data.max_total > 0 ? (s.median / data.max_total * 100) : 0;
+    statsDiv.innerHTML =
+      '<div class="text-center p-3 rounded-lg bg-blue-50">' +
+        '<div class="text-2xl font-bold text-blue-600">' + data.count + '</div>' +
+        '<div class="text-sm text-gray-500">Studenten im Filter</div>' +
+      '</div>' +
+      '<div class="text-center p-3 rounded-lg bg-green-50">' +
+        '<div class="text-2xl font-bold text-green-600">' + s.avg.toFixed(1) + '</div>' +
+        '<div class="text-sm text-gray-500">Ø Punkte (' + avgPct.toFixed(0) + ' %)</div>' +
+      '</div>' +
+      '<div class="text-center p-3 rounded-lg bg-purple-50">' +
+        '<div class="text-2xl font-bold text-purple-600">' + s.max + ' / ' + s.min + '</div>' +
+        '<div class="text-sm text-gray-500">Max / Min</div>' +
+      '</div>' +
+      '<div class="text-center p-3 rounded-lg bg-orange-50">' +
+        '<div class="text-2xl font-bold ' + (s.passed50 === data.count ? 'text-green-600' : 'text-orange-600') + '">' + s.passed50 + '</div>' +
+        '<div class="text-sm text-gray-500">≥ 50 % erreicht</div>' +
+      '</div>';
+    document.getElementById('total-caption').textContent =
+      'Median: ' + s.median + ' Punkte (' + medPct.toFixed(0) + ' % von ' + data.max_total + ' P.)';
+  }
+
+  function renderTaskCharts(data) {
+    destroyTaskCharts();
+    const grid = document.getElementById('task-charts');
+    const typeBadge = { text: '📝', code: '💻', workspace: '🐳', mc: '🎯' };
+    if (data.tasks.length === 0) {
+      grid.innerHTML = '<p class="text-gray-400">Keine Aufgaben im Filter.</p>';
+      return;
+    }
+    data.tasks.forEach(task => {
+      const card = document.createElement('div');
+      card.className = 'bg-white rounded-xl shadow-sm border border-gray-200 p-5';
+      const statLine = task.submitted > 0
+        ? 'Ø ' + task.avg + ' P. · ' + task.submitted + '/' + data.count + ' eingereicht'
+        : 'Noch keine Einreichungen';
+      card.innerHTML =
+        '<h3 class="font-semibold text-gray-800 text-sm truncate">' +
+          (typeBadge[task.task_type] || '📋') + ' ' + escapeHtml(task.title) +
+          ' <span class="text-gray-400 font-normal">' + task.max_points + ' P.</span>' +
+        '</h3>' +
+        '<p class="text-xs text-gray-500 mb-2 mt-1">' + statLine + '</p>' +
+        '<div style="height:150px"><canvas></canvas></div>';
+      grid.appendChild(card);
+      taskCharts.push(makeBarChart(card.querySelector('canvas'), task.histogram, 'rgba(22,163,74,0.55)'));
+    });
+  }
+
+  async function loadStats(quiet) {
+    if (busy) return;
+    busy = true;
+    try {
+      const res = await fetch('/api/courses/' + courseId + '/live-stats?' + currentParams(), {
+        credentials: 'same-origin',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (!quiet) showToast(data.detail || 'Fehler beim Laden.', 'error');
+        return;
+      }
+      const data = await res.json();
+
+      if (!data.available) {
+        document.getElementById('charts-area').classList.add('hidden');
+        document.getElementById('summary-stats').innerHTML =
+          '<p class="text-gray-400 col-span-4">Keine Kennzahlen verfügbar.</p>';
+        const warn = document.getElementById('too-small-warning');
+        warn.classList.remove('hidden');
+        document.getElementById('too-small-count').textContent =
+          'Es matchen nur ' + data.count + ' ' + (data.count === 1 ? 'Person' : 'Personen') + ' den Filtern';
+        return;
+      }
+
+      document.getElementById('too-small-warning').classList.add('hidden');
+      document.getElementById('charts-area').classList.remove('hidden');
+      renderStats(data);
+      if (totalChart) {
+        totalChart.data.datasets[0].data = data.total_histogram;
+        totalChart.update();
+      } else {
+        totalChart = makeBarChart(document.getElementById('hist-total'), data.total_histogram, 'rgba(37,99,235,0.55)');
+      }
+      renderTaskCharts(data);
+      document.getElementById('last-updated').textContent =
+        'Stand: ' + new Date().toLocaleTimeString('de-DE');
+    } catch (err) {
+      if (!quiet) showToast('Fehler: ' + err.message, 'error');
+    } finally {
+      busy = false;
+    }
+  }
+
+  // ─── Filter-Events ──────────────────────────────────────────
+  let filterTimeout;
+  let annotationTimeout;
+
+  filterInput.addEventListener('input', () => {
+    clearTimeout(filterTimeout);
+    filterTimeout = setTimeout(() => { syncUrl(); loadStats(false); }, 300);
+  });
+  typeFilter.addEventListener('change', () => { syncUrl(); loadStats(false); });
+  annotationFilter.addEventListener('input', () => {
+    clearTimeout(annotationTimeout);
+    annotationTimeout = setTimeout(() => { syncUrl(); loadStats(false); }, 300);
+  });
+  document.getElementById('clear-filter-btn').addEventListener('click', () => {
+    filterInput.value = '';
+    typeFilter.value = '';
+    annotationFilter.value = '';
+    syncUrl();
+    loadStats(false);
+  });
+
+  // ─── Kopfzeilen-Buttons ─────────────────────────────────────
+  document.getElementById('refresh-btn').addEventListener('click', () => loadStats(false));
+
+  document.getElementById('copy-snippet-btn').addEventListener('click', async () => {
+    syncUrl();
+    // Markdown-Snippet für die Folien: absolute URL → wird vom Renderer
+    // als Iframe gerendert (allow-same-origin → Login/Cookies funktionieren
+    // im Embed); {height=…} fixiert die Iframe-Höhe (ohne Angabe bliebe
+    // sie beim Browser-Default von 150 px).
+    const snippet = '![' + 'Live-Dashboard](' + location.href + ') {height=400}';
+    try {
+      await navigator.clipboard.writeText(snippet);
+      showToast('Snippet kopiert — in die Folie einfügen, Höhe über {height=…} anpassbar.', 'success');
+    } catch {
+      showToast('Snippet: ' + snippet, 'info');
+    }
+  });
+
+  // ─── Live: Auto-Refresh alle 10 s (nur im sichtbaren Tab) ───
+  setInterval(() => {
+    if (document.visibilityState === 'visible') loadStats(true);
+  }, REFRESH_MS);
+
+  loadStats(false);
+</script>
+{% endif %}
+{% endblock %}

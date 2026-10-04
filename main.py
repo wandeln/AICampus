@@ -2079,6 +2079,56 @@ async def overview_page(
     return templates.TemplateResponse("course/overview.html", ctx)
 
 
+@app.get("/courses/{course_id}/live", response_class=HTMLResponse)
+async def live_dashboard_page(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Anonymisiertes Live-Dashboard (PROF/Tutor/Admin).
+
+    Für alle anderen (z.B. Studenten, die den Link aus den Slides
+    folgen) wird eine freundliche Zugriffs-Sperre gerendert statt 403.
+    """
+    course = session.get(Course, course_id)
+    if not course:
+        raise HTTPException(404, "Kurs nicht gefunden.")
+
+    membership = session.exec(
+        select(UserCourse)
+        .where(UserCourse.user_id == user.id)
+        .where(UserCourse.course_id == course_id)
+    ).first()
+
+    is_admin = user.role == GlobalUserRole.ADMIN
+    can_view = is_admin or (
+        membership is not None
+        and membership.role_in_course in (CourseRole.PROF, CourseRole.TUTOR)
+    )
+
+    ctx = {
+        "request": request,
+        "page_title": f"Live-Dashboard — {course.name}",
+        "page_description": f"Anonymisiertes Live-Dashboard für den Kurs {course.name}",
+        "current_user": _user_ctx(
+            user,
+            membership.role_in_course.value if membership else ("ADMIN" if is_admin else "USER"),
+        ),
+        "courses": _get_user_courses(user, session),
+        "selected_course_id": course_id,
+        "is_admin": is_admin,
+        "course": {
+            "id": course.id,
+            "name": course.name,
+            "description": course.description,
+            "semester": course.semester,
+        },
+        "can_view": can_view,
+    }
+    return templates.TemplateResponse("course/live_dashboard.html", ctx)
+
+
 @app.get("/courses/{course_id}/tasks/{task_id}/students/{student_id}/review")
 async def submission_review_page(
     course_id: int,

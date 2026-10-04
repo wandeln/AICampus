@@ -3,8 +3,17 @@
 {% block course_content %}
 
   <!-- Summary Stats -->
-  <div id="summary-stats" class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-8 grid grid-cols-2 md:grid-cols-4 gap-4">
+  <div id="summary-stats" class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-2 grid grid-cols-2 md:grid-cols-4 gap-4">
     <!-- Wird dynamisch per JS gefüllt -->
+  </div>
+
+  <!-- Link zum anonymisierten Live-Dashboard -->
+  <div class="mb-6">
+    <a id="live-dashboard-link" href="/courses/{{ course.id }}/live" target="_blank" rel="noopener"
+       class="inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline">
+      📈 Anonymisiertes Live-Dashboard öffnen
+      <span class="text-xs text-gray-400 font-normal">(nur Kennzahlen &amp; Verteilung, ohne Namen — ideal zum Zeigen in der Vorlesung)</span>
+    </a>
   </div>
 
   <!-- Filters -->
@@ -292,6 +301,20 @@
     document.getElementById('type-filter').value = '';
     document.getElementById('annotation-filter').value = '';
     loadOverview('', '', '');
+  });
+
+  // Live-Dashboard-Link: aktuelle Filter als Query-Parameter mitschicken,
+  // damit der Link (z. B. für die Slides) die Auswahl enthält.
+  document.getElementById('live-dashboard-link').addEventListener('click', (e) => {
+    const p = new URLSearchParams();
+    const ft = document.getElementById('filter-input').value.trim();
+    const tf = document.getElementById('type-filter').value;
+    const af = document.getElementById('annotation-filter').value.trim();
+    if (ft) p.set('filter_text', ft);
+    if (tf) p.set('type_filter', tf);
+    if (af) p.set('annotation_filter', af);
+    const qs = p.toString();
+    e.currentTarget.href = '/courses/' + courseId + '/live' + (qs ? '?' + qs : '');
   });
 
   // ─── Excel Export ───────────────────────────────────────────
