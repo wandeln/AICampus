@@ -16,6 +16,11 @@
                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
       </div>
       <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1" title="Studenten nach Annotation in der Mitgliederübersicht filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht vom Wortanfang (z.B. 'ÜG' → 'ÜG1' und 'ÜG-1'; '1' matcht aber nicht 'Jahrgang 2001').">Annotation / Übungsgruppe</label>
+        <input type="text" id="annotation-filter" placeholder="z.B. ÜG-1"
+               class="border border-gray-300 rounded-lg px-3 py-2 text-sm w-[240px] focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">Aufgabentyp</label>
         <select id="type-filter" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
           <option value="">Alle</option>
@@ -114,7 +119,7 @@
 {% block extra_scripts %}
 <script>
   // ─── Load Overview Data ─────────────────────────────────────
-  async function loadOverview(filterText = '', typeFilter = '') {
+  async function loadOverview(filterText = '', typeFilter = '', annotationFilter = '') {
     const loading = document.getElementById('loading-state');
     const tableContainer = document.getElementById('table-container');
 
@@ -124,6 +129,7 @@
     try {
       const params = new URLSearchParams({ filter_text: filterText });
       if (typeFilter) params.set('type_filter', typeFilter);
+      if (annotationFilter) params.set('annotation_filter', annotationFilter);
 
       const res = await fetch('/api/courses/' + courseId + '/overview?' + params, {
         credentials: 'same-origin',
@@ -156,6 +162,7 @@
     let headerHtml = '<tr class="bg-gray-100">';
     headerHtml += '<th class="text-left py-3 px-4 font-semibold text-gray-700 border-b sticky left-0 bg-gray-100 z-10 min-w-[180px]">Name</th>';
     headerHtml += '<th class="text-left py-3 px-4 font-semibold text-gray-700 border-b min-w-[120px]">Matr.-Nr.</th>';
+    headerHtml += '<th class="text-left py-3 px-4 font-semibold text-gray-700 border-b min-w-[120px]">Annotation</th>';
 
     data.tasks.forEach(task => {
       const typeBadge = {
@@ -179,6 +186,7 @@
       bodyHtml += '<tr class="hover:bg-gray-50 transition">';
       bodyHtml += '<td class="py-2 px-4 font-medium text-gray-900 border-b sticky left-0 bg-white z-10 min-w-[180px]">' + student.name + '</td>';
       bodyHtml += '<td class="py-2 px-4 text-sm text-gray-500 border-b font-mono min-w-[120px]">' + student.username + '</td>';
+      bodyHtml += '<td class="py-2 px-4 text-sm text-gray-500 border-b min-w-[120px]">' + (student.annotation ? escapeHtml(student.annotation) : '') + '</td>';
 
       let totalPoints = 0;
       data.tasks.forEach(task => {
@@ -263,30 +271,39 @@
 
   // ─── Filter Events ──────────────────────────────────────────
   let filterTimeout;
+  let annotationTimeout;
 
   document.getElementById('filter-input').addEventListener('input', (e) => {
     clearTimeout(filterTimeout);
-    filterTimeout = setTimeout(() => loadOverview(e.target.value, document.getElementById('type-filter').value), 300);
+    filterTimeout = setTimeout(() => loadOverview(e.target.value, document.getElementById('type-filter').value, document.getElementById('annotation-filter').value), 300);
   });
 
   document.getElementById('type-filter').addEventListener('change', (e) => {
-    loadOverview(document.getElementById('filter-input').value, e.target.value);
+    loadOverview(document.getElementById('filter-input').value, e.target.value, document.getElementById('annotation-filter').value);
+  });
+
+  document.getElementById('annotation-filter').addEventListener('input', (e) => {
+    clearTimeout(annotationTimeout);
+    annotationTimeout = setTimeout(() => loadOverview(document.getElementById('filter-input').value, document.getElementById('type-filter').value, e.target.value), 300);
   });
 
   document.getElementById('clear-filter-btn').addEventListener('click', () => {
     document.getElementById('filter-input').value = '';
     document.getElementById('type-filter').value = '';
-    loadOverview('', '');
+    document.getElementById('annotation-filter').value = '';
+    loadOverview('', '', '');
   });
 
   // ─── Excel Export ───────────────────────────────────────────
   document.getElementById('export-excel-btn').addEventListener('click', async () => {
     const filterText = document.getElementById('filter-input').value;
     const typeFilter = document.getElementById('type-filter').value;
+    const annotationFilter = document.getElementById('annotation-filter').value;
 
     try {
       const params = new URLSearchParams({ filter_text: filterText });
       if (typeFilter) params.set('type_filter', typeFilter);
+      if (annotationFilter) params.set('annotation_filter', annotationFilter);
       const res = await fetch('/api/courses/' + courseId + '/export-excel?' + params, {
         method: 'POST',
         credentials: 'same-origin',
@@ -348,6 +365,7 @@
   document.getElementById('generate-report-btn').addEventListener('click', async () => {
     const filterText = document.getElementById('filter-input').value;
     const typeFilter = document.getElementById('type-filter').value;
+    const annotationFilter = document.getElementById('annotation-filter').value;
 
     // Show modal with loading state
     reportLoading.classList.remove('hidden');
@@ -358,6 +376,7 @@
     try {
       const params = new URLSearchParams({ filter_text: filterText });
       if (typeFilter) params.set('type_filter', typeFilter);
+      if (annotationFilter) params.set('annotation_filter', annotationFilter);
 
       const res = await fetch('/api/courses/' + courseId + '/generate-report?' + params, {
         method: 'POST',

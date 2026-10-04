@@ -160,6 +160,11 @@ class UserCourse(UserCourseBase, table=True):
     
     id: Optional[int] = Field(default=None, primary_key=True)
     
+    # Freie Anmerkung der PROF/Tutors je Mitglied (z.B. "Übungsgruppe 2").
+    # In der Mitgliederübersicht editierbar, in der Punkteübersicht als
+    # Annotations-Filter nutzbar.
+    annotation: Optional[str] = Field(default=None)
+
     user: User = Relationship(back_populates="user_courses")
     course: Course = Relationship(back_populates="course_members")
 
@@ -174,6 +179,7 @@ class UserCourseRead(SQLModel):
     user_id: int
     course_id: int
     role_in_course: CourseRole
+    annotation: Optional[str] = None
     user: Optional[UserRead] = None
 
 

@@ -164,6 +164,7 @@ async def list_course_members(
             "username": m.user.username if m.user else "unknown",
             "name": m.user.name if m.user else "unknown",
             "role_in_course": m.role_in_course.value,
+            "annotation": m.annotation,
         }
         for m in members
     ]
@@ -246,6 +247,52 @@ async def update_member_role(
             "user_id": membership.user_id,
             "username": membership.user.username if membership.user else "unknown",
             "role_in_course": membership.role_in_course.value,
+        },
+    }
+
+
+@router.put("/courses/{course_id}/members/{user_id}/annotation")
+async def update_member_annotation(
+    course_id: int,
+    user_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    auth_result: tuple = Depends(require_prof_or_admin()),
+):
+    """
+    Annotation (freier Text) eines Kursmitglieds setzen (PROF oder Admin).
+
+    Request:
+        {
+            "annotation": "Übungsgruppe 2"   // leer/None löscht die Annotation
+        }
+    """
+    body = await request.json()
+    annotation = body.get("annotation")
+    if isinstance(annotation, str):
+        annotation = annotation.strip() or None
+    else:
+        annotation = None
+
+    membership = session.exec(
+        select(UserCourse)
+        .where(UserCourse.user_id == user_id)
+        .where(UserCourse.course_id == course_id)
+    ).first()
+
+    if not membership:
+        raise HTTPException(404, "Mitgliedschaft nicht gefunden.")
+
+    membership.annotation = annotation
+    session.add(membership)
+    session.commit()
+
+    return {
+        "message": "Annotation aktualisiert.",
+        "membership": {
+            "user_id": membership.user_id,
+            "username": membership.user.username if membership.user else "unknown",
+            "annotation": membership.annotation,
         },
     }
 

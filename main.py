@@ -1488,6 +1488,7 @@ async def members_page(
             "name": uc.user.name if uc.user else "unknown",
             "avatar": f"/avatars/{uc.user.avatar.rsplit('/', 1)[-1]}" if uc.user and uc.user.avatar else None,
             "role_in_course": uc.role_in_course.value,
+            "annotation": uc.annotation,
         }
         for uc in user_courses
     ]

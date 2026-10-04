@@ -757,6 +757,18 @@ async def reorder_tasks(
     return {"message": "Aufgaben-Reihenfolge aktualisiert."}
 
 
+def _annotation_matches(annotation: Optional[str], filter_text: str) -> bool:
+    """Annotations-Filter: alle per Leerzeichen getrennten Wörter des Filters
+    müssen als Wortanfang (Präfix, Groß-/Kleinschreibung egal) in der
+    Annotation vorkommen — AND-Verknüpfung. Bindestrich gehört zum Wort.
+    So matcht "ÜG" auch "ÜG1"/"ÜG-1", aber "1" nicht "Jahrgang 2001"."""
+    terms = [t.casefold() for t in filter_text.split()]
+    if not terms or not annotation:
+        return False
+    words = [w.casefold() for w in annotation.split()]
+    return all(any(word.startswith(term) for word in words) for term in terms)
+
+
 @router.get("/courses/{course_id}/overview")
 async def get_course_overview(
     course_id: int,
@@ -781,7 +793,15 @@ async def get_course_overview(
         .where(UserCourse.course_id == course_id)
         .where(UserCourse.role_in_course == CourseRole.STUDENT)
     ).all()
+
+    # Annotations-Filter (z.B. Übungsgruppe): mehrere Leerzeichen-getrennte
+    # Wörter, jedes muss als Wort in der Annotation vorkommen (AND).
+    annotation_filter = request.query_params.get("annotation_filter", "").strip()
+    if annotation_filter:
+        memberships = [m for m in memberships if _annotation_matches(m.annotation, annotation_filter)]
+
     students = [m.user for m in memberships]
+    annotation_by_user = {m.user_id: m.annotation for m in memberships}
 
     # Filter aus Query-Parametern
     filter_text = request.query_params.get("filter_text", "").strip()
@@ -836,6 +856,7 @@ async def get_course_overview(
             "username": student.username,
             "name": student.name,
             "total_points": total,
+            "annotation": annotation_by_user.get(student.id),
         })
 
     return {
@@ -1690,7 +1711,14 @@ async def export_excel(
         .where(UserCourse.course_id == course_id)
         .where(UserCourse.role_in_course == CourseRole.STUDENT)
     ).all()
+
+    # Annotations-Filter (z.B. Übungsgruppe) — identisch zu get_course_overview
+    annotation_filter = request.query_params.get("annotation_filter", "").strip()
+    if annotation_filter:
+        memberships = [m for m in memberships if _annotation_matches(m.annotation, annotation_filter)]
+
     students = [m.user for m in memberships]
+    annotations = {m.user_id: m.annotation for m in memberships}
 
     # Scores berechnen
     scores = {}  # { student_id: { task_id: points } }
@@ -1727,6 +1755,7 @@ async def export_excel(
         scores=scores,
         session=session,
         filter_text=filter_text or None,
+        annotations=annotations,
     )
 
     filename = f"punktestand_{course.name.replace(' ', '_')}.xlsx"
@@ -1785,6 +1814,12 @@ async def generate_course_report(
         .where(UserCourse.course_id == course_id)
         .where(UserCourse.role_in_course == CourseRole.STUDENT)
     ).all()
+
+    # Annotations-Filter (z.B. Übungsgruppe) — identisch zu get_course_overview
+    annotation_filter = request.query_params.get("annotation_filter", "").strip()
+    if annotation_filter:
+        memberships = [m for m in memberships if _annotation_matches(m.annotation, annotation_filter)]
+
     students = [m.user for m in memberships]
 
     # ── Daten für das LLM sammeln ──────────────────────────────

@@ -22,11 +22,13 @@
 
       <!-- Mitglieder-Tabelle -->
       <div class="card overflow-hidden">
-        <table class="w-full text-sm">
+        <div class="overflow-x-auto">
+        <table class="w-full text-sm min-w-[760px]">
           <thead class="bg-gray-100 text-gray-600">
             <tr>
               <th class="text-left px-4 py-2 font-semibold">Name</th>
               <th class="text-left px-4 py-2 font-semibold">Username</th>
+              <th class="text-left px-4 py-2 font-semibold">Annotation</th>
               <th class="text-center px-4 py-2 font-semibold">Rolle</th>
               <th class="text-center px-4 py-2 font-semibold">Aktionen</th>
             </tr>
@@ -34,7 +36,7 @@
           <tbody id="member-table-body">
             {% for member in members %}
             <tr class="member-row border-t hover:bg-gray-50 transition"
-                data-search="{{ member.name }} {{ member.username }} {{ member.role_in_course }}">
+                data-search="{{ member.name }} {{ member.username }} {{ member.role_in_course }} {{ member.annotation or '' }}">
               <td class="px-4 py-3">
                 <div class="flex items-center gap-2">
                   {% if member.avatar %}
@@ -46,6 +48,16 @@
                 </div>
               </td>
               <td class="px-4 py-3 text-gray-500">{{ member.username }}</td>
+              <td class="px-4 py-3">
+                <input
+                  type="text"
+                  class="annotation-input w-full border rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[140px]"
+                  value="{{ member.annotation or '' }}"
+                  placeholder="z.B. ÜG-1"
+                  data-user-id="{{ member.user_id }}"
+                  title="Freie Anmerkung (z.B. Übungsgruppe) – wird beim Tippen automatisch gespeichert"
+                  oninput="onAnnotationInput(this)">
+              </td>
               <td class="px-4 py-3 text-center">
                 {% if member.user_id != current_user.id %}
                 <select
@@ -87,6 +99,7 @@
             {% endfor %}
           </tbody>
         </table>
+        </div>
 
         {% if not members %}
         <div class="text-center py-8 text-gray-400">
@@ -299,12 +312,13 @@
       }
       selectEl.value = newRole;
 
-      // data-search Attribut aktualisieren
+      // data-search Attribut aktualisieren (Annotation ist ebenfalls suchbar)
       const row = selectEl.closest('tr');
       if (row) {
         const name = row.querySelector('td:first-child')?.textContent || '';
         const username = row.querySelector('td:nth-child(2)')?.textContent || '';
-        row.dataset.search = name + ' ' + username + ' ' + newRole;
+        const annotation = row.querySelector('.annotation-input')?.value || '';
+        row.dataset.search = name + ' ' + username + ' ' + annotation + ' ' + newRole;
       }
 
       showToast(data.message || 'Rolle geändert.', 'success');
@@ -336,6 +350,44 @@
       setTimeout(() => row.remove(), 300);
 
       showToast(data.message || 'Mitglied entfernt.', 'success');
+    } catch (err) {
+      showToast('Fehler: ' + err.message, 'error');
+    }
+  }
+
+  // ─── Annotation ───────────────────────────────────────────────
+  function onAnnotationInput(el) {
+    if (el._annTimer) clearTimeout(el._annTimer);
+    el._annTimer = setTimeout(() => saveAnnotation(el), 600);
+  }
+
+  async function saveAnnotation(el) {
+    const userId = parseInt(el.dataset.userId);
+    const value = el.value.trim();
+    try {
+      const res = await fetch('/api/courses/' + courseId + '/members/' + userId + '/annotation', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ annotation: value }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.detail || 'Annotation konnte nicht gespeichert werden.', 'error');
+        return;
+      }
+      // data-search des Rows aktualisieren (Annotation ist suchbar)
+      const row = el.closest('tr');
+      if (row) {
+        const name = row.querySelector('td:first-child')?.textContent || '';
+        const username = row.querySelector('td:nth-child(2)')?.textContent || '';
+        const roleEl = row.querySelector('.role-select');
+        const role = roleEl ? roleEl.value : (row.querySelector('td:nth-child(4)')?.textContent || '').trim();
+        row.dataset.search = [name, username, role, value].join(' ');
+      }
+      // kurzes visuelles Feedback
+      el.classList.add('bg-green-100');
+      setTimeout(() => el.classList.remove('bg-green-100'), 800);
     } catch (err) {
       showToast('Fehler: ' + err.message, 'error');
     }

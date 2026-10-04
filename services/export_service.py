@@ -49,14 +49,15 @@ class ExportService:
         scores: dict,  # {student_id: {task_id: points}}
         session: Session,
         filter_text: Optional[str] = None,
+        annotations: Optional[dict] = None,  # {student_id: annotation}
     ) -> Workbook:
         """
         Generiert eine Excel-Übersicht.
 
         Structure:
           Row 1: Course header (merged)
-          Row 2: Headers (Name, Matr.-Nr., Task1, Task2, ..., Summe, Anteil)
-          Row 3+: Data (name, matrnr, points, ..., SUM-formula, %-formula)
+          Row 2: Headers (Name, Matr.-Nr., Annotation, Task1, Task2, ..., Summe, Anteil)
+          Row 3+: Data (name, matrnr, annotation, points, ..., SUM-formula, %-formula)
 
         Summe und Anteil werden als Excel-Formeln berechnet!
         """
@@ -66,6 +67,9 @@ class ExportService:
         ws.title = EXCEL_SHEET_NAME
 
         from openpyxl.utils import get_column_letter
+
+        if annotations is None:
+            annotations = {}
 
         # ─── Filter Tasks wenn nötig ────────────────────────────
         if filter_text:
@@ -77,7 +81,8 @@ class ExportService:
         # Spalten-Indizes (1-basiert)
         COL_NAME = 1
         COL_MATRNR = 2
-        COL_FIRST_TASK = 3
+        COL_ANNOT = 3
+        COL_FIRST_TASK = 4
         COL_SUM = COL_FIRST_TASK + num_tasks
         COL_PCT = COL_SUM + 1
 
@@ -91,7 +96,7 @@ class ExportService:
         header_fill = self.HEADER_FILL
         header_font = self.HEADER_FONT
 
-        headers = ["Name", "Matr.-Nr."]
+        headers = ["Name", "Matr.-Nr.", "Annotation"]
         for task in tasks:
             headers.append(task.title)
         headers.extend(["Summe", "Anteil (%)"])
@@ -121,6 +126,12 @@ class ExportService:
                 name="Calibri"
             )
             ws.cell(row=row_idx, column=COL_MATRNR).border = self.THIN_BORDER
+
+            # Annotation (z.B. Übungsgruppe)
+            ws.cell(row=row_idx, column=COL_ANNOT, value=annotations.get(student_id, "")).font = Font(
+                name="Calibri"
+            )
+            ws.cell(row=row_idx, column=COL_ANNOT).border = self.THIN_BORDER
 
             # Einzelpunkte pro Task
             for col, task in enumerate(tasks, COL_FIRST_TASK):
@@ -160,6 +171,7 @@ class ExportService:
         # ─── Spaltenbreiten anpassen ────────────────────────────
         ws.column_dimensions["A"].width = 20  # Name
         ws.column_dimensions["B"].width = 15  # Matr.-Nr.
+        ws.column_dimensions["C"].width = 20  # Annotation
         for col in range(COL_FIRST_TASK, COL_FIRST_TASK + num_tasks):
             col_letter = get_column_letter(col)
             ws.column_dimensions[col_letter].width = 25  # Tasks
@@ -176,10 +188,11 @@ class ExportService:
         scores: dict,
         session: Session,
         filter_text: Optional[str] = None,
+        annotations: Optional[dict] = None,
     ) -> bytes:
         """Wie generate_overview, aber gibt Bytes zurück (für Response)."""
         wb = self.generate_overview(
-            course_name, students, tasks, scores, session, filter_text
+            course_name, students, tasks, scores, session, filter_text, annotations
         )
         buf = io.BytesIO()
         wb.save(buf)
