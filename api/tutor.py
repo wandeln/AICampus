@@ -46,6 +46,14 @@ from services import file_edits
 from services.export_service import ExportService
 from services.grading_service import GradingService
 from services.llm_service import LLMService
+from services.mc_service import (
+    McValidationError,
+    mc_total_points,
+    parse_mc_data,
+    student_view as _mc_student_view,
+    tutor_view as _mc_tutor_view,
+    validate_mc_data as _mc_validate,
+)
 from services.media_service import all_media_for_course, sync_media_usages
 from services.references_service import build_references_text
 from services.settings_resolver import get_effective_compute_config, get_effective_llm_config
@@ -202,6 +210,23 @@ async def create_task(
     if max_points < 0:
         raise HTTPException(400, "Max. Punkte muss mindestens 0 sein.")
 
+    # Multiple-Choice: mc_data validieren; bei Fragen wird max_points aus
+    # der Punkte-Summe berechnet (Tutor gibt nur Fragen-Punkte ein).
+    # Leere mc_data erlaubt (Aufgabe noch nicht konfiguriert — ist
+    # standardmäßig versteckt, Submit lehnt ab).
+    mc_data_value: Optional[str] = None
+    if task_type == TaskType.MC:
+        raw_mc = body.get("mc_data")
+        if isinstance(raw_mc, str) and raw_mc.strip():
+            try:
+                mc_parsed = parse_mc_data(raw_mc)
+            except McValidationError as e:
+                raise HTTPException(400, f"Multiple-Choice-Fehler: {e}")
+            mc_data_value = json.dumps(mc_parsed, ensure_ascii=False)
+            max_points = mc_total_points(mc_parsed)
+        elif raw_mc not in (None, ""):
+            raise HTTPException(400, "mc_data muss ein JSON-String sein.")
+
     task = Task(
         course_id=course_id,
         created_by=user.id,  # type: ignore[arg-type]
@@ -214,6 +239,7 @@ async def create_task(
         deadline=body.get("deadline"),
         code_template=body.get("code_template"),
         test_code=body.get("test_code"),
+        mc_data=mc_data_value,
         is_visible=body.get("is_visible", False),  # Default: für Studenten versteckt
         display_order=next_order,
     )
@@ -291,6 +317,19 @@ async def get_task(
         "test_code": task.test_code if is_tutor else None,
         "hints_enabled": task.hints_enabled,
     }
+
+    # Multiple-Choice: Studenten sehen NUR Options-Texte (kein Correct-Flag,
+    # kein Feedback) — sonst wäre die Lösung im DevTools erkennbar.
+    if task.task_type.value == "mc" and task.mc_data:
+        try:
+            mc_parsed = parse_mc_data(task.mc_data)
+        except McValidationError:
+            mc_parsed = None
+        if mc_parsed is not None:
+            result["mc_data"] = (
+                _mc_tutor_view(mc_parsed) if is_tutor
+                else _mc_student_view(
+                    mc_parsed, task_id=task.id, user_id=user.id))
 
     # Workspace-Aufgabe: Preset/GPU für alle (UI-Badges, Editor-Modus),
     # Spec/Dateien nur für Tutoren
@@ -378,6 +417,24 @@ async def update_task(
     if "test_code" in body: task.test_code = body["test_code"]
     if "is_visible" in body: task.is_visible = body["is_visible"]
     if "hints_enabled" in body: task.hints_enabled = body["hints_enabled"]
+
+    # Multiple-Choice: mc_data validieren; bei Fragen wird max_points aus
+    # der Punkte-Summe der Fragen berechnet (setzt eingegebene Punkte außer Kraft).
+    if "mc_data" in body:
+        val = body["mc_data"]
+        if val is None or (isinstance(val, str) and not val.strip()):
+            task.mc_data = None
+        else:
+            try:
+                mc_parsed = parse_mc_data(val)
+            except McValidationError as e:
+                raise HTTPException(400, f"Multiple-Choice-Fehler: {e}")
+            task.mc_data = json.dumps(mc_parsed, ensure_ascii=False)
+            if task.task_type == TaskType.MC:
+                task.max_points = mc_total_points(mc_parsed)
+    # Typ-Wechsel weg von MC: altes mc_data entsorgen
+    if "task_type" in body and task.task_type != TaskType.MC and task.mc_data:
+        task.mc_data = None
 
     # Workspace-Felder (Umgebung + Dateien; nur explizit übergebene Keys)
     if task.task_type == TaskType.WORKSPACE:
@@ -546,6 +603,7 @@ async def duplicate_task(
         deadline=task.deadline,
         code_template=task.code_template,
         test_code=task.test_code,
+        mc_data=task.mc_data,
         is_visible=task.is_visible,
         hints_enabled=task.hints_enabled,
         # Workspace-Einstellungen (für Text/Code-Tasks irrelevant)
@@ -838,7 +896,9 @@ async def ai_generate_task(
 
     gen_title = bool(gen.get("title"))
     gen_description = bool(gen.get("description"))
-    gen_solution = bool(gen.get("solution"))
+    # Musterlösung gilt nicht für MC — dort definieren korrekte Antworten +
+    # Feedback + Punkte je Frage die Bewertung eindeutig.
+    gen_solution = bool(gen.get("solution")) and task_type != "mc"
     # Template/Tests gelten nur für Code-Aufgaben
     gen_template = bool(gen.get("template")) and task_type == "code"
     gen_tests = bool(gen.get("tests")) and task_type == "code"
@@ -847,9 +907,11 @@ async def ai_generate_task(
     # automatisch angelegt (Titel aus LLM/Formular/Thema).
     gen_env = bool(gen.get("env")) and task_type == "workspace"
     gen_files = bool(gen.get("files")) and task_type == "workspace"
+    # MC: Fragen inkl. Optionen + Feedback je Option
+    gen_questions = bool(gen.get("questions")) and task_type == "mc"
 
     if not (gen_title or gen_description or gen_solution or gen_template or gen_tests
-            or gen_env or gen_files):
+            or gen_env or gen_files or gen_questions):
         raise HTTPException(400, "Keine Felder angefordert.")
 
     current_title = (body.get("title") or "").strip()
@@ -871,6 +933,7 @@ async def ai_generate_task(
         "code_template": "",
         "public_tests": "",
         "private_tests": "",
+        "mc_data": None,
     }
     latency_ms = 0
 
@@ -970,6 +1033,76 @@ async def ai_generate_task(
             response["description"] = (data.get("description") or "").strip()
         if gen_title:
             response["title"] = (data.get("title") or "").strip()
+
+    elif task_type == "mc":
+        # ── MC-Aufgabe: Titel/Einleitung/Musterlösung/Fragen. Das LLM legt
+        # auch das Feedback je Option an (wird Studenten nach dem Einreichen
+        # angezeigt). penalty_enabled bleibt die manuelle Tutor-Einstellung.
+        mc_fields: list[str] = []
+        if gen_questions:
+            mc_fields.append("mc_questions")
+        if gen_solution:
+            mc_fields.append("model_solution")
+        if gen_description:
+            mc_fields.append("description")
+        if gen_title:
+            mc_fields.append("title")
+
+        req_task_id = body.get("task_id")
+        mc_task = session.get(Task, req_task_id) if req_task_id else None
+        if mc_task is not None and mc_task.course_id != course_id:
+            mc_task = None
+
+        # Bestehende Fragen als JSON-Kontext (für Änderungs-Wünsche)
+        current_questions = ""
+        current_penalty = False
+        if mc_task and mc_task.mc_data:
+            try:
+                existing_mc = parse_mc_data(mc_task.mc_data)
+                current_penalty = existing_mc.get("penalty_enabled", False)
+                current_questions = json.dumps(
+                    _mc_tutor_view(existing_mc), ensure_ascii=False)
+            except McValidationError:
+                pass
+
+        result = await llm_service.generate_mc_task_fields(
+            topic=body.get("topic", ""),
+            difficulty=body.get("difficulty", "mittel"),
+            max_points=body.get("max_points", 10),
+            generate_fields=mc_fields,
+            current_title=current_title,
+            current_description=current_description,
+            current_model_solution=current_solution,
+            current_questions=current_questions,
+            script_chapters=script_chapters,
+            course_media=course_media,
+            references=references,
+            config=llm_cfg,
+        )
+
+        if not result.get("success"):
+            raise HTTPException(500, f"LLM-Fehler (MC): {result.get('error', 'Unbekannter Fehler')}")
+
+        data = result.get("data") or {}
+        latency_ms = result.get("latency_ms", 0)
+
+        if gen_title:
+            response["title"] = (data.get("title") or "").strip()
+        if gen_description:
+            response["description"] = (data.get("description") or "").strip()
+        if gen_solution:
+            response["model_solution"] = (data.get("model_solution") or "").strip()
+        if gen_questions:
+            mc_payload = {
+                "penalty_enabled": current_penalty,
+                "questions": data.get("mc_questions"),
+            }
+            try:
+                _mc_validate(mc_payload)
+            except McValidationError as e:
+                raise HTTPException(
+                    502, f"LLM hat ungültige MC-Fragen geliefert: {e} — bitte erneut versuchen.")
+            response["mc_data"] = mc_payload
 
     elif task_type == "workspace":
         # ── Workspace-Aufgabe: ein LLM-Call für alle angeforderten Felder.

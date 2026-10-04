@@ -46,6 +46,7 @@ from prompts.markdown_manual import (
     SLIDES_CONTENT_EDITS_SPEC,
 )
 from prompts.code_task_prompt import CODE_TASK_PROMPT_TEMPLATE
+from prompts.mc_task_prompt import MC_TASK_PROMPT_TEMPLATE
 from prompts.hint_prompt import SOCRATIC_HINT_PROMPT_TEMPLATE
 from prompts.script_question_prompt import SCRIPT_QUESTION_PROMPT_TEMPLATE
 from prompts.report_prompt import COURSE_REPORT_PROMPT_TEMPLATE, STUDENT_REPORT_PROMPT_TEMPLATE
@@ -559,6 +560,64 @@ class LLMService:
             current_description=current_description,
             current_model_solution=current_model_solution,
             current_code_template=current_code_template,
+        )
+
+        return await self._call_with_json(
+            prompt, response_format={"type": "json_object"}, config=self._public_config(config)
+        )
+
+    async def generate_mc_task_fields(
+        self,
+        topic: str,
+        difficulty: str,
+        max_points: int,
+        generate_fields: list[str],
+        current_title: str = "",
+        current_description: str = "",
+        current_model_solution: str = "",
+        current_questions: str = "",
+        script_chapters: Optional[list[dict]] = None,
+        course_media: Optional[list[dict]] = None,
+        references: str = "",
+        config: Optional[dict] = None,
+    ):
+        """Generiert/ändert die angeforderten Felder einer MC-AUFGABE in
+        EINEM LLM-Call (Single-Prompt): title, description, model_solution,
+        mc_questions (Untermenge).
+
+        mc_questions: [{question, points, multi_select,
+        options: [{text, correct, feedback}]}] — das LLM legt auch das
+        Feedback je Option an (wird Studenten nach dem Einreichen gezeigt).
+
+        current_questions: bestehende Fragen als JSON-Text (Kontext für
+        Änderungs-Wünsche) — leer bei Neu-Generierung.
+
+        Enthält keine sensitive Studentendaten — nutzt daher den Public
+        Endpoint, falls konfiguriert.
+        """
+        # Fragen-Anzahl passend zum Punktebudget andeuten
+        if max_points <= 3:
+            question_count_hint = "2"
+        elif max_points <= 6:
+            question_count_hint = "2–3"
+        else:
+            question_count_hint = "3–4"
+
+        generate_list = ", ".join(f'"{f}"' for f in generate_fields)
+
+        prompt = Template(MC_TASK_PROMPT_TEMPLATE).render(
+            topic=topic or "(Kein Thema angegeben — überarbeite die Aufgabe sinnvoll.)",
+            difficulty=difficulty,
+            max_points=max_points,
+            question_count_hint=question_count_hint,
+            generate_list=generate_list,
+            current_title=current_title,
+            current_description=current_description,
+            current_model_solution=current_model_solution,
+            current_questions=current_questions,
+            script_chapters=script_chapters or [],
+            course_media=course_media or [],
+            references=references,
         )
 
         return await self._call_with_json(

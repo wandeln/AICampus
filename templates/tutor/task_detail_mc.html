@@ -1,0 +1,576 @@
+{% extends "tutor/task_detail_base.html" %}
+
+{% block extra_head %}
+<!-- SortableJS (MIT) — Drag-and-Drop (wie in tasks_tutor.html) -->
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js"></script>
+{% endblock %}
+
+{% block type_section %}
+
+  <!-- ─── [MC] Multiple-Choice-Fragen + Antworten + Feedback ─── -->
+  <div id="mc-section" data-mc-section class="card">
+    <h2 class="font-semibold text-gray-800 mb-1">🎯 Multiple-Choice-Fragen</h2>
+    <p class="text-xs text-gray-400 mb-4">
+      Je Frage: Punkte, Single-/Mehrfachauswahl und Antwortoptionen. Das Feedback je
+      Option ist <span class="font-medium text-gray-500">optional</span> — bei leerem Feld zeigt
+      das System nach dem Einreichen einfach „Richtig“/„Falsch“. Bei Fragen mit
+      Mehrfachauswahl gibt es je Option zwei Feedback-Felder (korrekt bzw. falsch
+      beantwortet); ein leerer „korrekt beantwortet“-Eintrag bei einer falschen Option
+      bleibt nach dem Einreichen einfach ohne Kommentar. Bei Single-Auswahl ein Feld
+      (erscheint, wenn die Option ausgewählt wird). „Max. Punkte“ wird automatisch
+      aus den Fragen summiert.
+    </p>
+
+    <div class="flex items-center justify-between flex-wrap gap-3 mb-4">
+      <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer"
+             title="Falsche Antworten kosten die Punkte der Frage (Gesamtergebnis wird auf 0 P begrenzt)">
+        <input type="checkbox" id="mc-penalty" class="rounded text-blue-600 border-gray-300">
+        <span>⚖️&nbsp;Punktabzug bei falscher Antwort</span>
+      </label>
+      <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer"
+             title="Die Reihenfolge der Antwortoptionen wird in der Student-View bei jedem Seitenaufruf neu gemischt (auch bei Wiederholungen der Aufgabe). Deaktivieren, wenn die Reihenfolge didaktisch relevant ist.">
+        <input type="checkbox" id="mc-shuffle" class="rounded text-blue-600 border-gray-300" checked>
+        <span>🔀&nbsp;Antwortoptionen mischen (für Studenten)</span>
+      </label>
+      <span id="mc-total-points"
+            class="text-sm font-medium text-gray-600 bg-gray-100 rounded-lg px-3 py-1">0 P gesamt</span>
+      <button type="button" id="mc-preview-toggle"
+              title="Fragen, Antworten und Feedbacks als Markdown gerendert anzeigen (statt editierbar)"
+              class="text-gray-500 hover:text-gray-700 text-sm px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50 transition inline-flex items-center gap-1.5">
+        <span>👁️</span> <span>Vorschau</span>
+      </button>
+    </div>
+
+    <div id="mc-questions-list" class="space-y-4"></div>
+
+    <button type="button" id="mc-add-question"
+            class="mt-4 border-2 border-dashed border-gray-300 hover:border-blue-400 hover:bg-blue-50
+                   text-gray-500 hover:text-blue-600 w-full py-3 rounded-lg text-sm font-medium transition">
+      ➕ Frage hinzufügen
+    </button>
+
+    <p id="mc-validation-error"
+       class="hidden mt-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2"></p>
+  </div>
+
+{% endblock %}
+
+{% block type_scripts %}
+  // ══════════════════════════════════════════════════════════════
+  // MC-Typ: Fragen-Editor.
+  // State (mcState) ist die Quelle der Wahrheit; Re-Render NUR bei
+  // strukturellen Änderungen (Frage/Option anlegen/entfernen, Multi-
+  // Toggle) — Text-Input schreibt nur in den State (Focus bleibt).
+  // ══════════════════════════════════════════════════════════════
+  const MC_DATA_INIT = {{ (task.mc_data if task else None) | tojson }};
+  let mcState = (MC_DATA_INIT && Array.isArray(MC_DATA_INIT.questions))
+    ? JSON.parse(JSON.stringify(MC_DATA_INIT))
+    : { penalty_enabled: false, questions: [] };
+  if (typeof mcState.penalty_enabled !== "boolean") mcState.penalty_enabled = false;
+  // Shuffle ist PER DEFAULT AN (alte Aufgaben ohne den Key bleiben gemischt)
+  if (typeof mcState.shuffle_options !== "boolean") mcState.shuffle_options = true;
+
+  const mcListEl = document.getElementById("mc-questions-list");
+  const mcPenaltyEl = document.getElementById("mc-penalty");
+  const mcShuffleEl = document.getElementById("mc-shuffle");
+  const mcPreviewBtn = document.getElementById("mc-preview-toggle");
+  const mcTotalEl = document.getElementById("mc-total-points");
+  const mcValidationError = document.getElementById("mc-validation-error");
+
+  function mcTotalPoints() {
+    return mcState.questions.reduce((s, q) => s + (parseInt(q.points, 10) || 0), 0);
+  }
+
+  function mcSyncTotal() {
+    const total = mcTotalPoints();
+    mcTotalEl.textContent = total + " P gesamt";
+    // Max.-Punkte-Feld mitziehen (Server überschreibt es ohnehin mit der Summe)
+    const mp = document.querySelector('input[name="max_points"]');
+    if (mp && total > 0 && parseInt(mp.value, 10) !== total) mp.value = total;
+  }
+
+  // Clientseitige Prüfung — nur anzeige, der Server validiert beim Speichern.
+  function mcClientErrors() {
+    const errs = [];
+    if (mcState.questions.length) {
+      mcState.questions.forEach((q, qi) => {
+        const lbl = "Frage " + (qi + 1) + ":";
+        if (!String(q.question || "").trim()) errs.push(lbl + " Fragetext fehlt");
+        if (!(parseInt(q.points, 10) > 0)) errs.push(lbl + " Punkte > 0 nötig");
+        if (q.options.length < 2) errs.push(lbl + " mind. 2 Optionen");
+        const nc = q.options.filter((o) => o.correct).length;
+        if (q.multi_select) {
+          if (nc < 1) errs.push(lbl + " mind. 1 richtige Antwort");
+          else if (nc === q.options.length) errs.push(lbl + " mind. 1 falsche Antwort");
+        } else if (nc !== 1) {
+          errs.push(lbl + " genau 1 richtige Antwort nötig");
+        }
+        q.options.forEach((o, oi) => {
+          if (!String(o.text || "").trim()) errs.push(lbl + " Option " + (oi + 1) + ": Text fehlt");
+        });
+      });
+      if (mcTotalPoints() <= 0) errs.push("Gesamtpunkte > 0 nötig");
+    }
+    return errs;
+  }
+
+  function mcShowErrors(errs) {
+    mcValidationError.classList.toggle("hidden", !errs.length);
+    mcValidationError.textContent = errs.join("  ·  ");
+  }
+
+  // Auto-Save anstoßen (av wird erst nach diesem Block erzeugt — die
+  // Handler laufen aber immer erst nach vollständigem Script-Load).
+  function mcAv() {
+    if (typeof av !== "undefined" && av && av.onChange) av.onChange();
+    mcShowErrors(mcClientErrors());
+  }
+
+  // ─── Vorschau/Bearbeiten-Toggle: alle Textfelder (Fragen, Optionen,
+  // Feedbacks) als Markdown gerendert anzeigen. Re-Render der Liste —
+  // der State wird nicht angefasst, Drag-Handles bleiben aktiv. ───
+  let mcPreview = false;
+  mcPreviewBtn.addEventListener("click", () => {
+    mcPreview = !mcPreview;
+    mcPreviewBtn.innerHTML = mcPreview
+      ? '<span>✏️</span> <span>Bearbeiten</span>'
+      : '<span>👁️</span> <span>Vorschau</span>';
+    mcPreviewBtn.classList.toggle("bg-blue-50", mcPreview);
+    mcPreviewBtn.classList.toggle("border-blue-300", mcPreview);
+    mcPreviewBtn.classList.toggle("text-blue-700", mcPreview);
+    mcRender();
+  });
+
+  // Feedback-Rahmenfarben: grün = richtige Antwort, rot = falsche Antwort
+  const MC_FB_GREEN = "border-green-400";
+  const MC_FB_RED = "border-red-300";
+  const mcFbBorderCls = (correct) => (correct ? MC_FB_GREEN : MC_FB_RED);
+
+  // Gerenderte Markdown-Box (Vorschau-Modus); leer → dezenter Platzhalter
+  function mcMdPreview(text, borderCls) {
+    const d = document.createElement("div");
+    d.className = "mc-md-preview border " + (borderCls || "border-gray-200") +
+      " rounded-lg px-3 py-1.5 bg-white text-sm text-gray-800";
+    const t = String(text || "").trim();
+    if (!t) {
+      d.innerHTML = '<span class="italic text-gray-300">leer</span>';
+    } else {
+      renderMarkdown(t, d, { preview: true }).catch(() => { d.textContent = t; });
+    }
+    return d;
+  }
+
+  // Kleine Feld-Beschriftung für die Vorschau-Boxen
+  function mcFieldLabel(text) {
+    const l = document.createElement("div");
+    l.className = "text-[11px] text-gray-400 mt-1.5";
+    l.textContent = text;
+    return l;
+  }
+
+  function mcNewQuestion() {
+    return {
+      question: "",
+      points: 1,
+      multi_select: false,
+      options: [
+        { text: "", correct: true, feedback: "", feedback_wrong: "" },
+        { text: "", correct: false, feedback: "", feedback_wrong: "" },
+      ],
+    };
+  }
+
+  // Drag-Handle (6-Punkte-Grip wie in tasks_tutor.html)
+  function mcGripHandle(cls, title) {
+    const g = document.createElement("div");
+    g.className = "cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 transition select-none " + cls;
+    g.title = title;
+    g.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">' +
+      '<circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/>' +
+      '<circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>' +
+      '<circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
+    return g;
+  }
+
+  // ─── Render: eine Antwortoption-Zeile ─────────────────────────
+  function mcRenderOption(qi, oi) {
+    const q = mcState.questions[qi];
+    const opt = q.options[oi];
+
+    const row = document.createElement("div");
+    row.className = "flex items-start gap-2";
+
+    // Drag-Handle (Option per DnD umsortieren)
+    row.appendChild(mcGripHandle("mc-opt-drag mt-2", "Ziehen zur Reihenfolge der Antwortoption ändern"));
+
+    // Richtige-Antwort-Marker (Radio bei Single, Checkbox bei Multi)
+    const label = document.createElement("label");
+    label.className = "mt-2.5 flex items-center gap-1.5 text-xs font-bold text-gray-500 cursor-pointer";
+    label.title = "Als richtige Antwort markieren";
+    const chk = document.createElement("input");
+    chk.type = q.multi_select ? "checkbox" : "radio";
+    if (!q.multi_select) chk.name = "mc-correct-" + qi;
+    chk.className = "mc-opt-correct rounded text-green-600 border-gray-300";
+    chk.checked = !!opt.correct;
+    chk.addEventListener("change", () => {
+      if (q.multi_select) {
+        opt.correct = chk.checked;
+      } else {
+        // Objektvergleich statt Index — bleibt nach DnD-Reihenfolge gültig
+        q.options.forEach((o) => { o.correct = (o === opt); });
+        // Rahmenfarbe der Feedback-Felder folgt dem Correct-Flag
+        const cardEl = label.closest(".mc-question-card");
+        if (cardEl) {
+          const fbs = cardEl.querySelectorAll(".mc-opt-feedback");
+          q.options.forEach((o, i) => {
+            if (fbs[i]) {
+              fbs[i].classList.toggle(MC_FB_GREEN, !!o.correct);
+              fbs[i].classList.toggle(MC_FB_RED, !o.correct);
+            }
+          });
+        }
+      }
+      mcAv();
+    });
+    label.appendChild(chk);
+    row.appendChild(label);
+
+    const right = document.createElement("div");
+    right.className = "flex-1 min-w-0";
+
+    const top = document.createElement("div");
+    top.className = "flex items-center gap-2";
+    if (mcPreview) {
+      const pv = mcMdPreview(opt.text);
+      pv.classList.add("flex-1", "min-w-0");
+      top.appendChild(pv);
+    } else {
+      const textIn = document.createElement("input");
+      textIn.type = "text";
+      textIn.className = "mc-opt-text flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-500";
+      textIn.placeholder = "Antworttext (Markdown/LaTeX möglich)";
+      textIn.value = opt.text || "";
+      textIn.addEventListener("input", () => { opt.text = textIn.value; mcAv(); });
+      top.appendChild(textIn);
+    }
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "mc-opt-remove text-gray-400 hover:text-red-600 transition text-sm px-1";
+    rm.title = "Option entfernen";
+    rm.textContent = "✕";
+    rm.addEventListener("click", () => {
+      q.options.splice(q.options.indexOf(opt), 1);  // objektbasiert, DnD-sicher
+      mcRender();
+      mcAv();
+    });
+    top.appendChild(rm);
+
+    // Feedback (optional — System-Default: „Richtig“/„Falsch“):
+    // Single-Select → 1 Feld (erscheint, wenn der Student die Option
+    // auswählt); Mehrfachauswahl → 2 Felder (korrekt / falsch beantwortet).
+    right.appendChild(top);
+    if (mcPreview) {
+      if (q.multi_select) {
+        right.appendChild(mcFieldLabel("Feedback, wenn korrekt beantwortet"));
+        right.appendChild(mcMdPreview(opt.feedback, MC_FB_GREEN));
+        right.appendChild(mcFieldLabel("Feedback, wenn falsch beantwortet"));
+        right.appendChild(mcMdPreview(opt.feedback_wrong, MC_FB_RED));
+      } else {
+        right.appendChild(mcFieldLabel("Feedback"));
+        right.appendChild(mcMdPreview(opt.feedback, mcFbBorderCls(!!opt.correct)));
+      }
+    } else {
+      const fb = document.createElement("textarea");
+      fb.rows = 2;
+      // Grün = richtige Antwort, rot = falsche (Single-Select: folgt dem
+      // Correct-Flag der Option, live beim Radio-Wechsel aktualisiert)
+      fb.className = "mc-opt-feedback mt-1 w-full border " +
+        mcFbBorderCls(q.multi_select ? true : !!opt.correct) +
+        " rounded-lg px-3 py-1.5 text-xs focus:ring-2 focus:ring-blue-500";
+      fb.placeholder = q.multi_select
+        ? "Feedback wenn korrekt beantwortet (optional)"
+        : "Feedback (optional — erscheint, wenn diese Antwort ausgewählt wird)";
+      fb.value = opt.feedback || "";
+      fb.addEventListener("input", () => { opt.feedback = fb.value; mcAv(); });
+      right.appendChild(fb);
+
+      if (q.multi_select) {
+        const fbW = document.createElement("textarea");
+        fbW.rows = 2;
+        fbW.className = "mc-opt-feedback-wrong mt-1 w-full border " + MC_FB_RED +
+          " rounded-lg px-3 py-1.5 text-xs focus:ring-2 focus:ring-blue-500";
+        fbW.placeholder = "Feedback wenn falsch beantwortet (optional)";
+        fbW.value = opt.feedback_wrong || "";
+        fbW.addEventListener("input", () => { opt.feedback_wrong = fbW.value; mcAv(); });
+        right.appendChild(fbW);
+      }
+    }
+
+    row.appendChild(right);
+    return row;
+  }
+
+  // ─── Render: ganze Fragenliste (nur bei strukturellen Änderungen) ─
+  function mcRender() {
+    mcListEl.innerHTML = "";
+    if (!mcState.questions.length) {
+      const empty = document.createElement("p");
+      empty.className = "text-sm text-gray-400 italic";
+      empty.textContent = "Noch keine Fragen — „➕ Frage hinzufügen“ klicken oder per LLM generieren.";
+      mcListEl.appendChild(empty);
+    }
+    mcState.questions.forEach((q, qi) => {
+      const card = document.createElement("div");
+      card.className = "mc-question-card border border-gray-200 rounded-lg p-4 bg-gray-50/60";
+
+      // Kopfzeile: Grip + „Frage N“ + Multi-Toggle + Punkte + Entfernen (über der Fragestellung)
+      const head = document.createElement("div");
+      head.className = "flex items-center justify-between gap-3 flex-wrap mb-3";
+
+      const headLeft = document.createElement("div");
+      headLeft.className = "flex items-center gap-2";
+      headLeft.appendChild(mcGripHandle("mc-q-drag", "Ziehen zur Reihenfolge der Frage ändern"));
+
+      const qNum = document.createElement("span");
+      qNum.className = "mc-q-num text-sm font-semibold text-gray-500";
+      qNum.textContent = "Frage " + (qi + 1);
+      headLeft.appendChild(qNum);
+      head.appendChild(headLeft);
+
+      const ctrl = document.createElement("div");
+      ctrl.className = "flex items-center gap-3";
+
+      const multiLbl = document.createElement("label");
+      multiLbl.className = "flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer";
+      const multi = document.createElement("input");
+      multi.type = "checkbox";
+      multi.className = "mc-q-multi rounded text-blue-600 border-gray-300";
+      multi.checked = !!q.multi_select;
+      multi.addEventListener("change", () => {
+        q.multi_select = multi.checked;
+        if (!q.multi_select) {
+          // Single: die erste bisher richtige Antwort bleibt die eine richtige
+          const firstCorrect = q.options.findIndex((o) => o.correct);
+          q.options.forEach((o, i) => { o.correct = (i === (firstCorrect >= 0 ? firstCorrect : 0)); });
+          // Multi→Single: im Single-Modus hat jede Option nur ein
+          // Feedback-Feld. Bei den (jetzt) falschen Optionen übernimmt das
+          // „wenn falsch beantwortet“-Feedback das (einzige) Feedback.
+          q.options.forEach((o) => {
+            if (!o.correct && String(o.feedback_wrong || "").trim()) {
+              o.feedback = o.feedback_wrong;
+              o.feedback_wrong = "";
+            }
+          });
+        } else {
+          if (q.options.length && q.options.every((o) => o.correct)) {
+            // Multi: mind. eine falsche Antwort nötig → letzte Option falsch
+            q.options[q.options.length - 1].correct = false;
+          }
+          // Single→Multi: im Single-Modus hat jede Option nur ein
+          // Feedback-Feld. Das Feedback der (jetzt) falschen Optionen wandert
+          // in das „wenn falsch beantwortet“-Feld, das der richtigen bleibt.
+          q.options.forEach((o) => {
+            if (!o.correct && String(o.feedback || "").trim()) {
+              o.feedback_wrong = o.feedback;
+              o.feedback = "";
+            }
+          });
+        }
+        mcRender();
+        mcAv();
+      });
+      multiLbl.appendChild(multi);
+      multiLbl.appendChild(document.createTextNode("mehrere Antworten möglich"));
+
+      const ptsWrap = document.createElement("span");
+      ptsWrap.className = "flex items-center gap-1 text-xs text-gray-600";
+      const pts = document.createElement("input");
+      pts.type = "number";
+      pts.min = "0";
+      pts.step = "1";
+      pts.className = "mc-q-points w-16 border border-gray-300 rounded-lg px-2 py-1 text-sm text-right";
+      pts.value = q.points != null ? q.points : 0;
+      pts.title = "Punkte für diese Frage";
+      pts.addEventListener("input", () => {
+        q.points = parseInt(pts.value, 10) || 0;
+        mcSyncTotal();
+        mcAv();
+      });
+      ptsWrap.appendChild(document.createTextNode("P:"));
+      ptsWrap.appendChild(pts);
+
+      const rmQ = document.createElement("button");
+      rmQ.type = "button";
+      rmQ.className = "text-gray-400 hover:text-red-600 transition text-sm";
+      rmQ.title = "Frage entfernen";
+      rmQ.textContent = "✕";
+      rmQ.addEventListener("click", () => {
+        mcState.questions.splice(mcState.questions.indexOf(q), 1);  // objektbasiert, DnD-sicher
+        mcRender();
+        mcAv();
+      });
+
+      ctrl.appendChild(multiLbl);
+      ctrl.appendChild(ptsWrap);
+      ctrl.appendChild(rmQ);
+      head.appendChild(ctrl);
+
+      card.appendChild(head);
+
+      if (mcPreview) {
+        const qpv = mcMdPreview(q.question);
+        qpv.classList.add("w-full");
+        card.appendChild(qpv);
+      } else {
+        const qta = document.createElement("textarea");
+        qta.rows = 2;
+        qta.className = "mc-q-text w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500";
+        qta.placeholder = "Fragetext (Markdown/LaTeX möglich)";
+        qta.value = q.question || "";
+        qta.addEventListener("input", () => { q.question = qta.value; mcAv(); });
+        card.appendChild(qta);
+      }
+
+      const opts = document.createElement("div");
+      opts.className = "mc-options space-y-2 mt-3 pl-1";
+      q.options.forEach((_, oi) => opts.appendChild(mcRenderOption(qi, oi)));
+
+      const addOpt = document.createElement("button");
+      addOpt.type = "button";
+      addOpt.className = "mc-opt-add mt-2 text-xs text-blue-600 hover:text-blue-800 font-medium";
+      addOpt.textContent = "+ Antwortoption";
+      addOpt.addEventListener("click", () => {
+        if (q.options.length >= 8) { showToast("Maximal 8 Antwortoptionen.", "warning"); return; }
+        q.options.push({ text: "", correct: false, feedback: "", feedback_wrong: "" });
+        mcRender();
+        mcAv();
+      });
+
+      card.appendChild(opts);
+      card.appendChild(addOpt);
+      mcListEl.appendChild(card);
+    });
+
+    mcPenaltyEl.checked = !!mcState.penalty_enabled;
+    mcShuffleEl.checked = mcState.shuffle_options !== false;
+    mcSyncTotal();
+    mcInitSortables();
+  }
+
+  // ─── Drag-and-Drop: Fragen + Antwortoptionen umsortieren ──────
+  // SortableJS (wie in tasks_tutor.html): Ziehen am Grip. Nach dem
+  // Drop wird der State in DOM-Reihenfolge syncen + Autosave angestoßen
+  // — kein Re-Render (alle Listener sind objektbasiert, DnD-sicher).
+  let mcQSortable = null;
+  let mcOptSortables = [];
+
+  function mcInitSortables() {
+    if (typeof Sortable === "undefined") return;  // CDN nicht erreichbar → ohne DnD
+    if (mcQSortable) { mcQSortable.destroy(); mcQSortable = null; }
+    mcOptSortables.forEach((s) => s.destroy());
+    mcOptSortables = [];
+
+    mcQSortable = Sortable.create(mcListEl, {
+      handle: ".mc-q-drag",
+      animation: 150,
+      ghostClass: "opacity-50",
+      chosenClass: "shadow-lg",
+      dragClass: "shadow-xl",
+      onEnd: (evt) => {
+        const [moved] = mcState.questions.splice(evt.oldIndex, 1);
+        mcState.questions.splice(evt.newIndex, 0, moved);
+        // Frage-Nummerierung nach dem Drop aktualisieren
+        Array.from(mcListEl.children).forEach((el, i) => {
+          const n = el.querySelector(".mc-q-num");
+          if (n) n.textContent = "Frage " + (i + 1);
+        });
+        mcAv();
+      },
+    });
+
+    // Pro Frage: Optionsliste sortierbar (DOM-Position = State-Position,
+    // da nach jedem Drop sofort gesyncht wird)
+    mcListEl.querySelectorAll(".mc-options").forEach((optsEl) => {
+      mcOptSortables.push(Sortable.create(optsEl, {
+        handle: ".mc-opt-drag",
+        animation: 150,
+        ghostClass: "opacity-50",
+        chosenClass: "shadow-lg",
+        dragClass: "shadow-xl",
+        onEnd: (evt) => {
+          const qi = Array.from(mcListEl.children).indexOf(
+            optsEl.closest(".mc-question-card"));
+          const q = mcState.questions[qi];
+          if (!q) return;
+          const [moved] = q.options.splice(evt.oldIndex, 1);
+          q.options.splice(evt.newIndex, 0, moved);
+          mcAv();
+        },
+      }));
+    });
+  }
+
+  document.getElementById("mc-add-question").addEventListener("click", () => {
+    mcState.questions.push(mcNewQuestion());
+    mcRender();
+    mcAv();
+  });
+  mcPenaltyEl.addEventListener("change", () => {
+    mcState.penalty_enabled = mcPenaltyEl.checked;
+    mcAv();
+  });
+  mcShuffleEl.addEventListener("change", () => {
+    mcState.shuffle_options = mcShuffleEl.checked;
+    mcAv();
+  });
+
+  // ─── Hooks für task_detail_base.html ───────────────────────────
+
+  // buildTaskBody: State → mc_data (JSON-String; leer = Aufgabe ohne
+  // Fragen, der Student sieht dann einen Hinweis). Max. Punkte = Summe.
+  window._mcEnvFields = function () {
+    mcShowErrors(mcClientErrors());
+    mcSyncTotal();
+    return { mc_data: mcState.questions.length ? JSON.stringify(mcState) : null };
+  };
+
+  function mcNormalize(data) {
+    if (!data || !Array.isArray(data.questions))
+      return { penalty_enabled: false, shuffle_options: true, questions: [] };
+    return {
+      penalty_enabled: !!data.penalty_enabled,
+      shuffle_options: data.shuffle_options !== false,
+      questions: data.questions.map((q) => ({
+        question: String(q.question || ""),
+        points: Math.max(0, parseInt(q.points, 10) || 0),
+        multi_select: !!q.multi_select,
+        options: (Array.isArray(q.options) ? q.options : []).map((o) => ({
+          text: String(o.text || ""),
+          correct: !!o.correct,
+          feedback: String(o.feedback || ""),
+          feedback_wrong: String(o.feedback_wrong || ""),
+        })),
+      })),
+    };
+  }
+
+  // applyPayload (Versions-Restore): Snapshot (String) → State → UI
+  window._mcApplyEnv = function (p) {
+    let data = (p && p.mc_data) ? p.mc_data : null;
+    if (typeof data === "string") {
+      try { data = JSON.parse(data); } catch (e) { data = null; }
+    }
+    mcState = mcNormalize(data);
+    mcRender();
+  };
+
+  // LLM-Generierung: mc_data (serverseitig normalisiertes Dict) → UI
+  window._mcAiApply = function (mc_data) {
+    if (!mc_data || !Array.isArray(mc_data.questions)) return [];
+    window._mcApplyEnv({ mc_data: mc_data });
+    return ["Fragen + Antworten + Feedback"];
+  };
+
+  // Init: vorhandene Daten rendern (neue Aufgabe = leere Liste)
+  mcRender();
+{% endblock %}

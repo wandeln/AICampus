@@ -56,6 +56,12 @@ from database.models import (
 )
 from services.auth_service import get_current_user, hash_password, require_course_access
 from services import media_service, import_service, preview_proxy
+from services.mc_service import (
+    McValidationError,
+    parse_mc_data,
+    student_view as _mc_student_view,
+    tutor_view as _mc_tutor_view,
+)
 from services import image_spec_service
 from services.workspace_service import workspace_service
 from services.slides_service import (
@@ -1612,6 +1618,25 @@ async def join_page(
     )
 
 
+def _mc_context(task, is_tutor: bool, user_id: Optional[int] = None):
+    """mc_data für den Template-Kontext (None bei Nicht-MC-Aufgaben).
+
+    Studenten sehen NUR die Options-Texte (ggf. geshuffelt, Seed aus
+    User-ID) — Correct-Flags und Feedback dürfen nicht im DevTools
+    erkennbar sein.
+    """
+    if task.task_type.value != "mc" or not task.mc_data:
+        return None
+    try:
+        data = parse_mc_data(task.mc_data)
+    except McValidationError as e:
+        logger.warning("mc_data von Task %s ist ungültig: %s", task.id, e)
+        return None
+    if is_tutor:
+        return _mc_tutor_view(data)
+    return _mc_student_view(data, task_id=task.id, user_id=user_id)
+
+
 def _pick_task_template(candidates: list[str]) -> str:
     """Wählt das erste vorhandene Template aus candidates (Fallback: letzter Eintrag).
 
@@ -1657,7 +1682,7 @@ async def new_task_page(
 
     # Typ des Templates: Default „text“, per Query-Param umschaltbar (z. B. ?task_type=code).
     # Workspace ist immer wählbar — ohne erreichbare Engine degradiert die View sauber.
-    allowed_types = ("text", "code", "workspace")
+    allowed_types = ("text", "code", "workspace", "mc")
     tpl_type = request.query_params.get("task_type", "text")
     if tpl_type not in allowed_types:
         tpl_type = "text"
@@ -1751,7 +1776,7 @@ async def task_page(
     if is_tutor and not is_student_view:
         tpl_type = task.task_type.value
         override = request.query_params.get("task_type")
-        if override in ("text", "code", "workspace"):
+        if override in ("text", "code", "workspace", "mc"):
             tpl_type = override
         template = _pick_task_template([f"tutor/task_detail_{tpl_type}.html", "tutor/task_detail_base.html"])
     else:
@@ -1810,12 +1835,32 @@ async def task_page(
                 "solution": sub.solution,
                 "code_solution": sub.code_solution,
                 "workspace_snapshot": sub.workspace_snapshot is not None,
+                "mc_result": sub.mc_result,
                 "attempt_number": sub.attempt_number,
                 "submitted_at": sub.submitted_at,
                 "status": sub.status.value,
                 "solve_time_seconds": sub.solve_time_seconds,
                 "feedback_list": feedbacks,
             })
+
+        # MC: Historie-Ergebniskarten — das bei der Einreichung persistierte,
+        # self-contained Ergebnis (Options-Texte, Status, Feedback, Punkte
+        # in der Originalreihenfolge der Aufgabe). Es wird nie neu
+        # berechnet: altes Feedback bleibt unverändert, auch wenn die
+        # Aufgabe später bearbeitet oder neu gemischt wird.
+        if task.task_type.value == "mc":
+            for sub_dict in my_submissions:
+                res = None
+                raw = sub_dict.get("mc_result") or None
+                if raw:
+                    try:
+                        cand = json.loads(raw)
+                        if isinstance(cand, dict) and "questions" in cand:
+                            res = cand
+                    except ValueError:
+                        res = None
+                sub_dict["mc_result"] = res
+
         if my_submissions:
             latest_sub = my_submissions[0]  # newest (ordered desc)
             human_points = 0.0
@@ -1899,6 +1944,11 @@ async def task_page(
                     json.loads(task.workspace_engines)
                     if (task.workspace_engines and is_tutor) else None),
                 "workspace_image": task.workspace_image if is_tutor else None,
+                # Multiple-Choice (Student: nur Options-Texte, Tutor: komplett).
+                # ?as_student=1 → Student-Ansicht (Options-Reihenfolge wird
+                # bei jedem Seitenaufruf neu gemischt).
+                "mc_data": _mc_context(
+                    task, is_tutor and not is_student_view, user.id),
             },
             "is_tutor": is_tutor,
             "is_student_view": is_student_view,
@@ -2016,7 +2066,8 @@ async def submission_review_page(
         latest_points = human_points if override_exists else llm_points
 
     task_type_display = {"text": "Textaufgabe", "code": "Codeaufgabe",
-                         "workspace": "Workspace-Aufgabe"}.get(
+                         "workspace": "Workspace-Aufgabe",
+                         "mc": "Multiple-Choice-Aufgabe"}.get(
         task.task_type.value, task.task_type.value
     )
 
@@ -2051,6 +2102,9 @@ async def submission_review_page(
             "task_title": task.title,
             "task_type_display": task_type_display,
             "task_type": task.task_type.value,
+            # MC: vollständige Daten (Tutor-Only-Page) — die Review-Seite
+            # markiert die gewählten Optionen der Einreichung
+            "mc_data": _mc_context(task, True),
             # Code-Mirror-Shim für Code-/Workspace-Abgaben (Read-only-Editor
             # in der Lösungsdarstellung, s. base.html {% if code_editor %})
             "code_editor": task.task_type.value in ("code", "workspace"),

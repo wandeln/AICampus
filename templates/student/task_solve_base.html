@@ -96,8 +96,8 @@
         <template id="task-description-raw">{{ (task.description or '') | tojson }}</template>
       </div>
 
-      <!-- Socratic Hint Section -->
-      {% if task.hints_enabled %}
+      <!-- Socratic Hint Section (bei MC deaktiviert: Feedback kommt sofort) -->
+      {% if task.hints_enabled and task.task_type != 'mc' %}
       <div class="card mb-6 bg-red-50 border-blue-200 px-5 py-3 rounded-2xl">
         <button type="button" onclick="toggleHintSection()" class="w-full flex items-center justify-between cursor-pointer bg-red-50 pt-2 pb-2 hint_toggle">
           <h2 class="font-semibold text-gray-800 m-0">💡 Hinweise</h2>
@@ -302,9 +302,17 @@
                 <p class="text-gray-400 text-sm italic">Kein Snapshot erhalten.</p>
                 {% endif %}
               {% else %}
+                {% if task.task_type == 'mc' and sub.mc_result %}
+                <!-- MC: farbcodierte Ergebnis-Karte (tp/fp/fn/tn), dieselbe
+                     wie nach frischem Submit — clientseitig per renderMcResultCard -->
+                <div class="solution-container">
+                  <template class="markdown-mc" type="application/json">{{ sub.mc_result | tojson }}</template>
+                </div>
+                {% else %}
                 <div class="solution-container">
                   <template class="markdown-solution" type="application/json">{{ (sub.solution or '') | tojson }}</template>
                 </div>
+                {% endif %}
               {% endif %}
             </div>
 
@@ -316,7 +324,7 @@
                   <div class="flex items-center justify-between mb-2">
                     <div class="flex items-center gap-2">
                       <span class="text-sm font-semibold">
-                        {% if fb.source == 'llm' %}🤖 LLM{% else %}👤 {{ fb.giver_name }}{% endif %}
+                        {% if fb.source == 'llm' %}{% if task.task_type == 'mc' %}🎯 Auto-Bewertung{% else %}🤖 LLM{% endif %}{% else %}👤 {{ fb.giver_name }}{% endif %}
                       </span>
                       <span class="badge {% if fb.points_earned >= task.max_points * 0.5 %}badge-pass{% else %}badge-fail{% endif %}">
                         {{ fb.points_earned }} / {{ task.max_points }} Punkte
@@ -570,6 +578,22 @@
     {# task_solve_code.html / task_solve_text.html #}
     {% block solve_scripts %}{% endblock %}
 
+    {% if task.task_type == 'mc' %}
+    // MC: Ergebnis-Karten der Historie farbcodiert rendern (wie nach
+    // frischem Submit). Nach solve_scripts, damit MC_QUESTIONS (Shuffle-
+    // Reihenfolge der Optionen) bereits definiert ist.
+    (function() {
+      document.querySelectorAll('template.markdown-mc[type="application/json"]').forEach(el => {
+        try {
+          const raw = JSON.parse(el.innerHTML);
+          renderMcResultCard(el, raw);
+        } catch(e) {
+          console.warn('Failed to render MC result (history):', e);
+        }
+      });
+    })();
+    {% endif %}
+
   const LLM_TIMEOUT = {{ LLM_TIMEOUT | default(120) }};
 
   // Berechnet Progress-Bar-Prozent basierend auf verstrichener Zeit.
@@ -713,6 +737,79 @@
     showToast("Abgebrochen — diese Einreichung zählt nicht als Versuch.", "info");
   }
 
+  {% if task.task_type == 'mc' %}
+  // ─── MC: Ergebnis-Karte (Farbcodierung je Option) rendern ──────
+  // Status je Option: tp=richtig+gewählt (grün), fp=falsch+gewählt (rot),
+  // fn=richtig+verpasst (orange), tn=falsch+verpasst (gedimmt).
+  function renderMcResultCard(el, res) {
+    const statusCls = {
+      tp: "border-green-500 bg-green-50",
+      fp: "border-red-400 bg-red-50",
+      fn: "border-orange-300 bg-orange-50",
+      tn: "border-gray-200 bg-gray-50 opacity-70",
+    };
+    const fbCls = {
+      tp: "text-green-700",
+      fp: "text-red-700",
+      fn: "text-orange-700",
+      tn: "text-gray-400",
+    };
+    const statusTitle = {
+      tp: "Richtig beantwortet",
+      fp: "Falsche Antwort (fälschlich ausgewählt)",
+      fn: "Richtige Antwort, aber nicht ausgewählt",
+      tn: "Falsche Antwort (nicht ausgewählt)",
+    };
+    let h = "";
+    (res.questions || []).forEach((q) => {
+      const earned = q.correct ? "+" + q.points + " P"
+        : (q.earned < 0 ? q.earned + " P (Abzug)" : "+0 P");
+      h += '<div class="border rounded-lg p-3 mb-2 ' + (q.correct ? "border-green-500 bg-green-50/50" : "border-red-400 bg-red-50/50") + '">'
+        + '<div class="flex items-center justify-between mb-2">'
+        + '<span class="text-sm font-semibold ' + (q.correct ? "text-green-800" : "text-red-800") + '">'
+        + (q.correct ? "✅" : "❌") + " Frage " + (q.index + 1) + (q.multi_select ? " (Mehrfachauswahl)" : "") + '</span>'
+        + '<span class="text-xs font-medium ' + (q.correct ? "text-green-700" : "text-red-700") + '">' + earned + " von " + q.points + " P</span>"
+        + '</div><div class="space-y-1.5">';
+      // Optionen in der gespeicherten Reihenfolge (= Originalreihenfolge
+      // der Aufgabe bei Einreichung) — bleibt stabil, unabhängig von
+      // späteren Bearbeitungen/Shuffles der Aufgabe.
+      const opts = q.options || [];
+      opts.forEach((o) => {
+        const md = encodeURIComponent(JSON.stringify(o.text || ""));
+        // Feedback kommt serverseitig aufgelöst (Multi: korrekt/falsch
+        // behandelt; Single: nur ausgewählte Option liefert Text).
+        // Leeres Feld → System-Default „Richtig“/„Falsch“ — außer bei
+        // tn (falsche Option korrekt nicht gewählt): dort nur explizites
+        // Feedback, sonst gar keine Feedback-Zeile.
+        const fbText = o.feedback
+          || (o.status === "tn" ? "" : (o.correct ? "Richtig" : "Falsch"));
+        const showFb = q.multi_select ? !!fbText : !!o.selected;
+        const fb = encodeURIComponent(JSON.stringify(fbText));
+        h += '<div class="flex items-start gap-2 rounded-lg border p-2 ' + (statusCls[o.status] || statusCls.tn) + '" title="' + (statusTitle[o.status] || "") + '">'
+          + '<input type="' + (q.multi_select ? "checkbox" : "radio") + '"' + (o.selected ? " checked" : "") + ' tabindex="-1" class="mt-1 h-4 w-4 shrink-0 text-blue-600 border-gray-300 pointer-events-none">'
+          + '<div class="flex-1 min-w-0">'
+          + '<div class="text-sm ' + (o.status === "tn" ? "text-gray-500" : "text-gray-800") + '"><span class="mc-opt-md" data-raw="' + md + '"></span></div>'
+          + (showFb ? '<div class="text-xs mt-1 ' + (fbCls[o.status] || fbCls.tn) + '"><span class="mc-opt-fb" data-raw="' + fb + '"></span></div>' : "")
+          + '</div></div>';
+      });
+      h += '</div></div>';
+    });
+    const wrapDiv = document.createElement("div");
+    wrapDiv.innerHTML = h;
+    el.replaceWith(wrapDiv);
+    // Options-Texte + Feedback als Markdown/LaTeX rendern
+    wrapDiv.querySelectorAll(".mc-opt-md, .mc-opt-fb").forEach((span) => {
+      try {
+        const txt = JSON.parse(decodeURIComponent(span.getAttribute("data-raw") || "''"));
+        if (txt) renderMarkdown(txt, span);
+        else span.remove();
+      } catch (e) {
+        span.textContent = decodeURIComponent(span.getAttribute("data-raw") || "");
+      }
+    });
+  }
+  {% endif %}
+
   document.getElementById("submit-btn")?.addEventListener("click", async () => {
     if (gradingState) {
       await cancelGrading();
@@ -749,9 +846,26 @@
       // sub.solution dient nur als Kurzbeschreibung für die Historie-Anzeige.
       submittedText = window._workspaceSubmitLabel ? window._workspaceSubmitLabel() : "Workspace-Abgabe";
       body.solution = submittedText;
+    {% elif task.task_type == 'mc' %}
+      // MC: gewählte Options-Indizes je Frage (z. B. [[0],[1,3]])
+      body.mc_answers = Array.from(document.querySelectorAll(".mc-question")).map((qEl) =>
+        Array.from(qEl.querySelectorAll("input:checked")).map((i) => parseInt(i.value, 10)));
+      if (body.mc_answers.some((a) => a.length === 0)) {
+        showToast("Bitte beantworte alle Fragen.", "warning");
+        return;
+      }
+      // Historien-Label ohne Buchstaben (Student-Ansicht ist geshuffelt
+      // und unbeschriftet): gekürzte Options-Texte statt Original-Indizes.
+      submittedText = "Multiple-Choice-Antworten: " + (MC_QUESTIONS.questions || []).map((q, qi) =>
+        (body.mc_answers[qi] || []).map((orig) => {
+          const order = Array.isArray(q.order) ? q.order : null;
+          const pos = order ? order.indexOf(orig) : orig;
+          const t = String((pos >= 0 && q.options[pos]) || "").replace(/\s+/g, " ").trim();
+          return t.length > 50 ? t.slice(0, 49).trimEnd() + "…" : t;
+        }).join(", ")).join(" | ");
     {% endif %}
 
-    {% if task.task_type != 'workspace' %}
+    {% if task.task_type not in ('workspace', 'mc') %}
     if (!body.solution?.trim() && !body.code_solution?.trim()) {
       showToast("Bitte trage zuerst eine Lösung ein.", "warning");
       return;
@@ -807,6 +921,13 @@
       const submissionId = submitData.submission_id;
       const attemptNumber = submitData.attempt_number;
 
+      let data = null;
+      {% if task.task_type == 'mc' %}
+      // MC: serverseitig SYNCHRON bewertet (kein LLM-Grading, kein
+      // Background-Job) → das fertige Ergebnis steht direkt in der
+      // Submit-Antwort, kein Polling nötig.
+      data = submitData;
+      {% else %}
       // Grading läuft → Button wird zum Abbrechen-Button
       gradingState = {
         submissionId,
@@ -817,7 +938,6 @@
       setSubmitBtnGradingMode(true);
 
       // ── Step 2: Poll for results ──
-      let data = null;
       const maxPollTime = 120; // Sekunden (Timeout)
       const pollInterval = 2;  // Sekunden
 
@@ -838,6 +958,7 @@
           // Poll-Fehler ignorieren, einfach weiter pollen
         }
       }
+      {% endif %}
 
       // Abbruch: Einreichung wurde serverseitig verworfen, die UI wurde in
       // cancelGrading() zurückgesetzt → nur noch State aufräumen.
@@ -888,7 +1009,13 @@
       let solutionJson = encodeURIComponent(JSON.stringify(submittedText));
 
       let solutionHtml = '';
-      {% if task.task_type == 'workspace' %}
+      {% if task.task_type == 'mc' %}
+      // MC: Farbcodiertes Feedback je Frage/Option (tp/fp/fn/tn) —
+      // data.mc_result, gerendert per renderMcResultCard() nach dem Einfügen.
+      solutionHtml = data.mc_result
+        ? '<div class="solution-container"><template class="markdown-mc" type="application/json" data-raw="' + encodeURIComponent(JSON.stringify(data.mc_result)) + '"></template></div>'
+        : '<div class="solution-container"><template class="markdown-solution" type="application/json" data-raw="' + solutionJson + '"></template></div>';
+      {% elif task.task_type == 'workspace' %}
       // Workspace: eingebettete read-only Snapshot-Ansicht (gleiche
       // Komponente wie die Live-IDE, ohne Terminals/Ports/Schreibrechte)
       solutionHtml =
@@ -948,7 +1075,7 @@
             <div class="feedback-box feedback-llm">
               <div class="flex items-center justify-between mb-2">
                 <div class="flex items-center gap-2">
-                  <span class="text-sm font-semibold">🤖 LLM</span>
+                  <span class="text-sm font-semibold">{% if task.task_type == 'mc' %}🎯 Auto-Bewertung{% else %}🤖 LLM{% endif %}</span>
                   <span class="badge ${badgeClass}">${data.points} / {{ task.max_points }} Punkte</span>
                 </div>
                 <span class="text-xs text-gray-400">${timeShort}</span>
@@ -1000,6 +1127,15 @@
             console.warn('Failed to render solution markdown:', e, el.getAttribute('data-raw'));
           }
         });
+        // MC: Ergebnis-Karte farbcodiert rendern (Fragen + Optionen + Feedback)
+        newCard.querySelectorAll('template.markdown-mc[type="application/json"]').forEach(el => {
+          try {
+            const rawMc = JSON.parse(decodeURIComponent(el.getAttribute('data-raw') || ''));
+            renderMcResultCard(el, rawMc);
+          } catch(e) {
+            console.warn('Failed to render MC result:', e);
+          }
+        });
       }
 
       {% if task.task_type == 'workspace' %}
@@ -1042,7 +1178,7 @@
   // SOKRATISCHER HINWEIS (Hint) Dialog
   // ──────────────────────────────────────────────────────────────
 
-  {% if task.hints_enabled %}
+  {% if task.hints_enabled and task.task_type != 'mc' %}
   const hintInput = document.getElementById('hint-input');
   const hintSendBtn = document.getElementById('hint-send-btn');
   const hintHistory = document.getElementById('hint-history');

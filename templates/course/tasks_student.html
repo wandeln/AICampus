@@ -24,6 +24,7 @@
           <option value="text">Textaufgaben</option>
           <option value="code">Codeaufgaben</option>
           <option value="workspace">Workspace-Aufgaben</option>
+          <option value="mc">Multiple-Choice-Aufgaben</option>
         </select>
       </div>
       <div class="flex items-end">
@@ -213,6 +214,8 @@
         ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">💻 Code</span>'
         : task.task_type === 'workspace'
         ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-700">🐳 Workspace</span>'
+        : task.task_type === 'mc'
+        ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700">🎯 Multiple Choice</span>'
         : '<span class="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">📄 Text</span>';
 
       let medalBadge = '';

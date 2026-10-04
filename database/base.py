@@ -138,9 +138,11 @@ def migrate_schema():
             "workspace_disk_quota": "REAL DEFAULT 1.0",  # Disk-Quota des Student-Volumes in GB (0 = ohne Limit)
             "workspace_internet": "BOOLEAN DEFAULT 0",  # Internet für Studenten-Läufe
             "workspace_preview_root_ports": "VARCHAR",  # JSON-Liste Ports ohne Base-Path-Preview (z. B. [8000])
+            "mc_data": "TEXT",  # Multiple-Choice: Fragen/Optionen/Feedback als JSON
         },
         "submissions": {
             "workspace_snapshot": "VARCHAR",  # Pfad zu workspace.tar.gz
+            "mc_result": "TEXT",  # MC: persistiertes Grading-Ergebnis (JSON)
         },
         "task_workspace_files": {
             "sort_order": "INTEGER",  # manuelle Dateireihenfolge je Ordner (NULL = alphabetisch)

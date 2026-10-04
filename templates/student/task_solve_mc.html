@@ -1,0 +1,114 @@
+{% extends "student/task_solve_base.html" %}
+
+{% block solution_area %}
+        <!-- ─── MULTIPLE CHOICE ─────────────────────────────────── -->
+        <div id="mc-solve-container" class="card">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="font-semibold text-gray-800">🎯 Deine Antworten</h2>
+            <span id="solve-timer" class="text-sm font-mono text-blue-600 tabular-nums">00:00</span>
+          </div>
+
+          {% if not task.mc_data or not task.mc_data.questions %}
+          <div class="text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm mb-4">
+            ⚠️ Diese Aufgabe hat noch keine Multiple-Choice-Fragen hinterlegt.
+            Bitte wende dich an deine Lehrperson.
+          </div>
+          {% endif %}
+
+          <div id="mc-questions" class="space-y-4"></div>
+
+          {% if task.mc_data and task.mc_data.penalty_enabled %}
+          <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-4">
+            ⚖️ Achtung: Bei falscher Antwort gibt es Punktabzug (die Gesamtpunktzahl wird auf 0 begrenzt).
+          </p>
+          {% endif %}
+
+          {% if task.mc_data and task.mc_data.questions %}
+          <p class="text-xs text-gray-400 mt-3">
+            💡 Nach dem Einreichen bekommst du sofort Feedback zu jeder Antwortoption.
+          </p>
+
+          <button id="submit-btn"
+                  class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition mt-4">
+            📤 Antworten einreichen
+          </button>
+          {% endif %}
+
+          <!-- ─── Grading Progress (MC: synchrone Server-Bewertung, bricht schnell ab) ─── -->
+          <div id="grading-progress" class="hidden mt-4">
+            <div class="flex items-center gap-2 text-sm text-green-700">
+              <span class="animate-spin">⏳</span>
+              <span>Antworten werden gewertet...</span>
+              <span id="grading-timer" class="font-mono">0s</span>
+            </div>
+            <div class="mt-2 w-full bg-green-200 rounded-full h-2">
+              <div id="grading-progress-bar" class="bg-green-600 h-2 rounded-full transition-all" style="width: 10%"></div>
+            </div>
+          </div>
+        </div>
+{% endblock %}
+
+{% block solve_scripts %}
+  // ─── Multiple-Choice: Fragen clientseitig rendern ─────────────
+  // task.mc_data ist die SANITISIERTE Student-Ansicht: nur Options-Texte,
+  // KEIN Correct-Flag, KEIN Feedback (Anti-Cheating — das kommt erst
+  // serverseitig mit dem Ergebnis nach dem Einreichen).
+  const MC_QUESTIONS = {{ (task.mc_data or {"questions": []}) | tojson }};
+
+  (function renderMcQuestions() {
+    const wrap = document.getElementById("mc-questions");
+    if (!wrap) return;
+    const qs = (MC_QUESTIONS && MC_QUESTIONS.questions) || [];
+    if (!qs.length) return;
+
+    qs.forEach((q, qi) => {
+      const card = document.createElement("div");
+      card.className = "mc-question border border-gray-200 rounded-lg p-4";
+      card.dataset.qindex = qi;
+
+      let html = '<div class="flex items-start justify-between gap-2 mb-3">' +
+        '<div class="text-sm text-gray-800"><span class="font-semibold text-gray-500 mr-1.5">Frage ' + (qi + 1) + ':</span><span class="mc-q-text inline-block align-top"></span></div>' +
+        '<span class="text-xs text-gray-500 whitespace-nowrap bg-gray-100 rounded px-2 py-0.5">' +
+          (q.points || 0) + ' P' + (q.multi_select ? ' · mehrere möglich' : '') +
+        '</span>' +
+      '</div>';
+      html += '<div class="space-y-2">';
+      // Optionen in der (ggf. geshuffelten) Anzeigereihenfolge; der
+      // Input-Value ist der ORIGINAL-Index (q.order), den der Server
+      // zum Grading erwartet.
+      (q.options || []).forEach((text, oi) => {
+        const origIdx = (q.order && q.order[oi] != null) ? q.order[oi] : oi;
+        html += '<label class="mc-option flex items-start gap-2.5 border border-gray-200 rounded-lg px-3 py-2.5 cursor-pointer hover:bg-gray-50 transition select-none">' +
+          '<input type="' + (q.multi_select ? "checkbox" : "radio") + '" name="mc-q' + qi + '" value="' + origIdx + '" ' +
+            'class="mt-1 h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500">' +
+          '<span class="mc-opt-text flex-1 text-sm text-gray-700"></span>' +
+        '</label>';
+      });
+      html += '</div>';
+      card.innerHTML = html;
+      wrap.appendChild(card);
+
+      // Fragetext + Options-Texte als Markdown/LaTeX rendern
+      renderMarkdown(q.question || "", card.querySelector(".mc-q-text"));
+      const optEls = card.querySelectorAll(".mc-opt-text");
+      (q.options || []).forEach((text, oi) => {
+        if (optEls[oi]) renderMarkdown(text, optEls[oi]);
+      });
+    });
+
+    // Auswahl visuell hervorheben (pro Frage nur die eigene Frage).
+    // Checkbox: alle geprüften Optionen bleiben blau; Radio: die gewählte.
+    wrap.addEventListener("change", (e) => {
+      const input = e.target;
+      if (!input.matches || !input.matches("input[name^='mc-q']")) return;
+      const name = input.name;
+      wrap.querySelectorAll("input[name='" + name + "']").forEach((i) => {
+        const lbl = i.closest(".mc-option");
+        if (lbl) {
+          lbl.classList.toggle("border-blue-400", i.checked);
+          lbl.classList.toggle("bg-blue-50", i.checked);
+        }
+      });
+    });
+  })();
+{% endblock %}

@@ -20,6 +20,7 @@ Semantik:
   sodass immer die neueste Version = aktueller Zustand ist.
 """
 
+import json
 import logging
 import shutil
 from dataclasses import dataclass
@@ -47,6 +48,11 @@ from database.models import (
     UserCourse,
 )
 from services import media_service
+from services.mc_service import (
+    McValidationError,
+    mc_total_points,
+    parse_mc_data,
+)
 from services.media_service import sync_media_usages
 from services.slides_service import SlideError, parse_slides
 from services.workspace_service import (
@@ -190,6 +196,25 @@ def _task_apply(session: Session, entity: Task, snapshot: dict) -> None:
     entity.test_code = snapshot.get("test_code")
     entity.is_visible = bool(snapshot.get("is_visible", False))
     entity.hints_enabled = bool(snapshot.get("hints_enabled", True))
+    # Multiple-Choice: mc_data validieren (gleiche Regeln wie
+    # create/update_task). Bei Fragen überschreibt die Punkte-Summe der
+    # Fragen die eingegebenen Max.-Punkte; bei anderen Typen wird
+    # mc_data entsorgt.
+    raw_mc = snapshot.get("mc_data")
+    if task_type == TaskType.MC:
+        if raw_mc is None or (isinstance(raw_mc, str) and not raw_mc.strip()):
+            entity.mc_data = None
+        else:
+            if not isinstance(raw_mc, str):
+                raise HTTPException(400, "mc_data muss ein JSON-String sein.")
+            try:
+                mc_parsed = parse_mc_data(raw_mc)
+            except McValidationError as e:
+                raise HTTPException(400, f"Multiple-Choice-Fehler: {e}")
+            entity.mc_data = json.dumps(mc_parsed, ensure_ascii=False)
+            entity.max_points = mc_total_points(mc_parsed)
+    elif entity.mc_data:
+        entity.mc_data = None
     if task_type == TaskType.WORKSPACE:
         apply_workspace_env_fields(entity, snapshot)
         entity.workspace_engines = parse_engine_list(snapshot.get("workspace_engines"))

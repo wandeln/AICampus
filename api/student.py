@@ -36,6 +36,7 @@ from services.compute_client import (
 )
 from services.grading_service import GradingService
 from services.import_service import spawn_job
+from services.mc_service import McValidationError, grade_mc, parse_mc_data
 from services.llm_service import LLMService
 from services.media_service import all_media_for_course
 from services.sandbox_runner import SandboxedRunner
@@ -254,6 +255,55 @@ async def submit_solution(
     # Type narrowing: session.get() gibt immer ein Objekt mit ID zurueck
     assert task.id is not None
     assert user.id is not None
+
+    # Multiple-Choice: SYNCHRONES Grading (kein LLM, kein Background-Job,
+    # kein Polling) — das Ergebnis kommt direkt in dieser Antwort zurueck.
+    if task.task_type.value == "mc":
+        try:
+            mc = parse_mc_data(task.mc_data)
+        except McValidationError:
+            raise HTTPException(
+                400, "Diese Multiple-Choice-Aufgabe ist noch nicht vollständig "
+                     "konfiguriert — bitte die Lehrperson kontaktieren.")
+        answers = body.get("mc_answers")
+        try:
+            mc_result = grade_mc(mc, answers)
+        except McValidationError as e:
+            raise HTTPException(400, f"Ungültige Antworten: {e}")
+
+        submission = Submission(
+            task_id=task.id,
+            student_id=user.id,
+            solution=mc_result["summary"],
+            # strukturierte Auswahl (Tutor-Review markiert die Optionen)
+            code_solution="mc:v1:" + json.dumps(answers),
+            # Ergebnis persistieren → Historie-Karte bleibt stabil, auch
+            # wenn die Aufgabe später bearbeitet wird.
+            mc_result=json.dumps(mc_result),
+            attempt_number=len(existing_subs) + 1,
+            solve_time_seconds=body.get("solve_time_seconds", 0.0),
+            status=SubmissionStatus.GRADED,
+        )
+        session.add(submission)
+        session.commit()
+        session.refresh(submission)
+        assert submission.id is not None
+
+        session.add(Feedback(
+            submission_id=submission.id,
+            source=FeedbackSource.LLM,
+            points_earned=mc_result["total"],
+            # Kein Kommentar-Text: Das komplette Feedback steht direkt in
+            # der Ergebnis-Karte (mc_result) — ein Text-Zusammenfassung
+            # wäre redundant.
+            comment="",
+        ))
+        session.commit()
+        session.refresh(submission)
+
+        response = _build_graded_result(submission, task, user, session)
+        response["mc_result"] = mc_result
+        return response
 
     # Create submission (status bleibt PENDING)
     submission = Submission(
@@ -483,9 +533,17 @@ async def get_submission_result(
             "message": "Loesung wird korrigiert... bitte warten.",
         }
 
-    # Graded (oder overridden) — Ergebnis zusammenbauen
-    all_feedback = submission.feedback_list
+    return _build_graded_result(submission, task, user, session)
 
+
+def _build_graded_result(submission: Submission, task: Task, user: User,
+                         session: Session) -> dict:
+    """Vollständiges Ergebnis-Payload für eine abgeschlossene Einreichung
+    (Punkte, Versuche, Gruppen-Durchschnitt).
+
+    Wird vom Polling-Endpoint (LLM-Grading) UND vom synchronen
+    MC-Grading beim Submit verwendet.
+    """
     # Find latest points (from most recent submission)
     existing = session.exec(
         select(Submission)
@@ -512,6 +570,7 @@ async def get_submission_result(
 
     points = 0.0
     comment = ""
+    all_feedback = submission.feedback_list
     if all_feedback:
         # Take the most recent LLM feedback
         latest = max(all_feedback, key=lambda f: f.created_at)
@@ -566,7 +625,6 @@ async def get_submission_result(
     task_group_avg = round(sum(group_scores) / len(group_scores), 1) if group_scores else 0.0
 
     response["task_group_avg"] = task_group_avg
-
     return response
 
 

@@ -37,9 +37,10 @@
             <span class="px-2 py-0.5 rounded text-xs font-medium
               {% if task.task_type == 'code' %}bg-orange-100 text-orange-700
               {% elif task.task_type == 'workspace' %}bg-indigo-100 text-indigo-700
+              {% elif task.task_type == 'mc' %}bg-emerald-100 text-emerald-700
               {% else %}bg-gray-100 text-gray-600
               {% endif %}" style="align-content: center;">
-              {{ '💻 Code' if task.task_type == 'code' else '🐳 Workspace' if task.task_type == 'workspace' else '📄 Text' }}
+              {{ '💻 Code' if task.task_type == 'code' else '🐳 Workspace' if task.task_type == 'workspace' else '🎯 Multiple Choice' if task.task_type == 'mc' else '📄 Text' }}
             </span>
           </div>
         </div>

@@ -93,7 +93,9 @@
           <input type="checkbox" id="field-description" checked class="rounded text-purple-600">
           Aufgabenstellung
         </label>
-        <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer">
+        {# MC: keine Musterlösung — korrekte Antworten + Feedback + Punkte je
+           Frage geben die Bewertung eindeutig vor #}
+        <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer{% if tpl_type == 'mc' %} hidden{% endif %}">
           <input type="checkbox" id="field-solution" checked class="rounded text-purple-600">
           Musterlösung
         </label>
@@ -112,6 +114,10 @@
         <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer ai-workspace-field {% if tpl_type != 'workspace' %}hidden{% endif %}">
           <input type="checkbox" id="field-ws-files" checked class="rounded text-purple-600">
           Dateien (Starter, Skripte, Tests, Lösung)
+        </label>
+        <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer ai-mc-field {% if tpl_type != 'mc' %}hidden{% endif %}">
+          <input type="checkbox" id="field-mc-questions" checked class="rounded text-purple-600">
+          Fragen + Antworten + Feedback
         </label>
       </div>
 
@@ -172,6 +178,7 @@
             <option value="text" {% if tpl_type == 'text' %}selected{% endif %}>Textaufgabe</option>
             <option value="code" {% if tpl_type == 'code' %}selected{% endif %}>Codeaufgabe</option>
             <option value="workspace" {% if tpl_type == 'workspace' %}selected{% endif %}>Workspace-Aufgabe (Container)</option>
+            <option value="mc" {% if tpl_type == 'mc' %}selected{% endif %}>Multiple Choice</option>
           </select>
         </div>
       </div>
@@ -220,7 +227,8 @@
       </div>
     </div>
 
-    <!-- ─── Model Solution ──────────────────────────────────────── -->
+    <!-- ─── Model Solution (kein MC: Feedback + Punkte je Frage reichen) ─── -->
+    {% if tpl_type != 'mc' %}
     <div id="model-solution-editor-container" class="card">
       <h2 class="font-semibold text-gray-800 mb-4">Musterlösung <span class="text-xs text-gray-400">(optional, versteckt für Studenten)</span></h2>
 
@@ -233,6 +241,7 @@
         <div id="solution-preview-anchor"></div>
       </div>
     </div>
+    {% endif %}
 
     {# Typspezifische Sektionen: #}
     {# task_detail_code.html (Code-Vorlage + Unit-Tests) #}
@@ -293,8 +302,10 @@ class PrivateTest(unittest.TestCase):
   // ─── Initialize Markdown Editors ─────────────────────────
   // Description editor (immer) — bibliography: Ganze Aufgabe → „Quellen“-Liste für @cite:-Zitationen
   const descEditor = createMarkdownEditor('description-editor-container', { buttonAnchor: 'description-preview-anchor', textareaId: 'description-textarea', startInPreview: true, bibliography: true, onValueChange: () => av.onChange() });
-  // Model solution — immer als Markdown Editor (auch bei Code-Aufgaben)
-  const solEditor = createMarkdownEditor('model-solution-editor-container', { buttonAnchor: 'solution-preview-anchor', startInPreview: true, bibliography: true, onValueChange: () => av.onChange() });
+  // Model solution — Markdown Editor (keine MC-Aufgabe → kein Container)
+  const solEditor = document.getElementById('model-solution-editor-container')
+    ? createMarkdownEditor('model-solution-editor-container', { buttonAnchor: 'solution-preview-anchor', startInPreview: true, bibliography: true, onValueChange: () => av.onChange() })
+    : null;
 
   // ─── Auto-Save + Versions-History ─────────────────────────
   // Speichert bei jeder Änderung (debounced) die Aufgabe + pflegt pro
@@ -430,6 +441,7 @@ class PrivateTest(unittest.TestCase):
   document.getElementById("task_type_select").addEventListener("change", (e) => {
     const isCode = e.target.value === "code";
     const isWorkspace = e.target.value === "workspace";
+    const isMc = e.target.value === "mc";
 
     const redirectWithSave = (type) => {
       setTimeout(async () => {
@@ -456,6 +468,12 @@ class PrivateTest(unittest.TestCase):
       return;
     }
 
+    // MC-Sektionen fehlen (Text/Code/Workspace-Variante)? → MC-Template
+    if (isMc && !document.getElementById("mc-section")) {
+      redirectWithSave("mc");
+      return;
+    }
+
     const codeSection = document.getElementById("code-section");
     const testsSection = document.getElementById("tests-section");
     if (codeSection) codeSection.classList.toggle("hidden", !isCode);
@@ -464,10 +482,15 @@ class PrivateTest(unittest.TestCase):
     const wsSections = document.querySelectorAll("[data-workspace-section]");
     wsSections.forEach(el => el.classList.toggle("hidden", !isWorkspace));
 
+    const mcSections = document.querySelectorAll("[data-mc-section]");
+    mcSections.forEach(el => el.classList.toggle("hidden", !isMc));
+
     // Show/hide AI code checkboxes (only for code tasks)
     document.querySelectorAll(".ai-code-field").forEach(el => el.classList.toggle("hidden", !isCode));
     // Show/hide AI workspace checkboxes (only for workspace tasks)
     document.querySelectorAll(".ai-workspace-field").forEach(el => el.classList.toggle("hidden", !isWorkspace));
+    // Show/hide AI MC checkboxes (only for MC tasks)
+    document.querySelectorAll(".ai-mc-field").forEach(el => el.classList.toggle("hidden", !isMc));
 
     // Model-Solution ist immer Markdown Editor — kein CodeMirror mehr
     const solHint = document.getElementById('model-solution-hint');
@@ -542,18 +565,19 @@ class PrivateTest(unittest.TestCase):
     // CodeMirror-Editoren: Inhalte über die Editor-API lesen (das
     // versteckte Textarea enthält bei aktivem Editor nicht den Inhalt)
     const description = descEditor.getValue();
-    const modelSolution = solEditor.getValue();
+    const modelSolution = solEditor ? solEditor.getValue() : "";
     const maxPoints = document.querySelector('input[name="max_points"]').value || 10;
     const codeTemplate = codeTemplateCM ? codeTemplateCM.getValue() : (document.getElementById("code-template-editor")?.value || "");
 
     const generateFields = {
       title: document.getElementById("field-title").checked,
       description: document.getElementById("field-description").checked,
-      solution: document.getElementById("field-solution").checked,
+      solution: taskType !== "mc" && document.getElementById("field-solution").checked,
       template: isCode && document.getElementById("field-template").checked,
       tests: isCode && document.getElementById("field-tests").checked,
       env: isWorkspace && document.getElementById("field-ws-env").checked,
       files: isWorkspace && document.getElementById("field-ws-files").checked,
+      questions: taskType === "mc" && document.getElementById("field-mc-questions").checked,
     };
 
     if (!Object.values(generateFields).some(v => v)) {
@@ -575,7 +599,8 @@ class PrivateTest(unittest.TestCase):
     }
 
     const wantTextFields = generateFields.title || generateFields.description || generateFields.solution;
-    if (wantTextFields && !topic && !title.trim() && !description.trim() && !modelSolution.trim()) {
+    if ((wantTextFields || (taskType === "mc" && generateFields.questions))
+        && !topic && !title.trim() && !description.trim() && !modelSolution.trim()) {
       showToast("Bitte ein Thema angeben, damit das LLM die Aufgabe generieren kann.", "error");
       document.getElementById("ai-topic").focus();
       return;
@@ -650,7 +675,7 @@ class PrivateTest(unittest.TestCase):
         populated.push("Aufgabenstellung");
       }
 
-      if (generateFields.solution && data.model_solution) {
+      if (generateFields.solution && solEditor && data.model_solution) {
         solEditor.setValue(data.model_solution);
         (async () => {
           await renderMarkdown(data.model_solution, solEditor.previewDiv, { preview: true });
@@ -682,6 +707,12 @@ class PrivateTest(unittest.TestCase):
       // Workspace-Template via Hook (task_detail_workspace.html).
       if (isWorkspace && typeof window._workspaceAiApply === "function") {
         populated.push(...window._workspaceAiApply(data));
+      }
+
+      // MC-Fragen (mc_data als Dict aus der LLM-Antwort) übernimmt das
+      // MC-Template via Hook (task_detail_mc.html).
+      if (taskType === "mc" && data.mc_data && typeof window._mcAiApply === "function") {
+        populated.push(...window._mcAiApply(data.mc_data));
       }
 
       // LLM hat Felder befüllt → Auto-Save anstoßen (extern gesetzte
@@ -733,7 +764,7 @@ class PrivateTest(unittest.TestCase):
     const formData = new FormData(form);
 
     const description = descEditor.getValue();
-    const modelSolution = solEditor.getValue();
+    const modelSolution = solEditor ? solEditor.getValue() : "";
 
     const body = {
       title: formData.get("title"),
@@ -798,6 +829,17 @@ class PrivateTest(unittest.TestCase):
         : null;
     }
 
+    // Multiple Choice: mc_data (JSON-String) liefert der Hook im
+    // MC-Template (validiert clientseitig, summiert die Punkte je Frage).
+    // Bei anderen Typen bewusst null → serverseitig wird mc_data geleert.
+    if (taskTypeVal === "mc") {
+      Object.assign(body, (typeof window._mcEnvFields === "function")
+        ? window._mcEnvFields()
+        : { mc_data: null });
+    } else {
+      body.mc_data = null;
+    }
+
     // Visibility - after clicking toggle, title is reversed, so we invert
     const visBtn = document.getElementById("visibility-btn");
     body.is_visible = !visBtn.title.includes('freischalten');
@@ -840,12 +882,14 @@ class PrivateTest(unittest.TestCase):
       await renderMarkdown(desc, descEditor.previewDiv, { preview: true, bibliography: true });
       if (!descEditor.isPreview()) descEditor.toggleBtn.click();
     })();
-    const sol = p.model_solution || "";
-    solEditor.setValue(sol);
-    (async () => {
-      await renderMarkdown(sol, solEditor.previewDiv, { preview: true, bibliography: true });
-      if (!solEditor.isPreview()) solEditor.toggleBtn.click();
-    })();
+    if (solEditor) {
+      const sol = p.model_solution || "";
+      solEditor.setValue(sol);
+      (async () => {
+        await renderMarkdown(sol, solEditor.previewDiv, { preview: true, bibliography: true });
+        if (!solEditor.isPreview()) solEditor.toggleBtn.click();
+      })();
+    }
 
     // Code-Vorlage & Unit-Tests (Elemente existieren nur im Code-Template)
     const codeTa = document.getElementById("code-template-editor");
@@ -862,6 +906,11 @@ class PrivateTest(unittest.TestCase):
     // Workspace-Umfeld (Hook im Workspace-Template)
     if ((p.task_type || "text") === "workspace" && typeof window._workspaceApplyEnv === "function") {
       window._workspaceApplyEnv(p);
+    }
+
+    // MC-Fragen (Hook im MC-Template)
+    if ((p.task_type || "text") === "mc" && typeof window._mcApplyEnv === "function") {
+      window._mcApplyEnv(p);
     }
   }
 

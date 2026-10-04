@@ -51,6 +51,7 @@ class TaskType(str, Enum):
     TEXT = "text"
     CODE = "code"
     WORKSPACE = "workspace"
+    MC = "mc"  # Multiple Choice (mehrere Fragen, sofortiges Feedback)
 
 
 
@@ -209,6 +210,11 @@ class TaskBase(SQLModel):
     workspace_engines: Optional[str] = Field(default=None)      # JSON-Liste Engine-Namen (geordnet) — Pool für Routing/Prebuild
     workspace_image: Optional[str] = Field(default=None, max_length=50)  # Image-Spec-Name (Kurs-Scope > global)
     workspace_preview_root_ports: Optional[str] = Field(default=None)  # VERWORFEN (Subdomain-Preview) — Spalte bleibt, ungenutzt
+    # Multiple-Choice-Aufgaben (task_type=mc):
+    # JSON: {"penalty_enabled": bool, "questions": [{"question": str, "points": int,
+    #   "multi_select": bool, "options": [{"text": str, "correct": bool, "feedback": str}]}]}
+    # max_points = Summe der Fragen-Punkte (serverseitig synchron gehalten).
+    mc_data: Optional[str] = Field(default=None)
 
 
 class Task(TaskBase, table=True):
@@ -251,6 +257,7 @@ class TaskCreate(SQLModel):
     workspace_assets_status: Optional[str] = Field(default=None)
     workspace_engines: Optional[str] = Field(default=None)
     workspace_image: Optional[str] = Field(default=None, max_length=50)
+    mc_data: Optional[str] = Field(default=None)
 
 
 class TaskRead(TaskBase):
@@ -284,6 +291,7 @@ class TaskUpdate(SQLModel):
     workspace_assets_status: Optional[str] = None
     workspace_engines: Optional[str] = None
     workspace_image: Optional[str] = None
+    mc_data: Optional[str] = None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -647,6 +655,7 @@ class SubmissionBase(SQLModel):
     attempt_number: int = Field(default=1)
     solve_time_seconds: float = Field(default=0.0)  # Zeit in Sekunden bis zum Einreichen
     workspace_snapshot: Optional[str] = Field(default=None, max_length=500)  # Pfad zu workspace.tar.gz (Workspace-Aufgaben)
+    mc_result: Optional[str] = Field(default=None)  # MC: persistiertes Grading-Ergebnis (JSON)
 
 
 class Submission(SubmissionBase, table=True):
