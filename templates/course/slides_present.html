@@ -55,7 +55,7 @@
     <button type="button" data-key="66"><kbd>B</kbd><span>Break</span></button>
     {% if is_tutor %}
     <button type="button" data-key="67"><kbd>C</kbd><span>Stift (Folie)</span></button>
-    <button type="button" data-key="119"><kbd>W</kbd><span>Whiteboard</span></button>
+    <button type="button" data-key="87"><kbd>W</kbd><span>Whiteboard</span></button>
     <button type="button" data-action="undo"><kbd>Strg</kbd><kbd>Z</kbd><span>Zug zurücknehmen</span></button>
     {% endif %}
     <button type="button" data-key="79"><kbd>O</kbd><span>Overview</span></button>
@@ -199,7 +199,9 @@ if (HAS_NOTES) {
     chalkboard: HAS_NOTES ? {
       storage: "aicampus-chalkboard-" + courseId + "-" + DECK_ID,
       keyBindings: {
-        toggleChalkboard: { keyCode: 119, key: "W", description: "Toggle whiteboard" },
+        // keyCode 87 = Großbuchstaben-ASCII von "W": Moderne Browser (Chrome
+        // & Co.) melden bei keydown 65-90, nicht den legacy-Kleinbuchstaben-Code (119).
+        toggleChalkboard: { keyCode: 87, key: "W", description: "Toggle whiteboard" },
       },
     } : undefined,
     plugins: [RevealHighlight, ...(HAS_NOTES ? [RevealNotes, RevealChalkboard] : [])],
