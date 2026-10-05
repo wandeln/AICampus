@@ -45,9 +45,9 @@
       <button id="refresh-btn" title="Jetzt aktualisieren"
               class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition">⟳ Aktualisieren</button>
       <button id="copy-snippet-btn" title="Markdown-Snippet für die Slides kopieren (Iframe-Embed mit der aktiven Auswahl)"
-              class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition">📋 Snippet kopieren</button>
-      <a href="/courses/{{ course.id }}/live"
-         class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition">← Zum Live-Dashboard</a>
+              class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition">📋 Snippet</button>
+      <button id="qr-btn" title="QR-Code: Studierende scannen den Code und landen direkt auf der ausgewählten MC-Aufgabe"
+              class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition">📱 QR-Code</button>
     </div>
   </div>
 
@@ -105,6 +105,22 @@
     <div id="questions"></div>
   </div>
 
+  <!-- QR-Code: Studierende → direkt zur ausgewählten MC-Aufgabe -->
+  <div id="qr-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div class="bg-white rounded-2xl shadow-xl p-6 max-w-sm w-full">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold text-gray-800">📱 QR-Code zur Aufgabe</h2>
+        <button id="qr-modal-close" class="text-2xl leading-none text-gray-400 hover:text-gray-600 transition"
+                aria-label="Schließen">&times;</button>
+      </div>
+      <div id="qr-code" class="flex justify-center"></div>
+      <p id="qr-url" class="mt-3 text-center text-xs text-gray-500 break-all"></p>
+      <p class="mt-3 text-center text-sm text-gray-600">
+        Mit dem Smartphone scannen — direkt zur MC-Aufgabe.
+      </p>
+    </div>
+  </div>
+
   {% else %}
 
   <!-- Keine MC-Aufgaben im Kurs -->
@@ -152,6 +168,8 @@
 
 {% block extra_scripts %}
 {% if can_view and mc_tasks %}
+<!-- QRCode (MIT) — lokal gespiegelt -->
+<script src="{{ asset('vendor/qrcode.min.js') }}"></script>
 <script>
   const REFRESH_MS = 10000;
 
@@ -403,6 +421,27 @@
     if (cards[qi]) {
       cards[qi].replaceWith(buildQuestionCard(lastData.questions[qi], qi, lastData, cb.checked));
     }
+  });
+
+  // ─── QR-Code: Studis → direkt zur aktuellen MC-Aufgabe ────────
+  const qrModal = document.getElementById('qr-modal');
+  document.getElementById('qr-btn').addEventListener('click', () => {
+    if (!taskSelect.value) return;
+    const url = location.origin + '/courses/' + courseId + '/tasks/' + taskSelect.value;
+    const box = document.getElementById('qr-code');
+    box.innerHTML = '';
+    // qrcodejs rendert Table+Img in den Container; H = 30 % Fehlerkorrektur
+    // — robust für Foto-Scans der Projektionsfläche.
+    new QRCode(box, { text: url, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.H });
+    document.getElementById('qr-url').textContent = url;
+    qrModal.classList.remove('hidden');
+  });
+  document.getElementById('qr-modal-close').addEventListener('click', () => qrModal.classList.add('hidden'));
+  qrModal.addEventListener('click', (e) => {
+    if (e.target === qrModal) qrModal.classList.add('hidden');
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') qrModal.classList.add('hidden');
   });
 
   // ─── Kopfzeilen-Buttons ─────────────────────────────────────
