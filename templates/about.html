@@ -54,6 +54,32 @@
   .about-ws-file:hover { background: #eef2f6; }
   .about-ws-file-on { background: #dbeafe; color: #1d4ed8; font-weight: 600; }
 
+  /* About: Hintergrund — sehr dezentes Hellblau mit radialem Verlauf
+     (heller im Zentrum, dezent dunkler am Rand) + weißes Blueprint-Raster.
+     .about-bg bleibt fixiert (Spotlight im Viewport). .about-bg-grid
+     überdeckt stattdessen die Dokumenthöhe (Höhe via JS) und mitscrollt
+     per Parallax langsamer als der Content; sie trägt zusätzlich einen
+     vertikalen Verlauf (hell oben → tiefer unten), der den Hintergrund
+     beim Scrollen allmählich dunkler macht. Die weißen Rasterlinien
+     liegen über dem Verlauf und bleiben hell. */
+  .about-bg {
+    position: fixed; inset: 0; z-index: -2; pointer-events: none;
+    background: radial-gradient(120% 130% at 50% 42%,
+      #fcfeff 0%, #eaf2fb 55%, #cfe0f4 100%);
+  }
+  .about-bg-grid {
+    position: absolute; top: 0; left: 0; right: 0; z-index: -1; pointer-events: none;
+    background-image:
+      linear-gradient(to right,  rgba(255, 255, 255, .45) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, .45) 1px, transparent 1px),
+      linear-gradient(to right,  rgba(255, 255, 255, .28) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, .28) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(45, 85, 145, 0) 0%, rgba(45, 85, 145, .2) 100%);
+    background-size: 140px 140px, 140px 140px, 28px 28px, 28px 28px, 100% 100%;
+    background-repeat: repeat, repeat, repeat, repeat, no-repeat;
+    will-change: transform;
+  }
+
   /* About: Slide-Deck-Vorschau — echte Reveal-Instanz; das Folien-Styling
      kommt aus css/slides.css (.slides-preview-shell, .markdown-preview). */
   @media (prefers-reduced-motion: reduce) {
@@ -65,6 +91,12 @@
 {% endblock %}
 
 {% block content %}
+<!-- Dezenter Hintergrund: radialer Hellblau-Verlauf (fix) + Ebene mit
+     Blueprint-Raster und vertikalem Dunkelungsverlauf — Parallax und
+     Abdunkelung beim Scrollen via JS (extra_scripts) -->
+<div class="about-bg" aria-hidden="true"></div>
+<div class="about-bg-grid" aria-hidden="true"></div>
+
 <div class="max-w-5xl mx-auto">
 
   <!-- ── Hero ─────────────────────────────────────────────────── -->
@@ -110,7 +142,7 @@
 
   <!-- ── Datenhoheit ──────────────────────────────────────────── -->
   <section class="mt-14 sm:mt-16 about-reveal">
-    <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
+    <div class="bg-white/50 backdrop-blur-[2px] rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
       <p class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Datenhoheit</p>
       <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">Alle Daten bleiben im Uni-Netzwerk.</h2>
       <p class="mt-4 text-gray-600 leading-relaxed">
@@ -159,7 +191,7 @@
 
   <!-- ── Lehrmaterial ─────────────────────────────────────────── -->
   <section class="mt-10 sm:mt-12 about-reveal">
-    <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
+    <div class="bg-white/50 backdrop-blur-[2px] rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
       <div class="grid lg:grid-cols-2 gap-8 items-center">
 
         <!-- Slide-Deck-Vorschau: echte eingebettete Reveal-Instanz (Dummy-Deck,
@@ -343,7 +375,7 @@ while Q ≠ ∅:                    <span style="color:#94a3b8"># O((V+E)·log V
 
   <!-- ── Interaktive Applets ──────────────────────────────────── -->
   <section class="mt-10 sm:mt-12 about-reveal">
-    <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
+    <div class="bg-white/50 backdrop-blur-[2px] rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
       <p class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Interaktive Applets</p>
       <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">
         Aus einer Skizze: ein interaktives Applet in wenigen Augenblicken.
@@ -378,7 +410,7 @@ while Q ≠ ∅:                    <span style="color:#94a3b8"># O((V+E)·log V
 
   <!-- ── Übungs-Aufgaben ───────────────────────────────────── -->
   <section class="mt-10 sm:mt-12 about-reveal">
-    <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
+    <div class="bg-white/50 backdrop-blur-[2px] rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
       <div class="grid lg:grid-cols-2 gap-8 items-center">
 
         <!-- Mockup: Workspace (Mini-IDE) wie in der Aufgabe -->
@@ -473,7 +505,7 @@ while Q ≠ ∅:                    <span style="color:#94a3b8"># O((V+E)·log V
 
   <!-- ── Gamification ─────────────────────────────────────────── -->
   <section class="mt-10 sm:mt-12 about-reveal">
-    <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
+    <div class="bg-white/50 backdrop-blur-[2px] rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
       <div class="grid lg:grid-cols-2 gap-8 items-center">
 
         <div>
@@ -526,7 +558,7 @@ while Q ≠ ∅:                    <span style="color:#94a3b8"># O((V+E)·log V
 
   <!-- ── Automatisiertes Feedback ─────────────────────────────── -->
   <section class="mt-10 sm:mt-12 about-reveal">
-    <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
+    <div class="bg-white/50 backdrop-blur-[2px] rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
       <div class="grid lg:grid-cols-2 gap-8 items-center">
 
         <div>
@@ -616,7 +648,7 @@ while Q ≠ ∅:                    <span style="color:#94a3b8"># O((V+E)·log V
 
   <!-- ── Tech-Stack ───────────────────────────────────────────── -->
   <section class="mt-10 sm:mt-12 about-reveal">
-    <div class="bg-white rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
+    <div class="bg-white/50 backdrop-blur-[2px] rounded-xl border border-gray-200 shadow-md p-6 sm:p-8">
       <p class="font-mono text-xs uppercase tracking-[0.2em] text-blue-600">Tech-Stack</p>
       <h2 class="mt-2 text-2xl sm:text-3xl font-bold text-gray-800">
         100 % Open Source. Auditierbar, erweiterbar, lizenzkostenfrei.
@@ -687,6 +719,46 @@ while Q ≠ ∅:                    <span style="color:#94a3b8"># O((V+E)·log V
       });
     }, { threshold: 0.12 });
     reveals.forEach(function (el) { io.observe(el); });
+  }
+
+
+  /* ── Blueprint-Hintergrund: Parallax + Abdunkelung beim Scrollen ────
+     Die .about-bg-grid-Ebene überdeckt die Dokumenthöhe (Höhe via JS)
+     und mitscrollt mit dem Faktor BG_FACTOR langsamer als der Content
+     (Transform = GPU-kompositiert, kein Repaint). Ihr vertikaler
+     Dunkelungsverlauf (CSS) reicht genau über die Dokumentlänge — beim
+     Scrollen wird der Hintergrund dadurch nach unten allmählich
+     dunkler, die weißen Rasterlinien bleiben hell.
+     Bei prefers-reduced-motion: kein Parallax (Ebene scrollt 1:1 mit,
+     der Verlauf ist entsprechend skaliert). */
+  var aboutGrid = document.querySelector(".about-bg-grid");
+  if (aboutGrid) {
+    var BG_FACTOR = 0.3; // 0 = fix, 1 = mitscrollt 1:1 mit dem Content
+    function bgMaxScroll() {
+      var footer = document.querySelector("footer");
+      var docH = footer ? footer.offsetTop + footer.offsetHeight : document.documentElement.scrollHeight;
+      return Math.max(0, docH - window.innerHeight);
+    }
+    function bgApplyScroll() {
+      aboutGrid.style.transform = reduced
+        ? ""
+        : "translateY(" + (window.scrollY * (1 - BG_FACTOR)).toFixed(1) + "px)";
+    }
+    function bgResize() {
+      var f = reduced ? 1 : BG_FACTOR;
+      aboutGrid.style.height = (f * bgMaxScroll() + window.innerHeight) + "px";
+      bgApplyScroll();
+    }
+    var bgTicking = false;
+    window.addEventListener("scroll", function () {
+      if (!bgTicking) {
+        bgTicking = true;
+        window.requestAnimationFrame(function () { bgTicking = false; bgApplyScroll(); });
+      }
+    }, { passive: true });
+    window.addEventListener("resize", bgResize, { passive: true });
+    if ("ResizeObserver" in window) new ResizeObserver(bgResize).observe(document.body);
+    bgResize();
   }
 
 
