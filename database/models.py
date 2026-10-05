@@ -1192,3 +1192,36 @@ class LLMDebugEntry(SQLModel, table=True):
     error: str = ""
     latency_ms: int = 0
     attempts: int = 1
+
+
+# ═══════════════════════════════════════════════════════════════
+# NOTIFICATIONS (in-App-Benachrichtigungen, Glocke in der Top-Bar)
+# ═══════════════════════════════════════════════════════════════
+
+class Notification(SQLModel, table=True):
+    """Benachrichtigung für einen Plattform-User (Glocke in der Top-Bar).
+
+    Typen (type):
+    - "forum_message": neue Forum-Nachricht (alle Kurs-Mitglieder außer Absender)
+    - "script_question_answer": neue Antwort auf eine Skript-Frage (Fragesteller)
+    - "llm_feedback": LLM-Feedback nach Abgabe (Student; Erfolg oder Fehler)
+
+    title/body sind beim Erstellen vor-berechnete Snapshots (kein Join nötig
+    für die Listen-Anzeige). Neue Tabelle wird beim App-Start per create_all
+    angelegt.
+    """
+
+    __tablename__ = "notifications"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)  # Empfänger
+    course_id: Optional[int] = Field(default=None, foreign_key="courses.id", index=True)
+    channel_id: Optional[int] = Field(default=None, index=True)  # Forum-Kanal (nur forum_message)
+    actor_id: Optional[int] = Field(default=None, foreign_key="users.id")  # None = System (LLM)
+    # "forum_message" | "script_question_answer" | "llm_feedback"
+    type: str = Field(max_length=30)
+    title: str = Field(max_length=200)
+    body: str = Field(default="", max_length=500)
+    link: str = Field(default="", max_length=300)
+    read_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.now, index=True)

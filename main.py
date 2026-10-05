@@ -48,6 +48,7 @@ from database.models import (
     GlobalUserRole,
     HintExchange,
     MaterialType,
+    Notification,
     ScriptSection,
     Task,
     User,
@@ -72,7 +73,7 @@ from services.slides_service import (
     slide_count,
 )
 
-from api import admin, auth, forum, importer, image_specs, media as media_api, materials as materials_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
+from api import admin, auth, forum, importer, image_specs, media as media_api, materials as materials_api, notifications as notifications_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
 
 
 def _calculate_percentile(my_score: float, other_scores: list[float]) -> int:
@@ -345,6 +346,7 @@ app.include_router(slides_api.router)
 app.include_router(script_api.router)
 app.include_router(forum.router)
 app.include_router(script_questions.router)
+app.include_router(notifications_api.router)  # /api/notifications/… (in-App-Glocke)
 app.include_router(versions_api.router)  # /api/versions/… (Versions-History + Autosave)
 app.include_router(importer.router)
 app.include_router(preview_proxy.router)  # /preview/{task}/{port}/… (same-origin)
@@ -2288,6 +2290,37 @@ async def settings_page(
             "selected_course_id": None,
             "is_admin": user.role == GlobalUserRole.ADMIN,
             "use_ldap": use_ldap,
+        },
+    )
+
+
+@app.get("/notifications/archive")
+async def notifications_archive_page(
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Nachrichten-Archiv: gelesene Benachrichtigungen (read_at gesetzt)."""
+    items = session.exec(
+        select(Notification)
+        .where(Notification.user_id == user.id)
+        .where(Notification.read_at.is_not(None))
+        .order_by(Notification.id.desc())
+        .limit(100)
+    ).all()
+
+    return templates.TemplateResponse(
+        "notifications_archive.html",
+        {
+            "request": request,
+            "page_title": "Nachrichten-Archiv",
+            "current_user": _user_ctx(
+                user, "Admin" if user.role == GlobalUserRole.ADMIN else "User"
+            ),
+            "courses": _get_user_courses(user, session),
+            "selected_course_id": None,
+            "is_admin": user.role == GlobalUserRole.ADMIN,
+            "archive_items": items,
         },
     )
 

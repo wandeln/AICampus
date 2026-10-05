@@ -720,26 +720,52 @@
   background: #9ca3af;
 }
 
-/* Account-Menü (Main-Nav): Kurs-Flyout wird bei vielen Kursen scrollbar.
-   Gleiches dezentem Muster wie die Markdown-Scrollflächen (thin, transparenter
-   Track, runder Thumb) — der Thumb ist wegen der dunkelblauen Menüfläche
-   halbtransparentes Weiß. */
-.user-menu-course-scroll {
+/* Account-Menü (Main-Nav): Kurs-Flyout + Benachrichtigungsliste werden bei
+   vielen Einträgen scrollbar. Gleiches dezentem Muster wie die
+   Markdown-Scrollflächen (thin, transparenter Track, runder Thumb) — der
+   Thumb ist wegen der dunkelblauen Menüfläche halbtransparentes Weiß. */
+.user-menu-course-scroll,
+.notif-scroll {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
 }
-.user-menu-course-scroll::-webkit-scrollbar {
+.user-menu-course-scroll::-webkit-scrollbar,
+.notif-scroll::-webkit-scrollbar {
   width: 6px;
 }
-.user-menu-course-scroll::-webkit-scrollbar-track {
+.user-menu-course-scroll::-webkit-scrollbar-track,
+.notif-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
-.user-menu-course-scroll::-webkit-scrollbar-thumb {
+.user-menu-course-scroll::-webkit-scrollbar-thumb,
+.notif-scroll::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.3);
   border-radius: 9999px;
 }
-.user-menu-course-scroll::-webkit-scrollbar-thumb:hover {
+.user-menu-course-scroll::-webkit-scrollbar-thumb:hover,
+.notif-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.5);
+}
+
+/* Glocken-Menü im Mobilmodus (< sm = 640px): mittig AUF DEM BILDSCHIRM
+   statt an den Glocken-Button right-anchored — bei der festen Breite
+   (w-80 = 320px) ragte es auf schmalen Displays am linken Rand über
+   den Viewport hinaus. position:fixed macht den Viewport zum
+   Referenzrahmen (bei absolute läge left:50% am ~40px-Button an). Die
+   Tailwind-Klasse max-w-[calc(100vw-1.5rem)] begrenzt die Breite auf
+   Viewport − 24px, daher bleibt das Menü immer im Display (mind.
+   12px Rand links/rechts). top:3.75rem = 56px Nav-Höhe (h-12 + py-1)
+   − 4px (Button sitzt in der py-1-Einrückung) + 8px Abstand;
+   margin-top:0 hebt das Tailwind-mt-2 auf. */
+@media (max-width: 639.98px) {
+  #notif-menu {
+    position: fixed;
+    left: 50%;
+    right: auto;
+    top: 3.75rem;
+    margin-top: 0;
+    transform: translateX(-50%);
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════

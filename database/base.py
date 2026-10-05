@@ -179,6 +179,9 @@ def migrate_schema():
         "llm_debug_entries": {
             "user_id": "INTEGER",  # auslösender User (NULL = kein User-Kontext)
         },
+        "notifications": {
+            "channel_id": "INTEGER",  # Forum-Kanal (nur forum_message; Auto-Read beim Kanal-Besuch)
+        },
     }
     column_drops = {
         "course_media": ["is_visible"],  # Sichtbarkeit steuert der einbindende Inhalt

@@ -29,6 +29,7 @@ from database.models import (
     TaskType, SubmissionStatus, FeedbackSource,
     Course, UserCourse, CourseRole, WorkspaceRun, GlobalUserRole,
 )
+from services import notifications
 from services.auth_service import decode_access_token, get_current_user
 from services.compute_client import (
     ComputeAgentError,
@@ -389,8 +390,18 @@ async def _run_grading_background(
             if not task or not submission:
                 return
 
-            await grading_service.grade_submission(
+            result = await grading_service.grade_submission(
                 task, submission, bg_session,
+            )
+            # Glocke: Student ueber das fertige Feedback informieren
+            notifications.notify_llm_feedback(
+                session=bg_session,
+                course_id=task.course_id,
+                student_id=submission.student_id,
+                task_id=task.id,
+                task_title=task.title,
+                points=float(result.get("points", 0) or 0),
+                max_points=float(result.get("max_points", 0) or 0),
             )
     except Exception as e:
         # Fehler: Status auf PENDING lassen + Fehler-Feedback speichern
@@ -406,6 +417,20 @@ async def _run_grading_background(
                         comment=f"Grading-Fehler: {str(e)}",
                     ))
                     err_session.commit()
+                    task = err_session.get(Task, task_id)
+                    if task:
+                        # Glocke: Student ueber den Fehler informieren
+                        notifications.notify_llm_feedback(
+                            session=err_session,
+                            course_id=task.course_id,
+                            student_id=sub.student_id,
+                            task_id=task.id,
+                            task_title=task.title,
+                            points=0.0,
+                            max_points=0.0,
+                            success=False,
+                            error=str(e)[:300],
+                        )
         except Exception:
             pass  # Logging hier waere ideal, aber nicht kritisch
 

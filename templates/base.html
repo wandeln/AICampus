@@ -140,6 +140,47 @@
          Dropdown (#user-menu). Das nav hat bewusst KEIN overflow-x:auto:
          sonst würde das absolut positionierte Dropdown abgeschnitten. #}
       {% if current_user %}
+      {# Rechts-Gruppe (Glocke + Account + Burger): justify-between verteile
+         sonst jeden Flex-Kind einzeln und die Glocke wäre zentriert. #}
+      <div class="flex items-center gap-2">
+      <!-- Benachrichtigungen: Glocke + Ungelesen-Badge (pollt /api/notifications) -->
+      <div class="relative" id="notif-wrap">
+        <button
+          type="button"
+          id="notif-btn"
+          {# h-12 (48px) wie der Account-Button, damit beide Menüs
+             (top-full) auf gleicher Höhe öffnen; Icon bleibt klein. #}
+          class="relative flex items-center justify-center px-2 h-12 rounded-lg hover:bg-blue-600/70 transition"
+          aria-haspopup="true"
+          aria-expanded="false"
+          title="Benachrichtigungen"
+          onclick="toggleNotifMenu()"
+        >
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
+            <path d="M13.73 21a2 2 0 01-3.46 0"/>
+          </svg>
+          <span id="notif-badge" class="hidden absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 items-center justify-center rounded-full bg-red-500 text-white text-[11px] font-bold">0</span>
+        </button>
+
+        <div id="notif-menu" class="hidden absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-xl bg-blue-700 border border-blue-500/50 shadow-2xl">
+          <div class="flex items-center justify-between px-3 py-2 border-b border-blue-500/50">
+            <span class="text-sm font-semibold">Benachrichtigungen</span>
+            <button type="button" id="notif-read-all" class="text-xs text-blue-200 hover:text-white transition">
+              Alle als gelesen markieren
+            </button>
+          </div>
+          <div id="notif-list" class="notif-scroll max-h-96 overflow-y-auto p-1.5 space-y-1"></div>
+          <div class="border-t border-blue-500/50 p-1.5">
+            <a href="/notifications/archive"
+               class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-blue-200 hover:bg-blue-600 hover:text-white transition">
+              <span class="w-4 shrink-0 text-center">🗂️</span>
+              <span>Nachrichten-Archiv</span>
+            </a>
+          </div>
+        </div>
+      </div>
+
       <div class="relative" id="user-menu-wrap">
         <button
           type="button"
@@ -236,6 +277,7 @@
       <button id="burger-btn" class="sm:hidden text-white text-2xl leading-none p-1" onclick="document.getElementById('mobile-menu').classList.toggle('hidden')">
         ☰
       </button>
+      </div>
       {% else %}
       <!-- Gast (nicht eingeloggt): Login-Link -->
       <a href="/login" class="text-sm text-blue-100 hover:text-white transition">Login</a>
@@ -320,6 +362,120 @@
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") closeUserMenu();
       });
+
+      // ─── Benachrichtigungen (Glocke): Polling alle 15 s (Badge + Liste) ──
+      function notifTimeLabel(iso) {
+        const d = new Date(iso);
+        const now = new Date();
+        const time = d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+        if (d.toDateString() === now.toDateString()) return time;
+        return d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) + " " + time;
+      }
+      function escHtml(s) {
+        return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+          { "&": "&amp;", "<": "&lt;", ">": "&gt;", "'" : "&#39;", '"': "&quot;" }[c]
+        ));
+      }
+      const NOTIF_ICONS = { forum_message: "💬", script_question_answer: "❓", llm_feedback: "📝" };
+      const NOTIF_EMPTY_HTML =
+        '<p class="text-sm text-blue-200 text-center py-6 px-3">Keine Benachrichtigungen.</p>';
+      function notifItemHtml(n) {
+        return `
+          <a href="${escHtml(n.link)}" data-notif-id="${n.id}"
+             class="flex items-start gap-2.5 px-3 py-2 rounded-lg bg-blue-600/60 hover:bg-blue-600 transition">
+            <span class="w-4 shrink-0 min-w-0 text-center mt-0.5">${NOTIF_ICONS[n.type] || "🔔"}</span>
+            <span class="flex-1 min-w-0">
+              <span class="block text-sm font-medium text-white truncate">${escHtml(n.title)}</span>
+              ${n.body ? `<span class="block text-xs text-blue-200 mt-0.5 line-clamp-2">${escHtml(n.body)}</span>` : ""}
+              <span class="block text-[11px] text-blue-300 mt-0.5">${notifTimeLabel(n.created_at)}</span>
+            </span>
+          </a>`;
+      }
+      async function fetchNotifications() {
+        if (!document.getElementById("notif-btn")) return;
+        try {
+          const res = await fetch("/api/notifications", { credentials: "same-origin" });
+          if (!res.ok) return;
+          const data = await res.json();
+          const badge = document.getElementById("notif-badge");
+          if (badge) {
+            badge.textContent = data.unread_count > 99 ? "99+" : String(data.unread_count);
+            badge.classList.toggle("hidden", data.unread_count === 0);
+            badge.classList.toggle("flex", data.unread_count > 0);
+          }
+          const list = document.getElementById("notif-list");
+          if (list) {
+            list.innerHTML = data.items.length
+              ? data.items.map(notifItemHtml).join("")
+              : NOTIF_EMPTY_HTML;
+          }
+        } catch { /* keine Verbindung — nächster Poll */ }
+      }
+      function setNotifMenuOpen(open) {
+        const menu = document.getElementById("notif-menu");
+        const btn = document.getElementById("notif-btn");
+        if (!menu || !btn) return;
+        menu.classList.toggle("hidden", !open);
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+        if (open) fetchNotifications();
+      }
+      function toggleNotifMenu() {
+        const menu = document.getElementById("notif-menu");
+        if (menu) setNotifMenuOpen(menu.classList.contains("hidden"));
+      }
+      function closeNotifMenu() {
+        setNotifMenuOpen(false);
+      }
+      function notifListMaybeEmpty() {
+        const list = document.getElementById("notif-list");
+        if (list && !list.querySelector("[data-notif-id]")) {
+          list.innerHTML = NOTIF_EMPTY_HTML;
+        }
+      }
+      function notifBadgeDecrement() {
+        const badge = document.getElementById("notif-badge");
+        if (!badge) return;
+        const cur = parseInt(badge.textContent, 10);
+        const next = Number.isFinite(cur) && cur > 1 ? cur - 1 : 0;
+        badge.textContent = next > 99 ? "99+" : String(next);
+        badge.classList.toggle("hidden", next === 0);
+        badge.classList.toggle("flex", next > 0);
+      }
+      document.addEventListener("click", (e) => {
+        const wrap = document.getElementById("notif-wrap");
+        if (wrap && !wrap.contains(e.target)) closeNotifMenu();
+        // Item-Klick: als gelesen markieren (keepalive, damit der Request
+        // die sofortige Navigation überlebt) und das Item direkt aus dem
+        // Menü nehmen — in der DB bleibt es als gelesen erhalten
+        const item = e.target.closest ? e.target.closest("[data-notif-id]") : null;
+        if (item && !item.dataset.notifReadSent) {
+          item.dataset.notifReadSent = "1";
+          fetch(`/api/notifications/${item.dataset.notifId}/read`, {
+            method: "POST",
+            credentials: "same-origin",
+            keepalive: true,
+          }).catch(() => {});
+          item.remove();
+          notifListMaybeEmpty();
+          notifBadgeDecrement();
+        }
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeNotifMenu();
+      });
+      const notifReadAll = document.getElementById("notif-read-all");
+      if (notifReadAll) {
+        notifReadAll.addEventListener("click", async () => {
+          try {
+            await fetch("/api/notifications/read-all", { method: "POST", credentials: "same-origin" });
+            fetchNotifications();
+          } catch { /* ignorieren */ }
+        });
+      }
+      fetchNotifications();
+      setInterval(() => {
+        if (!document.hidden) fetchNotifications();
+      }, 15000);
     </script>
   </nav>
   {% endblock %}

@@ -35,6 +35,7 @@ from database.models import (
     User,
     UserCourse,
 )
+from services import notifications
 from services.auth_service import get_current_user, require_course_access
 from services.llm_service import LLMService
 from services.settings_resolver import get_effective_llm_config
@@ -372,6 +373,11 @@ async def add_script_question_response(
     session.add(q)
     session.commit()
     session.refresh(r)
+
+    # Glocke: Fragesteller über die neue Antwort informieren
+    notifications.notify_script_question_answer(
+        session, q.course_id, q.student_id, q.question, user, content
+    )
 
     return {
         "id": r.id,

@@ -27,7 +27,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import text
+from sqlalchemy import text, update
 from sqlmodel import Session, func, select
 
 from database.base import get_session
@@ -40,9 +40,11 @@ from database.models import (
     ForumMessage,
     ForumMessageCreate,
     GlobalUserRole,
+    Notification,
     User,
     UserCourse,
 )
+from services import notifications
 from services.auth_service import require_course_access
 
 router = APIRouter(prefix="/api", tags=["Forum"])
@@ -369,11 +371,30 @@ async def list_forum_messages(
     session: Session = Depends(get_session),
     viewer_and_course: tuple[User, int] = Depends(require_course_access(*_ALL_COURSE_ROLES)),
 ):
-    """Forum-Nachrichten des Kanals (chronologisch, älteste zuerst)."""
+    """Forum-Nachrichten des Kanals (chronologisch, älteste zuerst).
+
+    Nebenwirkung (Glocke): Der Aufruf markiert die eigenen, ungelesenen
+    forum_message-Benachrichtigungen dieses Kanals als gelesen — wer den
+    Kanal aufruft, sieht die Nachrichten ja im Chat (Auto-Read; auch aus
+    gedrosselten Hintergrund-Tabs heraus, dann höchstens ~1 min später).
+    """
     viewer, _ = viewer_and_course
     _get_channel(session, course_id, channel_id)
     role = _role_in_course(session, viewer, course_id)
-    return load_forum_payload(session, course_id, channel_id, viewer, role, after_id)
+    payload = load_forum_payload(session, course_id, channel_id, viewer, role, after_id)
+    try:
+        session.exec(
+            update(Notification)
+            .where(Notification.user_id == viewer.id)
+            .where(Notification.type == "forum_message")
+            .where(Notification.channel_id == channel_id)
+            .where(Notification.read_at.is_(None))
+            .values(read_at=datetime.now())
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+    return payload
 
 
 @router.post("/courses/{course_id}/forum/channels/{channel_id}/messages", status_code=201)
@@ -400,6 +421,9 @@ async def create_forum_message(
     session.add(msg)
     session.commit()
     session.refresh(msg)
+
+    # Glocke: alle anderen Kurs-Mitglieder benachrichtigen
+    notifications.notify_forum_message(session, course_id, ch.id, ch.name, viewer, content)  # type: ignore[arg-type]
 
     role = _role_in_course(session, viewer, course_id) or "STUDENT"
     return _message_dict(msg, viewer, role, can_delete=True)

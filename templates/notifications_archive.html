@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% set notif_icons = {"forum_message": "💬", "script_question_answer": "❓", "llm_feedback": "📝"} %}
+<div class="max-w-3xl mx-auto">
+
+  <!-- Header -->
+  <div class="mb-8">
+    <h1 class="text-3xl font-bold text-gray-800">Nachrichten-Archiv</h1>
+    <p class="text-gray-500 mt-1">
+      Hier bleiben gelesene Benachrichtigungen erhalten (die letzten 100).
+    </p>
+  </div>
+
+  {% if archive_items %}
+  <div class="bg-white rounded-xl shadow-md border border-gray-200 divide-y divide-gray-100">
+    {% for n in archive_items %}
+    <a href="{{ n.link }}" class="flex items-start gap-3 p-4 hover:bg-gray-50 transition">
+      <span class="w-5 shrink-0 text-center mt-0.5">{{ notif_icons.get(n.type, "🔔") }}</span>
+      <span class="flex-1 min-w-0">
+        <span class="block text-sm font-medium text-gray-800">{{ n.title }}</span>
+        {% if n.body %}
+        <span class="block text-sm text-gray-500 mt-0.5">{{ n.body }}</span>
+        {% endif %}
+        <span class="block text-xs text-gray-400 mt-1">
+          {{ n.created_at.strftime("%d.%m.%Y, %H:%M") }}
+          · gelesen am {{ n.read_at.strftime("%d.%m.%Y, %H:%M") }}
+        </span>
+      </span>
+      <span class="text-gray-300 mt-0.5">→</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="bg-white rounded-xl shadow-md border border-gray-200 p-10 text-center">
+    <p class="text-gray-400">Noch keine gelesenen Benachrichtigungen im Archiv.</p>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
