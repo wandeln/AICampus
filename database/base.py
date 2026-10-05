@@ -142,6 +142,7 @@ def migrate_schema():
             "workspace_internet": "BOOLEAN DEFAULT 0",  # Internet für Studenten-Läufe
             "workspace_preview_root_ports": "VARCHAR",  # JSON-Liste Ports ohne Base-Path-Preview (z. B. [8000])
             "mc_data": "TEXT",  # Multiple-Choice: Fragen/Optionen/Feedback als JSON
+            "text_template": "TEXT",  # Text-Aufgabe: Antwort-Gerüst (Lückentext/Tabelle) als Markdown
         },
         "submissions": {
             "workspace_snapshot": "VARCHAR",  # Pfad zu workspace.tar.gz

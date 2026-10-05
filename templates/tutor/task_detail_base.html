@@ -93,6 +93,10 @@
           <input type="checkbox" id="field-description" checked class="rounded text-purple-600">
           Aufgabenstellung
         </label>
+        <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer ai-text-field {% if tpl_type != 'text' %}hidden{% endif %}" title="Markdown-Gerüst für die Studierenden-Antwort (Lückentext, Tabelle, …) — das LLM lässt den Schlüssel weg, wenn die Aufgabe keinen Nutzen durch ein Gerüst hat">
+          <input type="checkbox" id="field-text-template" checked class="rounded text-purple-600">
+          Text-Vorlage
+        </label>
         {# MC: keine Musterlösung — korrekte Antworten + Feedback + Punkte je
            Frage geben die Bewertung eindeutig vor #}
         <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer{% if tpl_type == 'mc' %} hidden{% endif %}">
@@ -226,6 +230,10 @@
         <div id="description-preview-anchor"></div>
       </div>
     </div>
+
+    {# Text-Vorlage (task_detail_text.html): Antwort-Gerüst, zwischen
+       Aufgabenstellung und Musterlösung #}
+    {% block text_template_section %}{% endblock %}
 
     <!-- ─── Model Solution (kein MC: Feedback + Punkte je Frage reichen) ─── -->
     {% if tpl_type != 'mc' %}
@@ -442,6 +450,7 @@ class PrivateTest(unittest.TestCase):
     const isCode = e.target.value === "code";
     const isWorkspace = e.target.value === "workspace";
     const isMc = e.target.value === "mc";
+    const isText = e.target.value === "text";
 
     const redirectWithSave = (type) => {
       setTimeout(async () => {
@@ -474,6 +483,12 @@ class PrivateTest(unittest.TestCase):
       return;
     }
 
+    // Text-Vorlagen-Sektion fehlt (Code/Workspace/MC-Variante)? → Text-Template
+    if (isText && !document.getElementById("text-template-section")) {
+      redirectWithSave("text");
+      return;
+    }
+
     const codeSection = document.getElementById("code-section");
     const testsSection = document.getElementById("tests-section");
     if (codeSection) codeSection.classList.toggle("hidden", !isCode);
@@ -487,6 +502,8 @@ class PrivateTest(unittest.TestCase):
 
     // Show/hide AI code checkboxes (only for code tasks)
     document.querySelectorAll(".ai-code-field").forEach(el => el.classList.toggle("hidden", !isCode));
+    // Show/hide AI text-template checkbox (only for text tasks)
+    document.querySelectorAll(".ai-text-field").forEach(el => el.classList.toggle("hidden", !isText));
     // Show/hide AI workspace checkboxes (only for workspace tasks)
     document.querySelectorAll(".ai-workspace-field").forEach(el => el.classList.toggle("hidden", !isWorkspace));
     // Show/hide AI MC checkboxes (only for MC tasks)
@@ -561,6 +578,7 @@ class PrivateTest(unittest.TestCase):
     const taskType = document.getElementById("task_type_select").value;
     const isCode = taskType === "code";
     const isWorkspace = taskType === "workspace";
+    const isText = taskType === "text";
     const title = document.querySelector('input[name="title"]').value;
     // CodeMirror-Editoren: Inhalte über die Editor-API lesen (das
     // versteckte Textarea enthält bei aktivem Editor nicht den Inhalt)
@@ -568,12 +586,17 @@ class PrivateTest(unittest.TestCase):
     const modelSolution = solEditor ? solEditor.getValue() : "";
     const maxPoints = document.querySelector('input[name="max_points"]').value || 10;
     const codeTemplate = codeTemplateCM ? codeTemplateCM.getValue() : (document.getElementById("code-template-editor")?.value || "");
+    // Text-Vorlage: nur im Text-Template vorhanden (Hook aus type_scripts)
+    const textTemplate = (typeof window._textTemplateFields === "function")
+      ? (window._textTemplateFields().text_template || "")
+      : (document.getElementById("text-template-editor")?.value || "");
 
     const generateFields = {
       title: document.getElementById("field-title").checked,
       description: document.getElementById("field-description").checked,
       solution: taskType !== "mc" && document.getElementById("field-solution").checked,
       template: isCode && document.getElementById("field-template").checked,
+      text_template: isText && document.getElementById("field-text-template").checked,
       tests: isCode && document.getElementById("field-tests").checked,
       env: isWorkspace && document.getElementById("field-ws-env").checked,
       files: isWorkspace && document.getElementById("field-ws-files").checked,
@@ -637,6 +660,7 @@ class PrivateTest(unittest.TestCase):
           description,
           model_solution: modelSolution,
           code_template: codeTemplate,
+          text_template: textTemplate,
           generate_fields: generateFields,
           task_id: (function () {
             const el = document.querySelector('input[name="task_id"]');
@@ -691,6 +715,16 @@ class PrivateTest(unittest.TestCase):
           document.getElementById("code-template-editor").value = data.code_template;
         }
         populated.push("Code-Vorlage");
+      }
+
+      if (generateFields.text_template && data.text_template) {
+        if (typeof window._textTemplateSetValue === "function") {
+          window._textTemplateSetValue(data.text_template);
+        } else {
+          const el = document.getElementById("text-template-editor");
+          if (el) el.value = data.text_template;
+        }
+        populated.push("Text-Vorlage");
       }
 
       if (generateFields.tests && (data.public_tests || data.private_tests)) {
@@ -808,6 +842,16 @@ class PrivateTest(unittest.TestCase):
       body.code_template = null;
     }
 
+    // Text-Vorlage: nur bei Text-Aufgaben (Hook aus dem Text-Template);
+    // bei anderen Typen bewusst null → serverseitig wird sie geleert.
+    if (taskTypeVal === "text") {
+      body.text_template = (typeof window._textTemplateFields === "function")
+        ? window._textTemplateFields().text_template
+        : (document.getElementById("text-template-editor")?.value ?? null);
+    } else {
+      body.text_template = null;
+    }
+
     // Single test_code field (with PublicTest + PrivateTest classes)
     if (taskTypeVal === "code") {
       // Leerer Wert leert die Tests bewusst
@@ -901,6 +945,11 @@ class PrivateTest(unittest.TestCase):
     if (testTa) {
       if (testCodeCM) testCodeCM.setValue(p.test_code || "");
       else testTa.value = p.test_code || "";
+    }
+
+    // Text-Vorlage (Hook im Text-Template)
+    if ((p.task_type || "text") === "text" && typeof window._textTemplateApply === "function") {
+      window._textTemplateApply(p);
     }
 
     // Workspace-Umfeld (Hook im Workspace-Template)

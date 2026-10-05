@@ -402,6 +402,7 @@ class LLMService:
         model_solution: str,
         student_solution: str,
         max_points: int,
+        text_template: Optional[str] = None,
         custom_prompt: Optional[str] = None,
         config: Optional[dict] = None,
     ):
@@ -413,6 +414,7 @@ class LLMService:
             model_solution=model_solution,
             student_solution=student_solution,
             max_points=max_points,
+            text_template=text_template or "(Keine Vorlage hintergelegt)",
         )
 
         return await self._call_with_json(prompt, response_format={"type": "json_object"}, config=config)
@@ -477,6 +479,7 @@ class LLMService:
         current_description: str = "",
         current_model_solution: str = "",
         code_template: str = "",
+        current_text_template: str = "",
         script_chapters: Optional[list[dict]] = None,
         course_media: Optional[list[dict]] = None,
         references: str = "",
@@ -484,7 +487,8 @@ class LLMService:
     ):
         """Generiert/ändert die angeforderten Felder einer Text-Aufgabe via LLM.
 
-        generate_fields: Untermenge von ["title", "description", "model_solution"].
+        generate_fields: Untermenge von ["title", "description", "model_solution",
+        "text_template"].
         Das LLM liefert JSON mit EXAKT diesen Schlüsseln — nicht angeforderte
         Felder werden nicht zurückgegeben.
         references: Kurs-Quellenverzeichnis als Text (Zitations-Keys) — leer,
@@ -509,6 +513,7 @@ class LLMService:
             current_description=current_description,
             current_model_solution=current_model_solution,
             code_template=code_template,
+            current_text_template=current_text_template,
             script_chapters=script_chapters or [],
             course_media=course_media or [],
             references=references,

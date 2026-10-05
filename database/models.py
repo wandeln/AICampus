@@ -198,6 +198,7 @@ class TaskBase(SQLModel):
     deadline: Optional[str] = Field(default=None)      # ISO-Format: "2025-02-15T23:59"
     code_template: Optional[str] = Field(default=None) # Für Code-Aufgaben
     test_code: Optional[str] = Field(default=None)     # Unit-Tests (einziger String mit PublicTest + PrivateTest)
+    text_template: Optional[str] = Field(default=None) # Für Text-Aufgaben: Antwort-Gerüst (Lückentext, Tabelle, …) als Markdown
     is_visible: bool = Field(default=False)            # Für Studenten sichtbar (Default: versteckt)
     display_order: int = Field(default=0)              # Anzeigereihenfolge im Kurs
     hints_enabled: bool = Field(default=True)          # Socratic-Hints fuer Studenten
@@ -250,6 +251,7 @@ class TaskCreate(SQLModel):
     deadline: Optional[str] = Field(default=None)
     code_template: Optional[str] = Field(default=None)
     test_code: Optional[str] = Field(default=None)
+    text_template: Optional[str] = Field(default=None)
     is_visible: bool = Field(default=False)
     display_order: int = Field(default=0)
     hints_enabled: bool = Field(default=True)
@@ -284,6 +286,7 @@ class TaskUpdate(SQLModel):
     deadline: Optional[str] = None
     code_template: Optional[str] = None
     test_code: Optional[str] = None
+    text_template: Optional[str] = None
     is_visible: Optional[bool] = None
     display_order: Optional[int] = None
     hints_enabled: Optional[bool] = None

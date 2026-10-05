@@ -192,6 +192,7 @@ async def get_task_detail(
         "max_attempts": task.max_attempts,
         "deadline": task.deadline,
         "code_template": task.code_template if task.task_type.value == "code" else None,
+        "text_template": task.text_template if task.task_type.value == "text" else None,
         "public_test_code": public_test_code,
         "hints_enabled": task.hints_enabled,
     }
@@ -1319,7 +1320,8 @@ async def request_hint(
     result = await llm_service.generate_socratic_hint(
         task_description=task.description,
         model_solution=task.model_solution or "(Keine Musterloesung hintergelegt)",
-        code_template=task.code_template or "",
+        # Vorlagen-Kontext: Code-Aufgabe → Code-Template, Text-Aufgabe → Text-Vorlage
+        code_template=(task.code_template if task.task_type.value == "code" else task.text_template) or "",
         current_solution=hint_request.current_solution,
         previous_submissions=prev_submissions_text,
         hint_history=hint_history_text,

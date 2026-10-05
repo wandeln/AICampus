@@ -1,2 +1,41 @@
 {% extends "tutor/task_detail_base.html" %}
-{# Textaufgabe: keine typspezifischen Sektionen oder Scripts (Base genügt). #}
+
+{% block text_template_section %}
+    <!-- ─── Text-Vorlage (für Text-Aufgaben) ─────────────────────── -->
+    <div id="text-template-section" class="card">
+      <h2 class="font-semibold text-gray-800 mb-4">Text-Vorlage <span class="text-xs text-gray-400">(optional — Gerüst für Studenten)</span></h2>
+      <p class="text-xs text-gray-400 mb-3">
+        Startinhalt der Studierenden-Antwort, z. B. Lückentext (Lücken klar markieren) oder Markdown-Tabelle mit leeren Zellen.
+        Leer lassen, wenn die Aufgabe eine freie Textantwort haben soll.
+      </p>
+      <textarea id="text-template-editor" name="text_template" rows="8"
+                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+                placeholder="| Größe | Wert |&#10;|---|---|&#10;| a |    |&#10;| b |    |&#10;&#10;Oder Lückentext: … ist {________} …">{{ task.text_template or '' }}</textarea>
+
+      <div class="flex items-center justify-between mt-2">
+        <p id="text-template-hint" class="text-xs text-gray-400">💡 Markdown und LaTeX ($...$) werden unterstützt.</p>
+        <div id="text-template-preview-anchor"></div>
+      </div>
+    </div>
+{% endblock %}
+
+{% block type_scripts %}
+  // Text-Vorlage: Markdown-Editor + Hooks für die Base
+  // (buildTaskBody / applyPayload / AI-Generierung lesen die Hooks).
+  window._textTemplateEditor = createMarkdownEditor('text-template-section', {
+    buttonAnchor: 'text-template-preview-anchor',
+    startInPreview: true,
+    bibliography: true,
+    onValueChange: () => av.onChange(),
+  });
+  // aktuellen Wert liefern (leere Vorlage → null → serverseitig geleert)
+  window._textTemplateFields = () => ({
+    text_template: window._textTemplateEditor ? window._textTemplateEditor.getValue() : null,
+  });
+  window._textTemplateApply = (p) => {
+    if (window._textTemplateEditor) window._textTemplateEditor.setValue(p.text_template || "");
+  };
+  window._textTemplateSetValue = (v) => {
+    if (window._textTemplateEditor) window._textTemplateEditor.setValue(v);
+  };
+{% endblock %}

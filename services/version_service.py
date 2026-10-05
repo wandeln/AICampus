@@ -193,6 +193,8 @@ def _task_apply(session: Session, entity: Task, snapshot: dict) -> None:
     entity.deadline = None if dl in (None, "") else dl
     ct = snapshot.get("code_template")
     entity.code_template = None if ct in (None, "") else ct
+    tt = snapshot.get("text_template")
+    entity.text_template = None if tt in (None, "") else tt
     entity.test_code = snapshot.get("test_code")
     entity.is_visible = bool(snapshot.get("is_visible", False))
     entity.hints_enabled = bool(snapshot.get("hints_enabled", True))

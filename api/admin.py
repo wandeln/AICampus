@@ -164,6 +164,7 @@ async def duplicate_course(
             max_attempts=src_task.max_attempts,
             deadline=src_task.deadline,
             code_template=src_task.code_template,
+            text_template=src_task.text_template,
             test_code=src_task.test_code,
             is_visible=src_task.is_visible,
             created_by=user.id,  # type: ignore[arg-type]

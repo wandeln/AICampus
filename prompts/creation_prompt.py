@@ -33,6 +33,7 @@ Mögliche Schlüssel und deren Bedeutung:
 - "title": Kurzer, prägnanter Titel (z.B. „Blatt3-01: Rekursion")
 - "description": Vollständige Aufgabenstellung für Studierende
 - "model_solution": Vollständige Musterlösung inkl. Bewertungskriterien
+- "text_template": (nur Text-Aufgaben) Optionales Markdown-Gerüst, in das die Studierenden ihre Antwort eintragen — z. B. Lückentext (Lücken klar markieren) oder Tabelle mit leeren Zellen.
 
 Keine zusätzlichen Texte, keine Code-Blöcke (```json ... ```).
 Achte dabei auf korrektes Escaping von special Characters. In Latex-Umgebungen muss insbesondere der Backslash escaped werden (z.B. $\\text{...}$ oder $$A \\rightarrow B$$). Dollar-Zeichen außerhalb von Code-Blöcken, die kein Latex triggern sollen können mit Backslash \\$ escaped werden.
@@ -76,6 +77,10 @@ BESTEHENDE MUSTERLÖSUNG:
 EXISTIERENDE CODE-VORLAGE (nur als Kontext, NICHT ändern):
 {{ code_template }}
 {% endif %}
+{% if current_text_template %}
+BESTEHENDE TEXT-VORLAGE:
+{{ current_text_template }}
+{% endif %}
 
 Regeln:
 - Liefere NUR Schlüssel aus der obigen Liste „ZULÄSSIGE FELDER“ — die Ausgabe zu jedem anderen Feld wird vom System ignoriert und ist zu vermeiden.
@@ -84,6 +89,8 @@ Regeln:
 - Die Felder müssen zueinander passen: Die Musterlösung muss die (ggf. neu formulierte) Aufgabenstellung vollständig lösen.
 - Die Aufgabenstellung muss präzise formuliert sein und der angegebenen Schwierigkeit entsprechen.
 - Bei Text-Aufgaben: Verwende Markdown-Formatierung (**fett**, *kursiv*, Listen, $Math$, $$Display-Math$$) für bessere Lesbarkeit.
+- Bei Text-Aufgaben mit text_template: Das Gerüst ist der Startinhalt der Studierenden-Antwort (z. B. Lückentext mit markierten Lücken oder Tabelle mit leeren Zellen — Markdown-Tabellen). Die Musterlösung MUSS die vollständig ausgefüllte Vorlage zeigen. Erfinde KEIN text_template, wenn die Aufgabe keinen klaren Nutzen durch ein Gerüst hat (freie Textantwort) — dann den Schlüssel weglassen.
+- Die Aufgabenstellung muss eine Text-Vorlage, falls vorhanden, erwähnen (z. B. „Trage deine Werte in die Tabelle ein“).
 - Bei Code-Aufgaben: Beschreibe in der Aufgabenstellung was implementiert werden soll. Verwende $...$ für mathematische Notation.
 - Wenn Graphen zur Beschreibung benötigt werden: Verwende Mermaid (```mermaid ... ```) in Markdown.
 - Medien: Du DARFST Medien aus der obigen Medien-Liste in die Aufgabenstellung einbinden, wenn sie inhaltlich wirklich passen (max. 1-2) — verwende dafür exakt den angegebenen /media/-Pfad. Erfinde KEINE andere Medien-Pfade. Medien mit .html-Endung sind interaktive Applets — sie werden als interaktive Vorschau (Iframe) gerendert und im Markdown genauso eingebunden wie Bilder.

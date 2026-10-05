@@ -13,6 +13,9 @@ Du bist ein Tutor, der eine Aufgabenlösung bewertet.
 AUFGABE:
 __TASK_DESCRIPTION__
 
+TEXT-VORLAGE (optionales Gerüst, das der Student ausfüllen soll):
+__TEXT_TEMPLATE__
+
 MUSTERLÖSUNG:
 __MODEL_SOLUTION__
 

@@ -2017,6 +2017,7 @@ async def task_page(
                 "max_attempts": task.max_attempts,
                 "deadline": task.deadline,
                 "code_template": task.code_template,
+                "text_template": task.text_template,
                 "model_solution": task.model_solution if is_tutor else None,
                 "test_code": task.test_code if is_tutor else None,
                 "is_visible": task.is_visible if is_tutor else None,

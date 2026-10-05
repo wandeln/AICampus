@@ -200,6 +200,11 @@ async def create_task(
     if model_solution == "":
         model_solution = None
 
+    text_template = body.get("text_template")
+    # text_template ist optional (Antwort-Gerüst für Text-Aufgaben)
+    if text_template == "":
+        text_template = None
+
     try:
         task_type = TaskType(body.get("task_type", "text"))
     except ValueError:
@@ -242,6 +247,7 @@ async def create_task(
         deadline=body.get("deadline"),
         code_template=body.get("code_template"),
         test_code=body.get("test_code"),
+        text_template=text_template,
         mc_data=mc_data_value,
         is_visible=body.get("is_visible", False),  # Default: für Studenten versteckt
         display_order=next_order,
@@ -317,6 +323,7 @@ async def get_task(
         "max_attempts": task.max_attempts,
         "deadline": task.deadline,
         "code_template": task.code_template if task.task_type.value == "code" else None,
+        "text_template": task.text_template if task.task_type.value == "text" else None,
         "test_code": task.test_code if is_tutor else None,
         "hints_enabled": task.hints_enabled,
     }
@@ -417,6 +424,9 @@ async def update_task(
     if "code_template" in body:
         val = body["code_template"]
         task.code_template = None if val in (None, "") else val
+    if "text_template" in body:
+        val = body["text_template"]
+        task.text_template = None if val in (None, "") else val
     if "test_code" in body: task.test_code = body["test_code"]
     if "is_visible" in body: task.is_visible = body["is_visible"]
     if "hints_enabled" in body: task.hints_enabled = body["hints_enabled"]
@@ -438,6 +448,9 @@ async def update_task(
     # Typ-Wechsel weg von MC: altes mc_data entsorgen
     if "task_type" in body and task.task_type != TaskType.MC and task.mc_data:
         task.mc_data = None
+    # Typ-Wechsel weg von Text: altes text_template entsorgen
+    if "task_type" in body and task.task_type != TaskType.TEXT and task.text_template:
+        task.text_template = None
 
     # Workspace-Felder (Umgebung + Dateien; nur explizit übergebene Keys)
     if task.task_type == TaskType.WORKSPACE:
@@ -606,6 +619,7 @@ async def duplicate_task(
         deadline=task.deadline,
         code_template=task.code_template,
         test_code=task.test_code,
+        text_template=task.text_template,
         mc_data=task.mc_data,
         is_visible=task.is_visible,
         hints_enabled=task.hints_enabled,
@@ -1131,12 +1145,14 @@ async def ai_generate_task(
             "description": "...",
             "model_solution": "...",
             "code_template": "...",
+            "text_template": "...",
             "generate_fields": {
                 "title": true,
                 "description": true,
                 "solution": true,
-                "template": true,   // nur Code-Aufgaben
-                "tests": true        // nur Code-Aufgaben
+                "template": true,        // nur Code-Aufgaben
+                "text_template": true,   // nur Text-Aufgaben
+                "tests": true            // nur Code-Aufgaben
             }
         }
     """
@@ -1153,6 +1169,8 @@ async def ai_generate_task(
     # Template/Tests gelten nur für Code-Aufgaben
     gen_template = bool(gen.get("template")) and task_type == "code"
     gen_tests = bool(gen.get("tests")) and task_type == "code"
+    # Text-Vorlage (Antwort-Gerüst) gilt nur für Text-Aufgaben
+    gen_text_template = bool(gen.get("text_template")) and task_type == "text"
     # Workspace-Aufgabe: Umgebung (Timeout/Limits/Internet/Artefakte)
     # + Dateien. Ungespeicherte Aufgaben werden nach dem LLM-Call
     # automatisch angelegt (Titel aus LLM/Formular/Thema).
@@ -1162,13 +1180,14 @@ async def ai_generate_task(
     gen_questions = bool(gen.get("questions")) and task_type == "mc"
 
     if not (gen_title or gen_description or gen_solution or gen_template or gen_tests
-            or gen_env or gen_files or gen_questions):
+            or gen_text_template or gen_env or gen_files or gen_questions):
         raise HTTPException(400, "Keine Felder angefordert.")
 
     current_title = (body.get("title") or "").strip()
     current_description = (body.get("description") or "").strip()
     current_solution = (body.get("model_solution") or "").strip()
     current_template = (body.get("code_template") or "").strip()
+    current_text_template = (body.get("text_template") or "").strip()
 
     # EIN LLM-Call pro Aufgabe (Single-Prompt): alle angeforderten Felder
     # entstehen in einem Durchlauf und passen automatisch zueinander.
@@ -1182,6 +1201,7 @@ async def ai_generate_task(
         "description": "",
         "model_solution": "",
         "code_template": "",
+        "text_template": "",
         "public_tests": "",
         "private_tests": "",
         "mc_data": None,
@@ -1203,10 +1223,11 @@ async def ai_generate_task(
     references = build_references_text(session, course_id)
 
     if task_type == "text":
-        # ── Text-Aufgabe: Titel/Aufgabenstellung/Musterlösung ──
+        # ── Text-Aufgabe: Titel/Aufgabenstellung/Vorlage/Musterlösung ──
         text_fields = [f for f, active in (
             ("title", gen_title),
             ("description", gen_description),
+            ("text_template", gen_text_template),
             ("model_solution", gen_solution),
         ) if active]
         result = await llm_service.generate_task_fields(
@@ -1219,6 +1240,7 @@ async def ai_generate_task(
             current_description=current_description,
             current_model_solution=current_solution,
             code_template=current_template,
+            current_text_template=current_text_template,
             script_chapters=script_chapters,
             course_media=course_media,
             references=references,
@@ -1236,6 +1258,8 @@ async def ai_generate_task(
             response["title"] = (data.get("title") or "").strip()
         if gen_description:
             response["description"] = (data.get("description") or "").strip()
+        if gen_text_template:
+            response["text_template"] = (data.get("text_template") or "").strip()
         if gen_solution:
             response["model_solution"] = (data.get("model_solution") or "").strip()
 

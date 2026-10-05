@@ -95,6 +95,7 @@ class GradingService:
             model_solution=task.model_solution or "(Keine Musterloesung hinterlegt — bitte eigenstaendig bewerten)",
             student_solution=submission.solution,
             max_points=task.max_points,
+            text_template=task.text_template,
             custom_prompt=custom_prompt,
             config=llm_cfg,
         )

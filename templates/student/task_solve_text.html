@@ -7,9 +7,12 @@
             <h2 class="font-semibold text-gray-800">Deine Lösung</h2>
             <span id="solve-timer" class="text-sm font-mono text-blue-600 tabular-nums">00:00</span>
           </div>
+          {% if task.text_template %}
+          <p class="text-xs text-gray-500 mb-2">💡 Bitte trage deine Lösung direkt in die vorgegebene Vorlage ein (z. B. Lücken/Tabelle).</p>
+          {% endif %}
           <textarea id="text-solution"
                     class="w-full h-64 border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Schreibe hier deine Lösung...&#10;&#10;Du kannst Markdown verwenden: **fett**, *kursiv*, - Listen, $Math$, $$Display-Math$$"></textarea>
+                    placeholder="Schreibe hier deine Lösung...&#10;&#10;Du kannst Markdown verwenden: **fett**, *kursiv*, - Listen, $Math$, $$Display-Math$$">{{ task.text_template or '' }}</textarea>
 
           <!-- Unified toolbar: Preview + LaTeX-Upload -->
           <div id="text-editor-toolbar" class="flex items-center gap-2 mt-2">
