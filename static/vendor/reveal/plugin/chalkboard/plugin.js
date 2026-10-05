@@ -1439,6 +1439,14 @@ const initChalkboard = function ( Reveal ) {
 	}
 
 	function stopErasing() {
+		if ( erasing ) {
+			// AICAMPUS PATCH: stroke-Ende markieren, damit undo() die
+			// komplette Radierer-Sitzung auf einmal entfernen kann.
+			var events = getSlideData().events;
+			if ( events.length && events[ events.length - 1 ].type === 'erase' ) {
+				recordEvent( { type: 'strokeend' } );
+			}
+		}
 		erasing = false;
 	}
 
@@ -1483,12 +1491,23 @@ const initChalkboard = function ( Reveal ) {
 	}
 
 	function stopDrawing() {
+		if ( drawing ) {
+			// AICAMPUS PATCH: stroke-Ende markieren, damit undo() den
+			// kompletten Stroke auf einmal entfernen kann.
+			var events = getSlideData().events;
+			if ( events.length && events[ events.length - 1 ].type === 'draw' ) {
+				recordEvent( { type: 'strokeend' } );
+			}
+		}
 		drawing = false;
 	}
 
 	// AICAMPUS PATCH: Undo — hebt den letzten Zug zurück (Draw-Stroke,
 	// Radierer-Sitzung oder einzelnes open/close/selectboard-Event) und
-	// zeichnet die Folie neu. Ein „clear"-Event ist nicht rückgängig machbar.
+	// zeichnet die Folie neu. Ein „clear"-Event ist nicht rückgängig
+	// machbar. Strokes werden durch „strokeend"-Events (beim
+	// Mouse-/Touch-up) abgegrenzt, sodass ein Strg+Z genau den letzten
+	// Stroke bzw. die letzte Radierer-Sitzung entfernt.
 	function undo() {
 		if ( readOnly ) return;
 		var slideData = getSlideData( undefined, mode );
@@ -1497,7 +1516,14 @@ const initChalkboard = function ( Reveal ) {
 		var last = events[ events.length - 1 ];
 		if ( last.type === 'clear' ) return;
 		var i = events.length - 1;
-		if ( last.type === 'draw' || last.type === 'erase' ) {
+		if ( last.type === 'strokeend' ) {
+			// Ganzen Stroke entfernen: alle Segmente plus das
+			// „strokeend"-Marker-Event selbst.
+			i--;
+			while ( i >= 0 && ( events[ i ].type === 'draw' || events[ i ].type === 'erase' ) ) i--;
+		} else if ( last.type === 'draw' || last.type === 'erase' ) {
+			// Fallback für ältere Aufnahmen ohne „strokeend"-Marker:
+			// kompletter abschließender Run des gleichen Event-Typs.
 			while ( i >= 0 && events[ i ].type === last.type ) i--;
 		}
 		events.splice( i + 1 );
@@ -1965,7 +1991,10 @@ const initChalkboard = function ( Reveal ) {
 	}
 
 	function resetSlide( force ) {
-		var ok = force || confirm( "Please confirm to delete chalkboard drawings on this slide!" );
+		// AICAMPUS PATCH: Reveal addKeyBinding-Callbacks bekommen das
+		// KeyboardEvent übergeben — mit `force ||` würde das Event-Objekt
+		// (truthy) den confirm-Dialog überspringen.
+		var ok = force === true || confirm( "Please confirm to delete chalkboard drawings on this slide!" );
 		if ( ok ) {
 //console.log("resetSlide ");
 			stopPlayback();
@@ -1984,7 +2013,8 @@ const initChalkboard = function ( Reveal ) {
 	};
 
 	function resetStorage( force ) {
-		var ok = force || confirm( "Please confirm to delete all chalkboard drawings!" );
+		// AICAMPUS PATCH: wie bei resetSlide — KeyboardEvent ist truthy.
+		var ok = force === true || confirm( "Please confirm to delete all chalkboard drawings!" );
 		if ( ok ) {
 			stopPlayback();
 			slideStart = Date.now();
