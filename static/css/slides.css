@@ -793,6 +793,20 @@ body.present-mode .present-shell .reveal {
   z-index: 1;
 }
 
+/* Chalkboard (nur Tutoren/Profs): Die Overlay-Container des Plugins
+   (#notescanvas = Stift, #chalkboard = Whiteboard, inline z-index 24/26)
+   werden von Reveal.js erst zur Laufzeit in #reveal-root gehängt. Die
+   z-index 30 der present-toolbar (Schwester von .present-shell, kein
+   Stacking-Context) würde sonst deren Ebene komplett überdecken →
+   Toolbar auf 20 senken: sie bleibt über den Folien (z ≤ 1000), liegt
+   aber sicher unter den Overlays. (position: relative + z-index: auto
+   allein reicht nicht, das wäre dieselbe Vergleichsebene wie die
+   Overlays.) */
+body.present-mode .present-toolbar {
+  position: relative;
+  z-index: 20;
+}
+
 /* Shortcuts-Panel: erscheint in der Reveal-Overview (Esc) oben rechts
    unterhalb der dunklen Toolbar. Das Toggling macht slides_present.html
    (overviewshown/overviewhidden, gemeinsam mit .present-toolbar). */
