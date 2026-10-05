@@ -55,6 +55,15 @@
         {% endif %}" style="align-content: center;">
         {{ '💻 Code' if task_type == 'code' else '🐳 Workspace' if task_type == 'workspace' else '🎯 Multiple Choice' if task_type == 'mc' else '📄 Text' }}
       </span>
+      {% if task_type == 'mc' %}
+      <a href="/courses/{{ course_id }}/live/mc?task_id={{ task_id }}"
+         target="_blank" rel="noopener"
+         title="Anonymisiertes MC-Live-Dashboard: Antwortverteilung dieser Aufgabe in Echtzeit (nur PROF/Tutor)"
+         class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium
+                bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition">
+        <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span> Live-Dashboard
+      </a>
+      {% endif %}
     </div>
   </div>
 
