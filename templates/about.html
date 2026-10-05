@@ -79,6 +79,24 @@
     background-repeat: repeat, repeat, repeat, repeat, no-repeat;
     will-change: transform;
   }
+  /* Parallax: native scroll-driven animation (Chrome 115+, Safari 26+,
+     Firefox 137+) — der Transform wird vom Compositor direkt an die
+     Scrollposition gekoppelt: flüssig, keine rAF-Loop, kein "Rutschen
+     zurück" nach Scroll-Stopp. Endwert kommt aus --about-bg-shift
+     (wird in JS bei Resize gesetzt). Fallback für ältere Browser:
+     JS in extra_scripts (direkte Kopplung an die Scrollposition). */
+  @media (prefers-reduced-motion: no-preference) {
+    @supports (animation-timeline: scroll()) {
+      .about-bg-grid {
+        animation: about-bg-parallax linear both;
+        animation-timeline: scroll(root block);
+      }
+    }
+  }
+  @keyframes about-bg-parallax {
+    from { transform: translateY(0); }
+    to   { transform: translateY(var(--about-bg-shift, 0px)); }
+  }
 
   /* About: Slide-Deck-Vorschau — echte Reveal-Instanz; das Folien-Styling
      kommt aus css/slides.css (.slides-preview-shell, .markdown-preview). */
@@ -92,8 +110,8 @@
 
 {% block content %}
 <!-- Dezenter Hintergrund: radialer Hellblau-Verlauf (fix) + Ebene mit
-     Blueprint-Raster und vertikalem Dunkelungsverlauf — Parallax und
-     Abdunkelung beim Scrollen via JS (extra_scripts) -->
+     Blueprint-Raster und vertikalem Dunkelungsverlauf — Parallax via
+     nativer Scroll-Timeline (CSS) mit JS-Fallback (extra_scripts) -->
 <div class="about-bg" aria-hidden="true"></div>
 <div class="about-bg-grid" aria-hidden="true"></div>
 
@@ -724,38 +742,56 @@ while Q ≠ ∅:                    <span style="color:#94a3b8"># O((V+E)·log V
 
   /* ── Blueprint-Hintergrund: Parallax + Abdunkelung beim Scrollen ────
      Die .about-bg-grid-Ebene überdeckt die Dokumenthöhe (Höhe via JS)
-     und mitscrollt mit dem Faktor BG_FACTOR langsamer als der Content
-     (Transform = GPU-kompositiert, kein Repaint). Ihr vertikaler
-     Dunkelungsverlauf (CSS) reicht genau über die Dokumentlänge — beim
-     Scrollen wird der Hintergrund dadurch nach unten allmählich
-     dunkler, die weißen Rasterlinien bleiben hell.
+     und mitscrollt mit dem Faktor BG_FACTOR langsamer als der Content.
+     Bevorzugt: native CSS scroll-driven animation (animation-timeline:
+     scroll(), siehe extra_head) — compositorgesteuert, dadurch flüssig
+     und responsiv, keine rAF-Loop, kein „Rutschen zurück" nach
+     Scroll-Stopp; die JS muss dann nur noch Endwert + Höhe pflegen.
+     Fallback (ältere Browser): JS koppelt den Transform direkt an die
+     Scrollposition (rAF-drosselt, passive) — einfache, vorherige
+     Variante ohne Lerp.
+     Ihr vertikaler Dunkelungsverlauf (CSS) reicht genau über die
+     Dokumentlänge — beim Scrollen wird der Hintergrund dadurch nach
+     unten allmählich dunkler, die weißen Rasterlinien bleiben hell.
      Bei prefers-reduced-motion: kein Parallax (Ebene scrollt 1:1 mit,
      der Verlauf ist entsprechend skaliert). */
   var aboutGrid = document.querySelector(".about-bg-grid");
   if (aboutGrid) {
     var BG_FACTOR = 0.3; // 0 = fix, 1 = mitscrollt 1:1 mit dem Content
+    var BG_NATIVE = !!(window.CSS && CSS.supports &&
+      CSS.supports("animation-timeline: scroll()"));
     function bgMaxScroll() {
       var footer = document.querySelector("footer");
       var docH = footer ? footer.offsetTop + footer.offsetHeight : document.documentElement.scrollHeight;
       return Math.max(0, docH - window.innerHeight);
     }
     function bgApplyScroll() {
-      aboutGrid.style.transform = reduced
-        ? ""
-        : "translateY(" + (window.scrollY * (1 - BG_FACTOR)).toFixed(1) + "px)";
+      if (reduced || BG_NATIVE) return;
+      var y = window.scrollY * (1 - BG_FACTOR);
+      aboutGrid.style.transform = y ? "translateY(" + y.toFixed(2) + "px)" : "";
     }
     function bgResize() {
       var f = reduced ? 1 : BG_FACTOR;
       aboutGrid.style.height = (f * bgMaxScroll() + window.innerHeight) + "px";
+      if (BG_NATIVE && !reduced) {
+        // Endwert der nativen Animation: die Ebene verschiebt sich über
+        // die volle Scrollweite genau um (1 - Faktor) * maxScroll.
+        aboutGrid.style.setProperty("--about-bg-shift",
+          (bgMaxScroll() * (1 - BG_FACTOR)).toFixed(1) + "px");
+      }
       bgApplyScroll();
     }
-    var bgTicking = false;
-    window.addEventListener("scroll", function () {
-      if (!bgTicking) {
+    if (!BG_NATIVE) {
+      var bgTicking = false;
+      window.addEventListener("scroll", function () {
+        if (reduced || bgTicking) return;
         bgTicking = true;
-        window.requestAnimationFrame(function () { bgTicking = false; bgApplyScroll(); });
-      }
-    }, { passive: true });
+        window.requestAnimationFrame(function () {
+          bgTicking = false;
+          bgApplyScroll();
+        });
+      }, { passive: true });
+    }
     window.addEventListener("resize", bgResize, { passive: true });
     if ("ResizeObserver" in window) new ResizeObserver(bgResize).observe(document.body);
     bgResize();
