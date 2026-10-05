@@ -360,6 +360,15 @@ const initChalkboard = function ( Reveal ) {
     }
   }
 
+	// AICAMPUS PATCH: Kreide-Farben sind 50% transparent (Chalk-Effekt).
+	// Für die Palette wird das Alpha entfernt, damit die Farbfelder auf dem
+	// schwarzen Panel klar erkennbar sind (gezeichnet wird unverändert mit
+	// dem Chalk-Effekt).
+	function opaqueColor( color ) {
+		var m = /^rgba\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec( color );
+		return m ? 'rgb(' + m[1] + ',' + m[2] + ',' + m[3] + ')' : color;
+	}
+
 	function createPalette( colors, length ) {
 		if ( length === true || length > colors.length ) {
 			length = colors.length;
@@ -373,7 +382,7 @@ const initChalkboard = function ( Reveal ) {
 			colorButton.setAttribute( 'data-color', i );
 			// AICAMPUS PATCH: Farbfeld ohne Font Awesome (kein FA vendored)
 			colorButton.innerHTML = '<span class="cb-swatch"></span>';
-			colorButton.style.color = colors[ i ].color;
+			colorButton.style.color = opaqueColor( colors[ i ].color );
 			colorButton.addEventListener( 'click', function ( e ) {
 				var element = e.target;
 				while ( !element.hasAttribute( 'data-color' ) ) {
@@ -397,10 +406,8 @@ const initChalkboard = function ( Reveal ) {
 		spongeImg.src = eraser.src;
     spongeImg.height = "24";
     spongeImg.width = "24";
-    spongeImg.style.marginTop = '10px';
-    spongeImg.style.marginRight = '0';
-    spongeImg.style.marginBottom = '0';
-    spongeImg.style.marginLeft = '0';
+    // AICAMPUS PATCH: Inline-Margins entfernt – Größen/Zentrierung läuft
+    // komplett über die CSS-Regeln in style.css (.cb-active).
 		eraserButton.appendChild(spongeImg);
 		eraserButton.addEventListener( 'click', function ( e ) {
 			colorIndex( -1 );
@@ -1088,11 +1095,23 @@ const initChalkboard = function ( Reveal ) {
 	 * Set the  color
 	 */
 	function setColor( index, record ) {    
- 		// protect against out of bounds (this could happen when
+ 	 	// protect against out of bounds (this could happen when
   	// replaying events recorded with different color settings).
     if ( index >= pens[ mode ].length ) index = 0;
 
 	  color[ mode ] = index;
+
+	  // AICAMPUS PATCH: aktives Farbfeld/Schwamm in der Palette markieren,
+	  // damit die gewählte Farbe erkennbar ist (CSS: .cb-active).
+	  var palette = drawingCanvas[ mode ].container.querySelector( '.palette' );
+	  if ( palette ) {
+	    var items = palette.querySelectorAll( 'li' );
+	    for ( var j = 0; j < items.length; j++ ) items[ j ].classList.remove( 'cb-active' );
+	    var active = index < 0
+	      ? palette.querySelector( 'li[data-eraser]' )
+	      : palette.querySelector( 'li[data-color="' + index + '"]' );
+	    if ( active ) active.classList.add( 'cb-active' );
+	  }
 
     if ( color[ mode ] < 0 ) {
       // use eraser

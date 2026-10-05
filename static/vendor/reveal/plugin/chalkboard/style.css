@@ -16,8 +16,15 @@ div.palette, div.boardhandle {
 }
 
 div.palette  {
-  left: -10px;
-  padding-left:10px;
+  /* AICAMPUS PATCH: left:0 (statt -10px) → Panel ragt nicht mehr über den
+     Bildschirmrand hinaus, Farbfelder haben 10px Abstand zum Rand. */
+  left: 0;
+  /* AICAMPUS PATCH: fixe 48px Inhalt + 4px Innenabstand (mit 6px li-Margin
+     = 10px bis zum Farbfeld); linke Ecken eckig (bündig am Bildschirmrand),
+     rechte gerundet. */
+  width: 48px;
+  padding-left:4px;
+  border-radius: 0 10px 10px 0;
 }
 
 div.boardhandle {
@@ -32,9 +39,19 @@ div.boardhandle > ul {
   padding: 0;
 }
 
-div.palette > ul > li,
 div.boardhandle > ul > li {
   margin: 10px;
+}
+
+/* AICAMPUS PATCH: fixe Spaltenbreite + linke Ausrichtung (Zoom-Anker links)
+   → Farbfeld/Schwamm sitzen am linken Rand und wachsen aktiv nach rechts.
+   6px horizontaler Margin (statt 10px) → schmaleres Panel, konstante Breite. */
+div.palette > ul > li {
+  margin: 10px 6px;
+  width: 1.8em;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
 }
 
 /* AICAMPUS PATCH: Farbfeld der Palette ohne Font Awesome (cb-swatch) */
@@ -44,6 +61,31 @@ div.palette .cb-swatch {
   height: 1.1em;
   background: currentColor;
   border-radius: 2px;
+  transition: width 0.15s ease, height 0.15s ease;
+}
+
+/* AICAMPUS PATCH: aktives Farbfeld/Schwamm vergrößern (setColor setzt
+   .cb-active), damit die gewählte Farbe eindeutig erkennbar ist. */
+div.palette li.cb-active .cb-swatch {
+  width: 1.8em;
+  height: 1.8em;
+}
+
+/* AICAMPUS PATCH: Schwamm skaliert wie die Farben, gleiche Größe wie das
+   aktive Farbfeld. sponge.png ist 40x50 = runde 40x40-Form + 10px
+   transparentes Bottom-Padding. object-fit:cover + object-position:top
+   schneidet das Padding ab → die Schwamm-Form sitzt unverzerrt
+   (nicht gestreckt) und rund in der quadratischen Box. */
+div.palette li[data-eraser] img {
+  width: 1.1em;
+  height: 1.1em;
+  object-fit: cover;
+  object-position: top;
+  transition: width 0.15s ease, height 0.15s ease;
+}
+div.palette li.cb-active[data-eraser] img {
+  width: 1.8em;
+  height: 1.8em;
 }
 
 /* AICAMPUS PATCH: Board-Handle-Pfeile sind jetzt Unicode-Zeichen →
