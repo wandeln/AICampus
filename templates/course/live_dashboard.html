@@ -171,6 +171,16 @@
     history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
   }
 
+  // Link zum MC-Details-Dashboard (Antwortverteilung je Option);
+  // nimmt den Annotations-Filter mit.
+  function mcDetailsHref(taskId) {
+    const p = new URLSearchParams();
+    p.set('task_id', taskId);
+    const af = annotationFilter.value.trim();
+    if (af) p.set('annotation_filter', af);
+    return '/courses/' + courseId + '/live/mc?' + p.toString();
+  }
+
   function destroyTaskCharts() {
     taskCharts.forEach(c => c.destroy());
     taskCharts = [];
@@ -244,13 +254,20 @@
       const statLine = task.submitted > 0
         ? 'Ø ' + task.avg + ' P. · ' + task.submitted + '/' + data.count + ' eingereicht'
         : 'Noch keine Einreichungen';
+      const mcLink = task.task_type === 'mc' && task.id
+        ? '<div class="mt-2">' +
+            '<a href="' + mcDetailsHref(task.id) + '" target="_blank" ' +
+              'class="text-xs font-medium text-blue-600 hover:text-blue-800">🎯 MC-Details (Antwortverteilung) →</a>' +
+          '</div>'
+        : '';
       card.innerHTML =
         '<h3 class="font-semibold text-gray-800 text-sm truncate">' +
           (typeBadge[task.task_type] || '📋') + ' ' + escapeHtml(task.title) +
           ' <span class="text-gray-400 font-normal">' + task.max_points + ' P.</span>' +
         '</h3>' +
         '<p class="text-xs text-gray-500 mb-2 mt-1">' + statLine + '</p>' +
-        '<div style="height:150px"><canvas></canvas></div>';
+        '<div style="height:150px"><canvas></canvas></div>' +
+        mcLink;
       grid.appendChild(card);
       taskCharts.push(makeBarChart(card.querySelector('canvas'), task.histogram, 'rgba(22,163,74,0.55)'));
     });

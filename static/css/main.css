@@ -169,6 +169,15 @@
   color: #374151 !important;
 }
 
+/* MC-Live-Dashboard: Antwortoptionen — der Renderer erzeugt Block-HTML
+   (.markdown-preview > p mit Absatz-Margin), das in der kompakten
+   Option-Zeile den Text nach oben schiebt und ✓/✗ sowie Ergebnis-Balken
+   unsymmetrisch wirken lässt. Hier Margins weg → saubere Zentrierung. */
+.mc-opt-cell .markdown-preview > * {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
 .markdown-preview strong {
   font-weight: 700 !important;
 }

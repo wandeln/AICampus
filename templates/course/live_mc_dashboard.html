@@ -1,0 +1,433 @@
+{% extends "base.html" %}
+
+{# ─────────────────────────────────────────────────────────────────────
+   Anonymisiertes MC-Details-Dashboard: Antwortverteilung je MC-Aufgabe
+   (wie oft wurde welche Option gewählt), aber OHNE jede
+   studentenidentifizierende Daten (auch nicht im JS).
+   Zugriff: PROF/Tutor/Global-Admin; alle anderen sehen eine freundliche
+   Zugriffs-Sperre (z. B. Student, der den Link aus den Slides folgt).
+   Aufgabe + Annotations-Filter kommen als URL-Query-Parameter (Link ist
+   damit teilbar / in Slides einbettbar) und sind auf der Seite änderbar.
+   ───────────────────────────────────────────────────────────────────── #}
+
+{# Seiten-Chrom (Nav/Footer) komplett weglassen — die Seite wird
+   vorgestellt und in Slides eingebettet; auch die Zugriffs-Sperre
+   (z. B. für Studenten) bleibt dadurch aufgeräumt. #}
+{% block main_nav %}{% endblock %}
+{% block site_footer %}{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto">
+
+{% if can_view %}
+
+  {% if mc_tasks %}
+
+  <script>
+    const courseId = {{ course.id }};
+  </script>
+
+  <!-- Header -->
+  <div class="flex items-start justify-between flex-wrap gap-3 mb-6">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-900 flex items-center gap-3 flex-wrap">
+        🎯 MC-Details
+        <span class="inline-flex items-center gap-1.5 bg-red-50 border border-red-200 text-red-600 text-xs font-bold px-2.5 py-1 rounded-full">
+          <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span> LIVE
+        </span>
+      </h1>
+      <p class="text-sm text-gray-500 mt-1">
+        {{ course.name }}
+      </p>
+    </div>
+    <div class="flex items-center gap-2 flex-wrap">
+      <span id="last-updated" class="text-xs text-gray-400 mr-1"></span>
+      <button id="refresh-btn" title="Jetzt aktualisieren"
+              class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition">⟳ Aktualisieren</button>
+      <button id="copy-snippet-btn" title="Markdown-Snippet für die Slides kopieren (Iframe-Embed mit der aktiven Auswahl)"
+              class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition">📋 Snippet kopieren</button>
+      <a href="/courses/{{ course.id }}/live"
+         class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 transition">← Zum Live-Dashboard</a>
+    </div>
+  </div>
+
+  <!-- Aufgabenwahl + Filter -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+    <div class="flex items-center gap-4 flex-wrap">
+      <div class="flex-1 min-w-[240px]">
+        <label class="block text-sm font-medium text-gray-700 mb-1">MC-Aufgabe</label>
+        <select id="task-select" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          {% for t in mc_tasks %}
+          <option value="{{ t.id }}">{{ t.title }} ({{ t.max_points }} P.)</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1"
+               title="Studenten nach Annotation in der Mitgliederübersicht filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht vom Wortanfang (z.B. 'ÜG' → 'ÜG1' und 'ÜG-1').">Annotation / Übungsgruppe</label>
+        <input type="text" id="annotation-filter" placeholder="z.B. ÜG-1"
+               class="border border-gray-300 rounded-lg px-3 py-2 text-sm w-[240px] focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div class="flex items-end">
+        <button id="clear-filter-btn" class="text-gray-500 hover:text-gray-700 text-sm px-3 py-2" style="margin-top:20px">✕ Filter löschen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Aufgabe: Titel, Punkte, Einreichungen + aufklappbare Aufgabenstellung
+       (Chevron links, Titel selbst klickbar, Markdown/LaTeX) -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-4">
+    <div class="flex items-center gap-2 flex-wrap">
+      <button id="task-desc-toggle" type="button"
+              class="hidden items-center rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
+              title="Aufgabenstellung ein-/ausblenden" aria-expanded="false">
+        <svg id="task-desc-chevron" class="h-4 w-4 flex-shrink-0 transition-transform duration-150"
+             viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </button>
+      <div id="task-title" class="text-sm font-semibold text-gray-800 min-w-0">
+        <span class="text-gray-400">Wird geladen…</span>
+      </div>
+      <div class="ml-auto shrink-0 text-sm text-gray-600">
+        <span id="submitted-count" class="font-semibold">–</span> eingereicht
+      </div>
+    </div>
+    <div id="task-desc" class="hidden mt-2 pt-2 border-t border-gray-100 text-sm text-gray-700"></div>
+  </div>
+
+  <!-- Filter zu eng (k-Anonymität) -->
+  <div id="too-small-warning" class="hidden bg-yellow-50 border border-yellow-300 rounded-xl p-5 mb-6 text-yellow-800 text-sm">
+    <strong>⚠️ Filter ist zu eng:</strong> <span id="too-small-count"></span> — bei weniger als 3 Personen
+    werden aus Datenschutzgründen keine Kennzahlen angezeigt, damit keine Einzelperson zuordenbar wäre.
+  </div>
+
+  <!-- Antwortverteilung je Frage -->
+  <div id="questions-area">
+    <div id="questions"></div>
+  </div>
+
+  {% else %}
+
+  <!-- Keine MC-Aufgaben im Kurs -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-10 text-center">
+    <div class="text-6xl mb-5">🎯</div>
+    <h1 class="text-xl font-bold text-gray-900 mb-3">Keine Multiple-Choice-Aufgaben</h1>
+    <p class="text-gray-600 leading-relaxed">
+      Im Kurs {{ course.name }} gibt es aktuell keine sichtbaren MC-Aufgaben —
+      dafür kann hier später die Antwortverteilung angezeigt werden.
+    </p>
+    <a href="/courses/{{ course.id }}/live"
+       class="inline-block mt-6 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 rounded-lg transition">
+      ← Zum Live-Dashboard
+    </a>
+  </div>
+
+  {% endif %}
+
+{% else %}
+
+  <!-- Kein Zugriff (z. B. Student): freundliche Meldung statt 403 -->
+  <div class="max-w-2xl mx-auto mt-10">
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-10 text-center">
+      <div class="text-6xl mb-5">🎯</div>
+      <h1 class="text-2xl font-bold text-gray-900 mb-4">MC-Details für Dozierende &amp; Tutoren</h1>
+      <p class="text-gray-600 leading-relaxed mb-3">
+        Auf dieser Seite sehen nur Dozierende und Tutoren die <strong>anonymisierte</strong>
+        Antwortverteilung der Multiple-Choice-Aufgaben des Kurses {{ course.name }} —
+        wie oft welche Antwortoption gewählt wurde, ohne Namen und ohne individuelle Ergebnisse.
+      </p>
+      <p class="text-gray-600 leading-relaxed mb-6">
+        Deine eigenen Ergebnisse siehst du wie gewohnt in der Aufgabenübersicht. 👇
+      </p>
+      <a href="/courses/{{ course.id }}/tasks"
+         class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2.5 rounded-lg transition">
+        Zur Aufgabenübersicht →
+      </a>
+    </div>
+  </div>
+
+{% endif %}
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+{% if can_view and mc_tasks %}
+<script>
+  const REFRESH_MS = 10000;
+
+  const taskSelect = document.getElementById('task-select');
+  const annotationFilter = document.getElementById('annotation-filter');
+
+  // Letzte erfolgreiche Datenladung, um beim Toggle neu rendern zu können
+  // ohne neuen Fetch.
+  let lastData = null;
+
+  // Lösungs-Anzeige-Zustand pro Aufgabe+Frage — überlebt den Auto-Refresh;
+  // default: ausgeblendet (im Map nicht vorhanden).
+  const solutionsShown = new Map();
+  function isSolutionsShown(taskId, qi) {
+    return solutionsShown.get(taskId + ':' + qi) === true;
+  }
+
+  // Initiale Auswahl aus der URL (Link z. B. aus dem Live-Dashboard)
+  const _initParams = new URLSearchParams(location.search);
+  const _initTask = _initParams.get('task_id');
+  if (_initTask && [...taskSelect.options].some(o => o.value === _initTask)) {
+    taskSelect.value = _initTask;
+  }
+  annotationFilter.value = _initParams.get('annotation_filter') || '';
+
+  let busy = false;
+
+  function currentParams() {
+    const p = new URLSearchParams();
+    if (taskSelect.value) p.set('task_id', taskSelect.value);
+    const af = annotationFilter.value.trim();
+    if (af) p.set('annotation_filter', af);
+    return p;
+  }
+
+  // URL mit der Auswahl in Sync halten → Link ist jederzeit teilbar/einbettbar
+  function syncUrl() {
+    const qs = currentParams().toString();
+    history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
+  }
+
+  let lastDescTaskId = null;
+
+  function renderSummary(data) {
+    document.getElementById('task-title').innerHTML =
+      '🎯 ' + escapeHtml(data.task.title) +
+      ' <span class="font-normal text-gray-500">' + data.task.max_points + ' P.</span>';
+    document.getElementById('submitted-count').textContent = data.submitted + ' / ' + data.count;
+    // Chevron + klickbarer Titel nur bei vorhandener Beschreibung —
+    // bei jedem Refresh, damit der Toggle z. B. nach einem zu engen
+    // Filter wieder erscheint.
+    const desc = (data.task.description || '').trim();
+    setDescInteractive(!!desc);
+    // Beschreibung selbst: nur bei Aufgabenwechsel neu rendern (Markdown/LaTeX)
+    if (data.task.id !== lastDescTaskId) {
+      lastDescTaskId = data.task.id;
+      const descEl = document.getElementById('task-desc');
+      if (desc) {
+        descEl.textContent = desc;  // Fallback, wird vom Renderer ersetzt
+        renderMarkdown(desc, descEl).catch(() => {});
+      } else {
+        descEl.textContent = '';
+        descEl.classList.add('hidden');
+        taskDescChevron.classList.remove('rotate-180');
+      }
+    }
+  }
+
+  function buildQuestionCard(q, qi, data, showSolutions) {
+    const card = document.createElement('div');
+    card.className = 'bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-4';
+    const multi = q.multi_select ? ' · Mehrfachauswahl' : '';
+    // „Exakt richtig“-Zähler nur bei gezeigten Lösungen.
+    let headerNote = 'Noch keine Einreichungen';
+    if (data.submitted > 0) {
+      headerNote = showSolutions
+        ? q.exact_correct + '/' + data.submitted + ' exakt richtig'
+        : '';
+    }
+    // Balkenbreite relativ zur meistgewählten Option (nicht auf
+    // submitted normiert — bei Mehrfachauswahl summieren die Anteile
+    // über 100 % hinaus).
+    const maxVotes = Math.max(1, ...q.options.map(o => o.votes));
+    const optionRows = q.options.map(o => {
+      // Lösungen ausgeblendet: neutrale Farbe, kein Häkchen/Kreuz,
+      // keine Verteilung — nichts verrät die richtige Antwort.
+      // Jede Option ist ein <li> (Bullet-Point); das innere Div macht
+      // die Zeile zum Flex-Container — display:flex direkt am <li>
+      // würde den List-Marker in Chromium ausblenden.
+      if (!showSolutions) {
+        return (
+          '<li class="py-1">' +
+            '<div class="flex items-center gap-3">' +
+              '<div class="mc-opt-cell min-w-0 flex items-center gap-1.5 text-sm text-gray-800">' +
+                '<span class="mc-opt-text min-w-0"></span>' +
+              '</div>' +
+            '</div>' +
+          '</li>'
+        );
+      }
+      const w = Math.round(o.votes / maxVotes * 100);
+      return (
+        '<li class="py-1">' +
+          '<div class="flex items-center gap-3">' +
+            // Häkchen/Kreuz als eigener Flex-Bruder: der gerenderte
+            // Optionstext ist Block-HTML (.markdown-preview > p), ein
+            // Textknoten danach würde in die nächste Zeile rutschen.
+            // Absatz-Margins des Renderers: s. .mc-opt-cell in main.css.
+            '<div class="mc-opt-cell w-[42%] min-w-0 flex items-center gap-1.5 text-sm ' +
+              (o.correct ? 'text-green-700' : 'text-red-700') + '">' +
+              '<span class="mc-opt-text min-w-0"></span>' +
+              '<span class="shrink-0">' + (o.correct ? '✓' : '✗') + '</span>' +
+            '</div>' +
+            '<div class="flex-1 h-5 bg-gray-100 rounded overflow-hidden">' +
+              '<div class="h-full ' + (o.correct ? 'bg-green-600/60' : 'bg-red-600/60') + '" style="width:' + w + '%"></div>' +
+            '</div>' +
+            '<div class="w-[76px] shrink-0 text-right text-sm text-gray-500">' + o.votes + ' (' + o.pct + ' %)</div>' +
+          '</div>' +
+        '</li>'
+      );
+    }).join('');
+    card.innerHTML =
+      '<div class="flex items-center justify-between flex-wrap gap-2 mb-1">' +
+        '<h3 class="font-semibold text-gray-800 text-sm">Frage ' + (qi + 1) +
+          ' <span class="text-gray-400 font-normal">' + q.points + ' P.' + multi + '</span></h3>' +
+        '<div class="flex items-center gap-3">' +
+          (headerNote ? '<span class="text-xs text-gray-500">' + headerNote + '</span>' : '') +
+          '<label class="flex items-center gap-1.5 cursor-pointer select-none"' +
+            ' title="Richtig/Falsch-Kennzeichnungen, Antwortverteilung und „exakt richtig“-Zähler dieser Frage ein-/ausblenden">' +
+            '<input type="checkbox" data-q-toggle="' + qi + '"' + (showSolutions ? ' checked' : '') +
+              ' class="h-3.5 w-3.5 rounded border-gray-300 accent-blue-600 cursor-pointer">' +
+            '<span class="text-xs font-medium text-gray-500">Lösungen &amp; Resultate</span>' +
+          '</label>' +
+        '</div>' +
+      '</div>' +
+      '<div class="mc-q-text text-sm text-gray-800 mb-3"></div>' +
+      '<ul class="mt-3 space-y-1 list-disc pl-5 marker:text-gray-400">' + optionRows + '</ul>';
+
+    // Fragetext + Options-Texte: Markdown/LaTeX via dem gemeinsamen
+    // Renderer (wie auf der MC-Aufgaben-Seite); davor steht bereits
+    // der Klartext als Fallback, falls der Render fehlschlägt.
+    const qEl = card.querySelector('.mc-q-text');
+    qEl.textContent = q.question;
+    renderMarkdown(q.question, qEl).catch(() => {});
+    card.querySelectorAll('.mc-opt-text').forEach((el, oi) => {
+      el.textContent = q.options[oi].text;
+      renderMarkdown(q.options[oi].text, el).catch(() => {});
+    });
+    return card;
+  }
+
+  function renderQuestions(data) {
+    const wrap = document.getElementById('questions');
+    wrap.innerHTML = '';
+    data.questions.forEach((q, qi) => {
+      wrap.appendChild(buildQuestionCard(q, qi, data, isSolutionsShown(data.task.id, qi)));
+    });
+  }
+
+  async function loadStats(quiet) {
+    if (busy) return;
+    if (!taskSelect.value) return;
+    busy = true;
+    try {
+      const res = await fetch('/api/courses/' + courseId + '/live-mc-stats?' + currentParams(), {
+        credentials: 'same-origin',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (!quiet) showToast(data.detail || 'Fehler beim Laden.', 'error');
+        return;
+      }
+      const data = await res.json();
+      lastData = data;
+
+      if (!data.available) {
+        document.getElementById('questions-area').classList.add('hidden');
+        document.getElementById('task-title').innerHTML =
+          '<span class="text-gray-400">Keine Kennzahlen verfügbar.</span>';
+        document.getElementById('submitted-count').textContent = '–';
+        setDescInteractive(false);
+        const warn = document.getElementById('too-small-warning');
+        warn.classList.remove('hidden');
+        document.getElementById('too-small-count').textContent =
+          'Es matchen nur ' + data.count + ' ' + (data.count === 1 ? 'Person' : 'Personen') + ' den Filtern';
+        return;
+      }
+
+      document.getElementById('too-small-warning').classList.add('hidden');
+      document.getElementById('questions-area').classList.remove('hidden');
+      renderSummary(data);
+      renderQuestions(data);
+      document.getElementById('last-updated').textContent =
+        'Stand: ' + new Date().toLocaleTimeString('de-DE');
+    } catch (err) {
+      if (!quiet) showToast('Fehler: ' + err.message, 'error');
+    } finally {
+      busy = false;
+    }
+  }
+
+  // ─── Filter-Events ──────────────────────────────────────────
+  let annotationTimeout;
+  taskSelect.addEventListener('change', () => { syncUrl(); loadStats(false); });
+  annotationFilter.addEventListener('input', () => {
+    clearTimeout(annotationTimeout);
+    annotationTimeout = setTimeout(() => { syncUrl(); loadStats(false); }, 300);
+  });
+  document.getElementById('clear-filter-btn').addEventListener('click', () => {
+    annotationFilter.value = '';
+    syncUrl();
+    loadStats(false);
+  });
+  // ─── Aufgabenstellung aufklappen ─────────────────────────────
+  const taskDesc = document.getElementById('task-desc');
+  const taskDescToggle = document.getElementById('task-desc-toggle');
+  const taskDescChevron = document.getElementById('task-desc-chevron');
+  const taskTitle = document.getElementById('task-title');
+
+  // Chevron (ganz links) oder irgendwo auf der Überschrift klicken —
+  // beides blendet die Aufgabenstellung ein/aus.
+  function toggleTaskDesc() {
+    if (taskDescToggle.classList.contains('hidden')) return; // keine Beschreibung
+    const isOpen = taskDesc.classList.toggle('hidden') === false;
+    taskDescChevron.classList.toggle('rotate-180', isOpen);
+    taskDescToggle.setAttribute('aria-expanded', String(isOpen));
+  }
+  function setDescInteractive(active) {
+    taskDescToggle.classList.toggle('hidden', !active);
+    // Separate Calls: Mehr-Token-toggle() ist nicht in allen
+    // Browsern unterstützt (wirft sonst eine Exception).
+    taskTitle.classList.toggle('cursor-pointer', active);
+    taskTitle.classList.toggle('select-none', active);
+  }
+  taskDescToggle.addEventListener('click', toggleTaskDesc);
+  taskTitle.addEventListener('click', toggleTaskDesc);
+
+  // Pro-Frage-Toggle: Event-Delegation, damit der Listener auch nach
+  // jedem Re-Render (Auto-Refresh, Task-Wechsel) erhalten bleibt.
+  document.getElementById('questions').addEventListener('change', (e) => {
+    const cb = e.target.closest('input[data-q-toggle]');
+    if (!cb || !lastData || !lastData.available) return;
+    const qi = parseInt(cb.dataset.qToggle, 10);
+    const key = lastData.task.id + ':' + qi;
+    if (cb.checked) solutionsShown.set(key, true);
+    else solutionsShown.delete(key);
+    // Nur diese eine Karte neu bauen (kein neuer Fetch, kein Full-Rerender).
+    const cards = document.getElementById('questions').children;
+    if (cards[qi]) {
+      cards[qi].replaceWith(buildQuestionCard(lastData.questions[qi], qi, lastData, cb.checked));
+    }
+  });
+
+  // ─── Kopfzeilen-Buttons ─────────────────────────────────────
+  document.getElementById('refresh-btn').addEventListener('click', () => loadStats(false));
+
+  document.getElementById('copy-snippet-btn').addEventListener('click', async () => {
+    syncUrl();
+    // Markdown-Snippet für die Folien: absolute URL → wird vom Renderer
+    // als Iframe gerendert (allow-same-origin → Login/Cookies funktionieren
+    // im Embed); {height=…} fixiert die Iframe-Höhe.
+    const snippet = '![' + 'MC-Details](' + location.href + ') {height=600}';
+    try {
+      await navigator.clipboard.writeText(snippet);
+      showToast('Snippet kopiert — in die Folie einfügen, Höhe über {height=…} anpassbar.', 'success');
+    } catch {
+      showToast('Snippet: ' + snippet, 'info');
+    }
+  });
+
+  // ─── Live: Auto-Refresh alle 10 s (nur im sichtbaren Tab) ───
+  setInterval(() => {
+    if (document.visibilityState === 'visible') loadStats(true);
+  }, REFRESH_MS);
+
+  loadStats(false);
+</script>
+{% endif %}
+{% endblock %}

@@ -52,6 +52,7 @@ from services.mc_service import (
     mc_report_summary,
     mc_total_points,
     parse_mc_data,
+    parse_student_answers,
     student_view as _mc_student_view,
     tutor_view as _mc_tutor_view,
     validate_mc_data as _mc_validate,
@@ -954,6 +955,7 @@ async def get_course_live_stats(
         ]
         pct_vals = [p / task.max_points if task.max_points > 0 else 0.0 for p in submitted]
         tasks_payload.append({
+            "id": task.id,
             "title": task.title,
             "task_type": task.task_type.value,
             "max_points": task.max_points,
@@ -977,6 +979,130 @@ async def get_course_live_stats(
         "hist_labels": LIVE_HIST_LABELS,
         "total_histogram": _histogram_counts(total_pct),
         "tasks": tasks_payload,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/courses/{course_id}/live-mc-stats")
+async def get_course_live_mc_stats(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF, CourseRole.TUTOR)),
+):
+    """Anonymisierte Antwortverteilung einer MC-Aufgabe (Live-Dashboard).
+
+    Zählt je Antwortoption, wie oft sie in der jeweils letzten
+    Einreichung der gefilterten Studenten gewählt wurde — nur
+    Aggregate (Zähler), keine identifizierenden Daten.
+    """
+    _user, _ = user_and_course
+
+    filter_text = request.query_params.get("filter_text", "").strip()
+    type_filter = request.query_params.get("type_filter", "").strip()
+    annotation_filter = request.query_params.get("annotation_filter", "").strip()
+    task_id_raw = request.query_params.get("task_id", "").strip()
+
+    # Aufgabe wird direkt ausgewählt (Dropdown) → gegen alle sichtbaren
+    # Aufgaben des Kurses auflösen, nicht über die Aufgaben-Suche.
+    task = None
+    if task_id_raw.isdigit():
+        cand = session.get(Task, int(task_id_raw))
+        if (
+            cand is not None
+            and cand.course_id == course_id
+            and cand.is_visible
+            and cand.task_type == TaskType.MC
+        ):
+            task = cand
+    if task is None:
+        raise HTTPException(400, "Keine gültige Multiple-Choice-Aufgabe für diesen Kurs.")
+
+    try:
+        mc = parse_mc_data(task.mc_data)
+    except McValidationError as e:
+        raise HTTPException(400, str(e))
+
+    _tasks, memberships, _scores, _has_override, _has_submitted, _max_total = _overview_data(
+        session, course_id, filter_text, type_filter, annotation_filter
+    )
+
+    count = len(memberships)
+    if count < LIVE_MIN_SAMPLES:
+        return {"available": False, "count": count, "min_samples": LIVE_MIN_SAMPLES}
+
+    # Letztere Einreichung je Student für diese Aufgabe (aufsteigend
+    # sortiert → die jeweils letzte überschreibt die früheren).
+    student_ids = [m.user_id for m in memberships]
+    latest: dict[int, Submission] = {}
+    if student_ids:
+        subs = session.exec(
+            select(Submission)
+            .where(Submission.task_id == task.id)
+            .where(Submission.student_id.in_(student_ids))  # type: ignore[attr-defined]
+            .order_by(Submission.submitted_at.asc())  # type: ignore[attr-defined]
+        ).all()
+        for sub in subs:
+            latest[sub.student_id] = sub
+
+    questions = mc["questions"]
+    option_votes = [[0] * len(q["options"]) for q in questions]
+    exact_correct = [0] * len(questions)
+    submitted = 0
+
+    for m in memberships:
+        sub = latest.get(m.user_id)
+        if sub is None:
+            continue
+        answers = parse_student_answers(sub.code_solution)
+        if not isinstance(answers, list):
+            continue
+        submitted += 1
+        for qi, q in enumerate(questions):
+            if qi >= len(answers) or not isinstance(answers[qi], list):
+                continue
+            try:
+                chosen = {int(i) for i in answers[qi]}
+            except (TypeError, ValueError):
+                continue
+            chosen = {i for i in chosen if 0 <= i < len(q["options"])}
+            if not chosen:
+                continue
+            for i in chosen:
+                option_votes[qi][i] += 1
+            if chosen == {i for i, o in enumerate(q["options"]) if o["correct"]}:
+                exact_correct[qi] += 1
+
+    questions_payload = []
+    for qi, q in enumerate(questions):
+        questions_payload.append({
+            "question": q["question"],
+            "points": q["points"],
+            "multi_select": q["multi_select"],
+            "exact_correct": exact_correct[qi],
+            "options": [
+                {
+                    "label": chr(ord("A") + oi),
+                    "text": o["text"],
+                    "correct": o["correct"],
+                    "votes": option_votes[qi][oi],
+                    "pct": round(option_votes[qi][oi] / submitted * 100, 1) if submitted else 0.0,
+                }
+                for oi, o in enumerate(q["options"])
+            ],
+        })
+
+    return {
+        "available": True,
+        "count": count,
+        "submitted": submitted,
+        "task": {
+            "id": task.id,
+            "title": task.title,
+            "description": task.description or "",
+            "max_points": task.max_points,
+        },
+        "questions": questions_payload,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 

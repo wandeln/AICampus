@@ -51,6 +51,7 @@ from database.models import (
     Notification,
     ScriptSection,
     Task,
+    TaskType,
     User,
     UserCourse,
     Submission,
@@ -2129,6 +2130,70 @@ async def live_dashboard_page(
         "can_view": can_view,
     }
     return templates.TemplateResponse("course/live_dashboard.html", ctx)
+
+
+@app.get("/courses/{course_id}/live/mc", response_class=HTMLResponse)
+async def live_mc_dashboard_page(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Anonymisiertes MC-Details-Dashboard (PROF/Tutor/Admin).
+
+    Antwortverteilung der MC-Aufgaben (wie oft welche Option gewählt
+    wurde), ohne jede studentenidentifizierenden Daten. Für alle
+    anderen (z. B. Studenten) wird eine freundliche Zugriffs-Sperre
+    gerendert statt 403.
+    """
+    course = session.get(Course, course_id)
+    if not course:
+        raise HTTPException(404, "Kurs nicht gefunden.")
+
+    membership = session.exec(
+        select(UserCourse)
+        .where(UserCourse.user_id == user.id)
+        .where(UserCourse.course_id == course_id)
+    ).first()
+
+    is_admin = user.role == GlobalUserRole.ADMIN
+    can_view = is_admin or (
+        membership is not None
+        and membership.role_in_course in (CourseRole.PROF, CourseRole.TUTOR)
+    )
+
+    mc_tasks = session.exec(
+        select(Task)
+        .where(Task.course_id == course_id)
+        .where(Task.is_visible == True)  # type: ignore[attr-defined]
+        .where(Task.task_type == TaskType.MC)
+        .order_by(Task.display_order.asc())  # type: ignore[attr-defined]
+    ).all()
+
+    ctx = {
+        "request": request,
+        "page_title": f"MC-Details — {course.name}",
+        "page_description": f"Anonymisiertes MC-Details-Dashboard für den Kurs {course.name}",
+        "current_user": _user_ctx(
+            user,
+            membership.role_in_course.value if membership else ("ADMIN" if is_admin else "USER"),
+        ),
+        "courses": _get_user_courses(user, session),
+        "selected_course_id": course_id,
+        "is_admin": is_admin,
+        "course": {
+            "id": course.id,
+            "name": course.name,
+            "description": course.description,
+            "semester": course.semester,
+        },
+        "mc_tasks": [
+            {"id": t.id, "title": t.title, "max_points": t.max_points}
+            for t in mc_tasks
+        ],
+        "can_view": can_view,
+    }
+    return templates.TemplateResponse("course/live_mc_dashboard.html", ctx)
 
 
 @app.get("/courses/{course_id}/tasks/{task_id}/students/{student_id}/review")

@@ -24,6 +24,9 @@ data/
 # E2E-Test-Artefakte (DBs, Screenshots, Traces)
 .e2e_test/
 
+# LLM-Pläne (interne Planung, nicht ins Repo)
+docs/LLM-plans/
+
 # Deployment / Betrieb (Repo = nur Code-Backup)
 AGENTS.md
 .env.production.example
