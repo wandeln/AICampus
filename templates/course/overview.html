@@ -10,9 +10,10 @@
   <!-- Link zum anonymisierten Live-Dashboard -->
   <div class="mb-6">
     <a id="live-dashboard-link" href="/courses/{{ course.id }}/live" target="_blank" rel="noopener"
-       class="inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline">
-      📈 Anonymisiertes Live-Dashboard öffnen
-      <span class="text-xs text-gray-400 font-normal">(nur Kennzahlen &amp; Verteilung, ohne Namen — ideal zum Zeigen in der Vorlesung)</span>
+       title="Anonymisiertes Live-Dashboard: Kurs-Stats in Echtzeit (nur Kennzahlen &amp; Verteilung, ohne Namen — ideal zum Zeigen in der Vorlesung). Öffnet mit den aktuellen Filtern."
+       class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium
+              bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition">
+      <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span> Live-Dashboard
     </a>
   </div>
 
