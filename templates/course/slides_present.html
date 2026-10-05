@@ -22,6 +22,11 @@
    eigene :root-Defaults definiert und bei gleicher Spezifität die
    Source-Order gewinnt. #}
 <style>:root { {{ slides_theme_css | safe }} }</style>
+{# Chalkboard-Plugin (nur Tutoren/Profs): Stift-Annotationen auf der Folie
+   + Whiteboard. #}
+{% if is_tutor %}
+<link rel="stylesheet" href="{{ asset('vendor/reveal/plugin/chalkboard/style.css') }}">
+{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -48,6 +53,11 @@
     <button type="button" data-key="83"><kbd>S</kbd><span>Speaker View</span></button>
     {% endif %}
     <button type="button" data-key="66"><kbd>B</kbd><span>Break</span></button>
+    {% if is_tutor %}
+    <button type="button" data-key="67"><kbd>C</kbd><span>Stift (Folie)</span></button>
+    <button type="button" data-key="119"><kbd>W</kbd><span>Whiteboard</span></button>
+    <button type="button" data-action="undo"><kbd>Strg</kbd><kbd>Z</kbd><span>Zug zurücknehmen</span></button>
+    {% endif %}
     <button type="button" data-key="79"><kbd>O</kbd><span>Overview</span></button>
     <button type="button" data-key="80"><kbd>←</kbd><kbd>P</kbd><span>Previous Slide</span></button>
     <button type="button" data-key="78"><kbd>→</kbd><kbd>N</kbd><span>Next Slide</span></button>
@@ -68,6 +78,10 @@
    Content gefiltert (slides_service.strip_slide_notes) → nicht im DOM. #}
 {% if is_tutor %}
 <script src="{{ asset('vendor/reveal/plugin/notes/notes.js') }}"></script>
+{# Chalkboard-Plugin (nur Tutoren/Profs): Stift-Annotationen + Whiteboard.
+   Patches (AICAMPUS PATCH-Markierungen): HiDPI-Canvas, Undo, Farbfelder/
+   Board-Handle ohne Font Awesome. #}
+<script src="{{ asset('vendor/reveal/plugin/chalkboard/plugin.js') }}"></script>
 {% endif %}
 <script>
   // Global für den Markdown-Renderer (Xrefs @sec:/@task: → Skript-Ref-Map)
@@ -97,6 +111,20 @@ function togglePageFullscreen() {
   if (!btn) return;
   btn.addEventListener("click", togglePageFullscreen);
 })();
+// Chalkboard (nur Tutoren/Profs): Strg/Cmd+Z nimmt den letzten Zug zurück.
+// Eigener document-Listener, weil Reveal Keydowns mit Modifikatoren
+// (außer Navigation+Shift) grundsätzlich ignoriert.
+if (HAS_NOTES) {
+  document.addEventListener("keydown", (e) => {
+    // Texteingabe (z. B. Speaker-Notes-Felder) hat Vorrang vor dem Undo.
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(input|textarea)$/i.test(t.tagName || ""))) return;
+    if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z") && !e.shiftKey) {
+      e.preventDefault();
+      RevealChalkboard.undo();
+    }
+  });
+}
 </script>
 <script>
 (async function () {
@@ -164,7 +192,17 @@ function togglePageFullscreen() {
     // nur so bleiben Toolbar + Shortcuts-Panel im Vollbild sichtbar.
     // (User-defined Bindings haben Vorrang vor Reveal's System-Bindings.)
     keyboard: { 70: togglePageFullscreen },
-    plugins: [RevealHighlight, ...(HAS_NOTES ? [RevealNotes] : [])],
+    // Chalkboard (nur Tutoren/Profs): Stift-Annotationen (C) + Whiteboard.
+    // W statt B: B (66) ist Reveal's Build-in-Break/Blackout und bleibt so.
+    // storage: sessionStorage-Schlüssel pro Deck → Zeichnungen überleben
+    // Reloads innerhalb derselben Browsersession (Tab).
+    chalkboard: HAS_NOTES ? {
+      storage: "aicampus-chalkboard-" + courseId + "-" + DECK_ID,
+      keyBindings: {
+        toggleChalkboard: { keyCode: 119, key: "W", description: "Toggle whiteboard" },
+      },
+    } : undefined,
+    plugins: [RevealHighlight, ...(HAS_NOTES ? [RevealNotes, RevealChalkboard] : [])],
   });
   // Code-LaTeX nach Reveal's Highlight-Pass
   aicampusWireCodeMath(reveal);
@@ -249,6 +287,9 @@ function togglePageFullscreen() {
         // F-Zeile: Seiten-Vollbild (wie der ⛶-Button), damit die dunkle
         // Bar + dieses Panel im Vollbild sichtbar bleiben.
         togglePageFullscreen();
+      } else if (btn.dataset.action === "undo" && window.RevealChalkboard) {
+        // Chalkboard: letzten Zug rückgängig machen (s. Strg+Z-Listener).
+        RevealChalkboard.undo();
       } else {
         const keyCode = parseInt(btn.dataset.key, 10);
         const ev = new KeyboardEvent("keydown", {

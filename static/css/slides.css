@@ -997,4 +997,13 @@ html.print-pdf body.present-mode .present-shell .reveal {
     width: auto;
     height: auto;
   }
+
+  /* Chalkboard-Plugin (nur Tutoren/Profs): Zeichen-Overlays nie drucken —
+     Whiteboard-Drawings kommen bei Bedarf als eigene PDF-Seiten über das
+     Plugin (createPrintout), Stift-Annotationen (Notescanvas) fließen
+     bewusst nicht ins PDF. */
+  body.present-mode #notescanvas,
+  body.present-mode #chalkboard {
+    display: none !important;
+  }
 }
