@@ -658,9 +658,17 @@ const initChalkboard = function ( Reveal ) {
 
 	function recordEvent( event ) {
 //console.log(event);
+		// AICAMPUS PATCH: jeder neue Event veraltet den Redo-Puffer
+		delete redoStack[ redoKey() ];
 		event.time = Date.now() - slideStart;
 		if ( mode == 1 ) event.board = board;
 		var slideData = getSlideData();
+		// AICAMPUS PATCH: direkt vorangegangenes clear-Event (z. B. DEL-
+		// Tastenwiederholung) nicht erneut recorden – sonst bräuchte jedes
+		// der N Clears ein eigenes Strg+Z.
+		if ( event.type === 'clear' && slideData.events.length && slideData.events[ slideData.events.length - 1 ].type === 'clear' ) {
+			return;
+		}
 		var i = slideData.events.length;
 		while ( i > 0 && event.time < slideData.events[ i - 1 ].time ) {
 			i--;
@@ -1503,18 +1511,19 @@ const initChalkboard = function ( Reveal ) {
 	}
 
 	// AICAMPUS PATCH: Undo — hebt den letzten Zug zurück (Draw-Stroke,
-	// Radierer-Sitzung oder einzelnes open/close/selectboard-Event) und
-	// zeichnet die Folie neu. Ein „clear"-Event ist nicht rückgängig
-	// machbar. Strokes werden durch „strokeend"-Events (beim
-	// Mouse-/Touch-up) abgegrenzt, sodass ein Strg+Z genau den letzten
-	// Stroke bzw. die letzte Radierer-Sitzung entfernt.
+	// Radierer-Sitzung oder einzelnes open/close/selectboard/clear-Event)
+	// und zeichnet die Folie neu. Auch DEL (clear) ist rückgängig
+	// machbar: entfernt man das „clear"-Event, zeigt der Replay die
+	// zuvor gezeichneten Strokes wieder. Strokes werden durch
+	// „strokeend"-Events (beim Mouse-/Touch-up) abgegrenzt, sodass ein
+	// Strg+Z genau den letzten Stroke bzw. die letzte Radierer-Sitzung
+	// entfernt.
 	function undo() {
 		if ( readOnly ) return;
 		var slideData = getSlideData( undefined, mode );
 		var events = slideData.events;
 		if ( !events.length ) return;
 		var last = events[ events.length - 1 ];
-		if ( last.type === 'clear' ) return;
 		var i = events.length - 1;
 		if ( last.type === 'strokeend' ) {
 			// Ganzen Stroke entfernen: alle Segmente plus das
@@ -1525,9 +1534,46 @@ const initChalkboard = function ( Reveal ) {
 			// Fallback für ältere Aufnahmen ohne „strokeend"-Marker:
 			// kompletter abschließender Run des gleichen Event-Typs.
 			while ( i >= 0 && events[ i ].type === last.type ) i--;
+		} else {
+			// Einzelnes Event („clear" nach DEL, „open", „close",
+			// „selectboard"): genau dieses eine Event entfernen.
+			i--;
 		}
-		events.splice( i + 1 );
+		var removed = events.splice( i + 1 );
+		// AICAMPUS PATCH: entfernte Events für redo() aufheben. Push (LIFO):
+		// das zuletzt entfernte liegt oben und wird beim ersten Redo als
+		// Erstes wiederhergestellt (pop() nimmt das letzte Element). Da
+		// Gruppen immer vom (zeitlich sortierten) Array-Ende entfernt
+		// werden, gehört die wiederhergestellte Gruppe immer wieder ans
+		// Ende → Zeitordnung bleibt erhalten.
+		var stack = redoStack[ redoKey() ] || ( redoStack[ redoKey() ] = [] );
+		stack.push( removed );
 		slideData.duration = events.length ? Math.max.apply( null, events.map( function ( e ) { return e.time; } ) ) + 1 : 0;
+		stopPlayback();
+		clearCanvas( mode );
+		startPlayback( getSlideDuration(), mode );
+		updateStorage();
+	}
+
+	// AICAMPUS PATCH: Redo — durch undo() entfernte Event-Gruppen werden
+	// pro (Folie, Modus) hier zwischengespeichert und mit redo() in
+	// ursprünglicher Reihenfolge + Zeitstempeln wiederhergestellt.
+	// Jeder neue Event (recordEvent) veraltet den Puffer der Folie.
+	// Nur in-memory: nach einem Reload ist der Redo-Puffer leer.
+	var redoStack = {};
+
+	function redoKey() {
+		return slideIndices.h + "-" + slideIndices.v + "-" + slideIndices.f + "-" + mode;
+	}
+
+	function redo() {
+		if ( readOnly ) return;
+		var stack = redoStack[ redoKey() ];
+		if ( !stack || !stack.length ) return;
+		var removed = stack.pop();
+		var slideData = getSlideData( undefined, mode );
+		slideData.events.push.apply( slideData.events, removed );
+		slideData.duration = Math.max.apply( null, slideData.events.map( function ( e ) { return e.time; } ) ) + 1;
 		stopPlayback();
 		clearCanvas( mode );
 		startPlayback( getSlideDuration(), mode );
@@ -2063,6 +2109,7 @@ const initChalkboard = function ( Reveal ) {
 	this.resetAll = resetStorage;
 	this.download = downloadData;
 	this.undo = undo; // AICAMPUS PATCH
+	this.redo = redo; // AICAMPUS PATCH
 	this.updateStorage = updateStorage;
 	this.getData = getData;
 	this.configure = configure;

@@ -57,6 +57,7 @@
     <button type="button" data-key="67"><kbd>C</kbd><span>Stift (Folie)</span></button>
     <button type="button" data-key="87"><kbd>W</kbd><span>Whiteboard</span></button>
     <button type="button" data-action="undo"><kbd>Strg</kbd><kbd>Z</kbd><span>Zug zurücknehmen</span></button>
+    <button type="button" data-action="redo"><kbd>Strg</kbd><kbd>Y</kbd><span>Zug wiederholen</span></button>
     {% endif %}
     <button type="button" data-key="79"><kbd>O</kbd><span>Overview</span></button>
     <button type="button" data-key="80"><kbd>←</kbd><kbd>P</kbd><span>Previous Slide</span></button>
@@ -111,7 +112,8 @@ function togglePageFullscreen() {
   if (!btn) return;
   btn.addEventListener("click", togglePageFullscreen);
 })();
-// Chalkboard (nur Tutoren/Profs): Strg/Cmd+Z nimmt den letzten Zug zurück.
+// Chalkboard (nur Tutoren/Profs): Strg/Cmd+Z nimmt den letzten Zug zurück,
+// Strg/Cmd+Y bzw. Strg/Cmd+Shift+Z wiederholt ihn.
 // Eigener document-Listener, weil Reveal Keydowns mit Modifikatoren
 // (außer Navigation+Shift) grundsätzlich ignoriert.
 if (HAS_NOTES) {
@@ -119,9 +121,14 @@ if (HAS_NOTES) {
     // Texteingabe (z. B. Speaker-Notes-Felder) hat Vorrang vor dem Undo.
     const t = e.target;
     if (t && (t.isContentEditable || /^(input|textarea)$/i.test(t.tagName || ""))) return;
-    if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z") && !e.shiftKey) {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const k = e.key.toLowerCase();
+    if (k === "z" && !e.shiftKey) {
       e.preventDefault();
       RevealChalkboard.undo();
+    } else if (k === "y" || (k === "z" && e.shiftKey)) {
+      e.preventDefault();
+      RevealChalkboard.redo();
     }
   });
 }
@@ -292,6 +299,9 @@ if (HAS_NOTES) {
       } else if (btn.dataset.action === "undo" && window.RevealChalkboard) {
         // Chalkboard: letzten Zug rückgängig machen (s. Strg+Z-Listener).
         RevealChalkboard.undo();
+      } else if (btn.dataset.action === "redo" && window.RevealChalkboard) {
+        // Chalkboard: letzten Zug wiederholen (s. Strg+Y-Listener).
+        RevealChalkboard.redo();
       } else {
         const keyCode = parseInt(btn.dataset.key, 10);
         const ev = new KeyboardEvent("keydown", {
