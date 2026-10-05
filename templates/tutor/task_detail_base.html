@@ -52,7 +52,7 @@
       {% if is_tutor %}
       <div class="flex items-center gap-2 flex-wrap">
         <button type="button" onclick="finishTask()"
-                class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                class="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition">
           ✅ Fertig
         </button>
         {# Autosave + Versions-History: window.AV (base.html) befüllt den Slot #}
@@ -67,7 +67,7 @@
           {% endif %}
         </button>
         <a id="student-view-link" href="/courses/{{ course.id }}/tasks/{{ task.id if task else '' }}?as_student=1"
-           class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm font-medium flex items-center gap-2">
+           class="bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition text-sm font-medium flex items-center gap-2">
           👁️&#x200B; Student-View
         </a>
       </div>
@@ -151,7 +151,7 @@
           </select>
         </div>
         <button type="button" id="ai-generate-btn"
-                class="bg-purple-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-purple-700 transition font-medium">
+                class="bg-purple-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-purple-700 transition font-medium">
           Generieren / Ändern
         </button>
       </div>
