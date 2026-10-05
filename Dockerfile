@@ -28,4 +28,7 @@ RUN mkdir -p /app/data
 
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# timeout-graceful-shutdown: bei Reload/Neustart dürfen offene SSE-Streams
+# (Glocke-Livestream) den Shutdown nicht endlos blockieren — nach 5 s
+# werden verbliebene Verbindungen forciert geschlossen, Clients reconnecten.
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-graceful-shutdown", "5"]

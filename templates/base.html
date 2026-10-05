@@ -473,9 +473,29 @@
         });
       }
       fetchNotifications();
-      setInterval(() => {
-        if (!document.hidden) fetchNotifications();
-      }, 15000);
+      // Live-Update (M2): SSE-Stream schickt je neue Benachrichtigung ein
+      // Event → Liste + Badge sofort neu laden. Polling bleibt als
+      // Fallback (z. B. stirbt der Stream beim Container-Reload): alle
+      // 30 s bei aktiver SSE-Verbindung, sonst alle 15 s. EventSource
+      // verbindet sich bei Fehlern selbst wieder (kein onerror nötig);
+      // readyState steuert nur das Polling-Intervall. Je Tab eine eigene
+      // Verbindung — serverseitig eine Queue pro Verbindung (Set).
+      let notifEs = null;
+      if (document.getElementById("notif-btn")) {
+        try {
+          notifEs = new EventSource("/api/notifications/stream");
+          notifEs.onmessage = () => {
+            if (!document.hidden) fetchNotifications();
+          };
+        } catch { /* EventSource unsupported → reines Polling */ }
+      }
+      (function scheduleNotifPoll() {
+        const sseAlive = notifEs !== null && notifEs.readyState === EventSource.OPEN;
+        setTimeout(() => {
+          if (!document.hidden) fetchNotifications();
+          scheduleNotifPoll();
+        }, sseAlive ? 30000 : 15000);
+      })();
     </script>
   </nav>
   {% endblock %}

@@ -340,6 +340,28 @@
   }
   setInterval(pollForum, 4000);
 
+  // ─── Live-Update (SSE): neue Nachricht sofort statt 4-s-Poll ──
+  // Nutzt den bestehenden User-Event-Stream der Glocke (base.html):
+  // Beim Posten wird ein „forum_message“-Event (course_id + channel_id)
+  // in die Streams aller Kurs-Mitglieder gepusht. Das Event dient nur
+  // als Trigger — der Fetch läuft über pollForum() (gleicher Pfad wie
+  // der Poll → identisches Verhalten inkl. Gelesen-Markierung). Der
+  // 4-s-Poll bleibt als Fallback, falls der Stream mal tot ist.
+  // (Eigene, zusätzliche Verbindung — die Glocke hat ihre eigene.)
+  if (activeChannelId != null) {
+    try {
+      const forumEs = new EventSource('/api/notifications/stream');
+      forumEs.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.event === 'forum_message' && data.course_id === courseId && data.channel_id === activeChannelId) {
+            pollForum();
+          }
+        } catch { /* fremdes/ungültiges Event ignorieren */ }
+      };
+    } catch { /* EventSource unsupported → reines Polling */ }
+  }
+
   // ─── Kanäle: anlegen / umbenennen / löschen ──────────────────
   const channelForm = document.getElementById('channel-form');
   const channelAddBtn = document.getElementById('channel-add-btn');

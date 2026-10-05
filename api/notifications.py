@@ -2,6 +2,9 @@
 Benachrichtigungen (in-App-Glocke in der Top-Bar):
 
 - GET  /api/notifications           → ungelesene Benachrichtigungen + Ungelesen-Zähler
+- GET  /api/notifications/stream    → SSE-Livestream (M2): je neue
+                                       Benachrichtigung ein Event; das
+                                       Frontend lädt daraus Liste/Badge neu
 - POST /api/notifications/read-all  → alle als gelesen markieren
 - POST /api/notifications/{id}/read → einzelne als gelesen markieren
 
@@ -9,14 +12,18 @@ Benachrichtigungen (in-App-Glocke in der Top-Bar):
 DB (Historie/Statistik), aber die API-Liste zeigt nur noch Ungelesenes.
 """
 
+import asyncio
+import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import update
 from sqlmodel import Session, func, select
 
 from database.base import get_session
 from database.models import Notification, User
+from services import notifications
 from services.auth_service import get_current_user
 
 router = APIRouter(prefix="/api/notifications", tags=["Benachrichtigungen"])
@@ -69,19 +76,59 @@ async def list_notifications(
     return {"unread_count": unread, "items": [_item_dict(n) for n in items]}
 
 
+@router.get("/stream")
+async def notification_stream(
+    user: User = Depends(get_current_user),
+):
+    """SSE-Livestream der Glocke (M2): ein Event pro neuer Benachrichtigung.
+
+    Das Event dient dem Client nur als Trigger — Liste/Badge werden danach
+    frisch per GET /api/notifications geladen (Gelesen-Status immer aktuell).
+    Alle 30 s ohne Event ein Keep-Alive-Kommentar, damit Proxys/Connections
+    nicht aufgegeben werden. Bei Disconnect bricht FastAPI den Generator ab
+    (GeneratorExit) → finally registriert die Queue wieder ab.
+    """
+    q = notifications.subscribe(user.id)
+
+    async def gen():
+        try:
+            while True:
+                try:
+                    payload = await asyncio.wait_for(q.get(), timeout=30)
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        finally:
+            notifications.unsubscribe(user.id, q)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # nginx & Co. dürfen den Stream nicht puffern, sonst kämen
+            # Events erst in Chargen an (direkt ohne Proxy irrelevant)
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/read-all")
 async def mark_all_notifications_read(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
     """Alle ungelesenen Benachrichtigungen des Users als gelesen markieren."""
-    session.exec(
+    result = session.exec(
         update(Notification)
         .where(Notification.user_id == user.id)
         .where(Notification.read_at.is_(None))
         .values(read_at=datetime.now())
     )
     session.commit()
+    if result.rowcount:  # andere offene Tabs sofort updaten (statt Poll abzuwarten)
+        notifications.notify_read(user.id)  # type: ignore[arg-type]
     return {"ok": True}
 
 
@@ -97,4 +144,5 @@ async def mark_notification_read(
         n.read_at = datetime.now()
         session.add(n)
         session.commit()
+        notifications.notify_read(user.id)  # type: ignore[arg-type]  # andere Tabs sofort updaten
     return {"ok": True}

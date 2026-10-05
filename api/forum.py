@@ -383,7 +383,7 @@ async def list_forum_messages(
     role = _role_in_course(session, viewer, course_id)
     payload = load_forum_payload(session, course_id, channel_id, viewer, role, after_id)
     try:
-        session.exec(
+        result = session.exec(
             update(Notification)
             .where(Notification.user_id == viewer.id)
             .where(Notification.type == "forum_message")
@@ -392,6 +392,8 @@ async def list_forum_messages(
             .values(read_at=datetime.now())
         )
         session.commit()
+        if result.rowcount:  # Glocke sofort updaten (alle Tabs), statt Poll abzuwarten
+            notifications.notify_read(viewer.id)  # type: ignore[arg-type]
     except Exception:
         session.rollback()
     return payload
@@ -424,6 +426,8 @@ async def create_forum_message(
 
     # Glocke: alle anderen Kurs-Mitglieder benachrichtigen
     notifications.notify_forum_message(session, course_id, ch.id, ch.name, viewer, content)  # type: ignore[arg-type]
+    # Live: offene Forum-Seiten sofort updaten (statt 4-s-Poll abzuwarten)
+    notifications.push_forum_message(session, course_id, ch.id, msg.id)  # type: ignore[arg-type]
 
     role = _role_in_course(session, viewer, course_id) or "STUDENT"
     return _message_dict(msg, viewer, role, can_delete=True)

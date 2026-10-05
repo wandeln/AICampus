@@ -1,9 +1,11 @@
 """
 Notification-Service: Anlage der in-App-Benachrichtigungen (Glocke) +
-Live-Push an offene Tabs des Empfängers (In-Memory-Queues).
+Live-Push an offene SSE-Streams des Empfängers (In-Memory-Queues).
 
-Die Queues sind der Fan-out-Mechanismus für den SSE-Stream (M2). M1
-nutzt sie noch nicht — das Frontend pollt /api/notifications.
+Jeder offene Stream-Connector (GET /api/notifications/stream, M2)
+besitzt eine Queue; _push() speist bei jeder neuen Benachrichtigung
+alle Queues des Empfängers. In-Memory: Queues überleben keinen
+Reload/Neustart — das Frontend-Polling ist der Fallback.
 
 Die notify_*-Funktionen sind defensiv: Ein Fehler bei der Benachrichtigung
 darf den Hauptpfad (Forum-Post, Antwort, Grading) niemals brechen.
@@ -19,11 +21,11 @@ from database.models import Course, Notification, User, UserCourse
 
 logger = logging.getLogger(__name__)
 
-# user_id → aktive Queues (je offene Verbindung; M2: SSE-Stream)
+# user_id → aktive Queues (je offene SSE-Verbindung)
 _queues: dict[int, set[asyncio.Queue]] = {}
 
 
-# ─── Live-Registry (für M2: SSE) ────────────────────────────────────
+# ─── Live-Registry (SSE-Stream /api/notifications/stream) ───────────
 
 
 def subscribe(user_id: int) -> asyncio.Queue:
@@ -48,6 +50,43 @@ def _push(user_id: int, payload: dict[str, Any]) -> None:
             q.put_nowait(payload)
         except asyncio.QueueFull:
             logger.warning("[Notifications] Queue voll (User %s) — Event verworfen.", user_id)
+
+
+def notify_read(user_id: int) -> None:
+    """Live-Event „gelesen" → Glocke (Badge/Liste) sofort neu laden.
+
+    Wird nach Auto-Read (Forum-Polling) und manuellen Read-Endpoints
+    aufgerufen, damit alle offenen Tabs des Users sofort updaten statt
+    bis zum nächsten Poll zu warten. Das Frontend wertet den Payload
+    nicht aus — er dient nur als Trigger für fetchNotifications().
+    """
+    try:
+        _push(user_id, {"event": "read"})
+    except Exception:
+        logger.exception("[Notifications] Read-Event (User %s) fehlgeschlagen.", user_id)
+
+
+def push_forum_message(session: Session, course_id: int, channel_id: int, message_id: int) -> None:
+    """Live-Event (SSE): neue Forum-Nachricht → offene Chat-Seiten updaten.
+
+    Ergänzt die Glocke-Benachrichtigung: alle Kurs-Mitglieder (inkl.
+    Absender, dessen Fetch idempotent ist) bekommen das Event in ihren
+    Streams. Die Forum-Seite lädt bei passendem channel_id sofort die
+    neuen Nachrichten nach, statt auf den 4-s-Poll zu warten (der
+    bleibt als Fallback). Payload ohne Inhalt — der Client holt sich
+    die Nachricht über den normalen Poll-Fetch.
+    """
+    try:
+        payload = {
+            "event": "forum_message",
+            "course_id": course_id,
+            "channel_id": channel_id,
+            "message_id": message_id,
+        }
+        for uid in course_member_ids(session, course_id):
+            _push(uid, payload)
+    except Exception:
+        logger.exception("[Notifications] Forum-Live-Event (Kurs %s, Kanal %s) fehlgeschlagen.", course_id, channel_id)
 
 
 # ─── Helpers ────────────────────────────────────────────────────────

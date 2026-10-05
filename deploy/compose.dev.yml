@@ -33,3 +33,4 @@ services:
       --reload
       --reload-dir /app
       --reload-exclude /app/data
+      --timeout-graceful-shutdown 5
