@@ -165,8 +165,11 @@ const initChalkboard = function ( Reveal ) {
 		}
 	];
 
+  // AICAMPUS PATCH: Hotspot 20 20 = Mittelpunkt des 40x40-Schwamm-Blobs
+  // (ohne Koordinaten defaultet der CSS-Cursor-Hotspot auf 0 0 → der
+  //  Pointer lag in der oberen linken Ecke des Schwamms).
   var sponge = 		{
-		cursor: 'url(' + path + 'img/sponge.png), auto'
+		cursor: 'url(' + path + 'img/sponge.png) 20 20, auto'
 	}
 
 
@@ -969,14 +972,19 @@ const initChalkboard = function ( Reveal ) {
 	}
  
 	function eraseWithSponge( context, x, y ) {
+		// AICAMPUS PATCH: Radier-Kreis auf den Pointer zentrieren (x, y statt
+		// x+radius, y+radius). Ursprünglich passte der Offset zum Cursor mit
+		// Hotspot 0 0 (Schwamm wuchs nach rechts-unten); nach dem
+		// Cursor-Hotspot-Fix (20 20, Schwamm zentriert) müsste der Radius
+		// sonst 20px versetzt radieren.
 		context.save();
 		context.beginPath();
-		context.arc( x + eraser.radius, y + eraser.radius, eraser.radius, 0, 2 * Math.PI, false );
+		context.arc( x, y, eraser.radius, 0, 2 * Math.PI, false );
 		context.clip();
-		context.clearRect( x - 1, y - 1, eraser.radius * 2 + 2, eraser.radius * 2 + 2 );
+		context.clearRect( x - eraser.radius - 1, y - eraser.radius - 1, eraser.radius * 2 + 2, eraser.radius * 2 + 2 );
 		context.restore();
 		if ( mode == 1 && grid ) {
-			redrawGrid( x + eraser.radius, y + eraser.radius, eraser.radius );
+			redrawGrid( x, y, eraser.radius );
 		}
 	}
 
