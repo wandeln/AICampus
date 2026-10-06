@@ -314,11 +314,18 @@ async def create_script_question(
     if history:
         history_text = "\n".join(f"Q{i}: {h.question}" for i, h in enumerate(history, 1))
 
+    chapter_index = _chapter_index_text(session, course_id)
+
+    # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+    # Session sie die gesamte Generierung; s. database/base.py). Der
+    # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+    session.rollback()
+
     result = await llm_service.answer_script_question(
         course_name=course_name,
         section_context=section_context,
         quote_context=quote_context,
-        chapter_index=_chapter_index_text(session, course_id),
+        chapter_index=chapter_index,
         question_history=history_text,
         student_question=question_text,
         config=config,

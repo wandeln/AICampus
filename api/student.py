@@ -1202,6 +1202,11 @@ async def latex_from_image(
     # Resolve effektive LLM-Config (wird vom LLM-Service genutzt)
     llm_cfg = get_effective_llm_config(session)
 
+    # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+    # Session sie die gesamte Generierung; s. database/base.py). Der
+    # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+    session.rollback()
+
     result = await llm_service.convert_image_to_latex(
         image_base64=image_base64,
         mime_type=mime_type,
@@ -1342,6 +1347,11 @@ async def request_hint(
             + "\n".join(lines)
             + "\nEin inhaltlich passendes Medium aus dieser Liste DARFST du im Hinweis einbinden (max. 1) — verwende dafür exakt den angegebenen /media/-Pfad. Erfinde KEINE anderen Medien-Pfade."
         )
+
+    # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+    # Session sie die gesamte Generierung; s. database/base.py). Der
+    # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+    session.rollback()
 
     # Rufe LLM fuer sokratischen Hinweis auf
     result = await llm_service.generate_socratic_hint(
@@ -1562,6 +1572,11 @@ async def generate_student_report(
 
     # LLM-Config ermitteln
     llm_config = get_effective_llm_config(session, course_id)
+
+    # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+    # Session sie die gesamte Generierung; s. database/base.py). Der
+    # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+    session.rollback()
 
     # Report generieren
     logger.info(f"Generate student report for {course.name}: {len(tasks)} tasks")

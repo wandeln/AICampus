@@ -7,16 +7,41 @@ Supports both SQLite (dev) and PostgreSQL (production).
 
 import re
 
+from sqlalchemy import event
+from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel, create_engine, Session
 from config import DATABASE_URL
 
 # ─── Connection Pool Settings ────────────────────────────────────
 if "sqlite" in DATABASE_URL:
+    # NullPool: jede Session öffnet eine eigene Connection und schließt sie
+    # nach Gebrauch wieder. Ein begrenzter Pool (Default 5+10) lief bei
+    # langen Requests (LLM-Generierung, Import-Jobs) komplett leer → alle
+    # übrigen Requests warteten bis zu 30 s auf eine Connection
+    # (Server-Ausfall 2026-10-06, siehe docs/LLM-plans/db-incident-2026-10-06.md).
     engine = create_engine(
         DATABASE_URL,
         echo=False,              # Set True for SQL-debug output
+        poolclass=NullPool,
         connect_args={"check_same_thread": False},  # Required for SQLite + threads
     )
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, connection_record):
+        """Pragmas je Connection (bei connect: journal_mode greift nur
+        außerhalb eines Transaktionskontexts).
+
+        - WAL: Reader und Writer blockieren sich nicht mehr gegenseitig.
+          Ohne WAL (journal_mode=delete) hat eine einzige gehaltene
+          Read-Connection (z. B. eine Session während eines mehrminütigen
+          LLM-Calls) alle Writes mit „database is locked“ blockiert.
+        - busy_timeout: bis zu 10 s auf eine Sperre warten (z. B. vom
+          Compute-Agenten), statt 5 s wie pysqlite-Default.
+        """
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=10000")
+        cur.close()
 else:
     engine = create_engine(
         DATABASE_URL,

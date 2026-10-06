@@ -1225,6 +1225,12 @@ async def ai_generate_task(
             ("text_template", gen_text_template),
             ("model_solution", gen_solution),
         ) if active]
+
+        # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+        # Session sie die gesamte Generierung; s. database/base.py). Der
+        # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+        session.rollback()
+
         result = await llm_service.generate_task_fields(
             topic=body.get("topic", ""),
             difficulty=body.get("difficulty", "mittel"),
@@ -1271,6 +1277,12 @@ async def ai_generate_task(
             code_fields.append("description")
         if gen_title:
             code_fields.append("title")
+
+        # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+        # Session sie die gesamte Generierung; s. database/base.py). Der
+        # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+        session.rollback()
+
         result = await llm_service.generate_code_task_fields(
             topic=body.get("topic", ""),
             difficulty=body.get("difficulty", "mittel"),
@@ -1334,6 +1346,11 @@ async def ai_generate_task(
                     _mc_tutor_view(existing_mc), ensure_ascii=False)
             except McValidationError:
                 pass
+
+        # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+        # Session sie die gesamte Generierung; s. database/base.py). Der
+        # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+        session.rollback()
 
         result = await llm_service.generate_mc_task_fields(
             topic=body.get("topic", ""),
@@ -1481,6 +1498,12 @@ async def ai_generate_task(
                         if isinstance(st, dict) and st.get("installed"):
                             a["installed_specs"].append(
                                 {"name": s["name"], "dockerfile": s["dockerfile"]})
+
+        # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+        # Session sie die gesamte Generierung; s. database/base.py). Der
+        # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+        session.rollback()
+
         ws_result = await llm_service.generate_workspace_task_fields(
             topic=body.get("topic", ""),
             difficulty=body.get("difficulty", "mittel"),
@@ -2167,6 +2190,11 @@ async def generate_course_report(
 
     # LLM-Config ermitteln
     llm_config = get_effective_llm_config(session, course_id)
+
+    # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+    # Session sie die gesamte Generierung; s. database/base.py). Der
+    # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+    session.rollback()
 
     # Report generieren
     logger.info(f"Generate course report for {course.name}: {len(tasks)} tasks, {len(students)} students")

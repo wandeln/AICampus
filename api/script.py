@@ -1039,6 +1039,13 @@ async def ai_generate_section(
     current_title = (body.get("current_title") or "").strip()
     current_content = (body.get("current_content") or "").strip()
     llm_cfg = get_effective_llm_config(session, course_id)
+    references = build_references_text(session, course_id)
+
+    # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+    # Session sie die gesamte Generierung; s. database/base.py). Der
+    # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+    session.rollback()
+
     result = await llm_service.generate_script_section(
         course_name=course.name,
         topic=(body.get("topic") or "").strip(),
@@ -1048,7 +1055,7 @@ async def ai_generate_section(
         other_chapters=other_chapters,
         unused_media=unused_media,
         course_tasks=course_tasks,
-        references=build_references_text(session, course_id),
+        references=references,
         config=llm_cfg,
     )
     if not result.get("success"):

@@ -289,6 +289,12 @@ async def generate_applet_llm(
         image_url = image_data_url
 
     llm_cfg = dict(get_effective_llm_config(session, course_id))
+
+    # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+    # Session sie die gesamte Generierung; s. database/base.py). Der
+    # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+    session.rollback()
+
     result = await llm_service.generate_applet(
         prompt=prompt,
         existing_html=existing_html,
@@ -437,6 +443,12 @@ async def generate_media_metadata(
 
     image_base64 = base64.b64encode(path.read_bytes()).decode("ascii")
     llm_cfg = get_effective_llm_config(session, course_id)
+
+    # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+    # Session sie die gesamte Generierung; s. database/base.py). Der
+    # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+    session.rollback()
+
     result = await llm_service.describe_media_image(
         image_base64=image_base64,
         mime_type=media.mime_type or "image/png",

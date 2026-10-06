@@ -257,6 +257,13 @@ async def ai_generate_slide_deck(
         else current_content
     )
     llm_cfg = get_effective_llm_config(session, course_id)
+    references = build_references_text(session, course_id)
+
+    # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
+    # Session sie die gesamte Generierung; s. database/base.py). Der
+    # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
+    session.rollback()
+
     result = await llm_service.generate_slide_deck(
         course_name=course.name,
         topic=(body.get("topic") or "").strip(),
@@ -267,7 +274,7 @@ async def ai_generate_slide_deck(
         chapters=chapters,
         course_media=course_media,
         course_tasks=course_tasks,
-        references=build_references_text(session, course_id),
+        references=references,
         config=llm_cfg,
     )
     if not result.get("success"):
