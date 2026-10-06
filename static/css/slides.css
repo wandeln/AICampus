@@ -59,22 +59,27 @@
 }
 
 /* layout: center (Titelfolien) — vertikal + horizontal zentriert.
-   Nur .present, damit Reveal's display:none für inaktive Folien erhalten
-   bleibt. display:flex braucht !important: Reveal setzt auf der aktiven
-   Folie inline "display: block" (überschreibt die CSS-Regel ohne !important).
+   Für ALLE Zustände (nicht nur .present): Die display-Umschaltung
+   block↔flex beim past/present-Klassenwechsel würde die Zentrierung
+   erst ZU Beginn der Transition umlegen → der Inhalt sprang während des
+   Übergangs in die Ecke (und beim Ausgangs-Slide zurück), ein sichtbarer
+   „komischer Übergang“. Immer-flex entfernt den Reflow; inaktive Folien
+   bleiben unsichtbar (reveal.css: opacity:0 + pointer-events:none, der
+   z-index unter .present).
+   display:flex braucht !important: Reveal's SlideContent.load() setzt
+   inline „display:block“ auf jede geladene Folie (config.display-Default)
+   — nur !important schlägt das Inline. Folien außerhalb der viewDistance
+   (unload: inline display:none) werden damit zwar nicht mehr ausgeblendet,
+   aber sie sind opacity:0/pointer-events:none und Center-Folien sind kurze
+   Titelfolien ohne eingebettete Inhalte → Layout-Aufwand vernachlässigbar.
    .slides-stack > section: „--“-Unterfolien — der Child-Selektor „> section"
    allein trifft sie nicht (ihr Parent ist der Stack-Container). */
-.reveal .slides > section.present.layout-center,
-.reveal .slides section.slides-stack > section.present.layout-center {
+.reveal .slides > section.layout-center,
+.reveal .slides section.slides-stack > section.layout-center {
   display: flex !important;
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  text-align: center;
-}
-
-.reveal .slides > section.layout-center,
-.reveal .slides section.slides-stack > section.layout-center {
   text-align: center;
 }
 

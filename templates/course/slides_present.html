@@ -219,6 +219,10 @@ if (HAS_NOTES) {
   // Zitations-Links → auto-Quellen-Folie (Click-Handler in slides.js)
   aicampusRegisterSlideReveal(document.getElementById("reveal-root"), reveal);
 
+  // Per-Slide-Transition: transition: fade|slide|zoom|none auf der ZIEL-Folie
+  // gilt für den ganzen Wechsel (s. wirePerSlideTransitions in slides.js).
+  wirePerSlideTransitions(reveal, document.getElementById("reveal-root"));
+
   // Visuelle Fragment-Reihenfolge (KaTeX-Underbraces): neu ableiten,
   // sobald eine Folie gelayoutet ist (beim Markdown-Render sind die
   // Sections noch display:none). Print-Modus: alle Folien, sobald

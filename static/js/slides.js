@@ -505,6 +505,63 @@ async function buildSlideSection(slide, footerText, slidePos) {
   return section;
 }
 
+// transition-Werte, die reveal.css als Wrapper-Klasse kennt (s. reveal.css:
+// .reveal.slide / .reveal.fade / .reveal.none / …). Mehr als wir in
+// SLIDE_TRANSITIONS exponieren, damit auch fremde data-transition-Werte
+// sauber geräumt/gesetzt werden.
+const SLIDE_TRANSITION_CLASSES = ["none", "fade", "slide", "convex", "concave", "zoom", "linear"];
+
+/**
+ * Per-Slide-Transition (transition: fade|slide|zoom|none) intuitiv machen:
+ * Reveal's data-transition wirkt CSS-seitig NUR auf die eigene Sektion —
+ * die AUSSCHIEDENDE Folie animiert mit ihrer eigenen Transition bzw. (bei
+ * Standard-Auto-Animate-Folien ohne data-transition) mit der GLOBALEN
+ * Wrapper-Klasse (config.transition). Ohne Korrektur: hybride Übergänge
+ * (Ausgang global slide + Eintreffen fade) und „transition: none“ schneidet
+ * nur die Zielfolie ab, während die Ausgangsfolie noch wegglipt.
+ *
+ * Korrektur: Die explizite Transition der ZIEL-Folie gilt für den ganzen
+ * Wechsel — beim beforeslidechange (feuert VOR updateSlides(), also noch
+ * vor der past/present-Klassenänderung → ein einziger Style-Recalc mit
+ * finaler Wrapper-Klasse) wird die Wrapper-Klasse auf die
+ * Ziel-Transition gesetzt. Ohne explizite Ziel-Transition gilt die
+ * Deck-Standard-Transition (config.transition). Auto-Animate-Paare (beide
+ * Folien data-auto-animate) laufen über Reveal's AutoAnimate mit
+ * disable-slide-transitions und sind von der Wrapper-Klasse unabhängig.
+ *
+ * Pro Reveal-Instanz aufrufen (Editor: pro renderPreview — configure()
+ * räumt nur die eigene Config-Transition auf, nicht Reste älterer
+ * Instanzen; deshalb setzt der Start-Reset unten die Wrapper-Klasse
+ * aktiv zurück).
+ */
+function wirePerSlideTransitions(reveal, revealRootEl) {
+  const global = reveal.getConfig().transition || "none";
+  const setWrapper = (name) => {
+    if (SLIDE_TRANSITION_CLASSES.indexOf(name) === -1) name = global;
+    SLIDE_TRANSITION_CLASSES.forEach((c) => revealRootEl.classList.remove(c));
+    revealRootEl.classList.add(name);
+  };
+  setWrapper(global);
+  reveal.on("beforeslidechange", (ev) => {
+    // Indexe je nach Reveal-Version im Event selbst oder in ev.detail
+    const h = ev.indexh ?? (ev.detail && ev.detail.indexh);
+    const v = ev.indexv ?? (ev.detail && ev.detail.indexv);
+    if (h == null) return;
+    const slidesEl = revealRootEl.querySelector(".slides");
+    if (!slidesEl) return;
+    let dest = slidesEl.querySelectorAll(":scope > section")[h];
+    if (!dest) return;
+    // Vertikaler Stack: Ziel = die aktive Unterfolie (Index aus dem
+    // Event, geclamped).
+    const vSlides = dest.querySelectorAll(":scope > section");
+    if (vSlides.length) {
+      dest = vSlides[Math.max(0, Math.min(v | 0, vSlides.length - 1))] || dest;
+    }
+    const t = dest.getAttribute("data-transition");
+    setWrapper(SLIDE_TRANSITION_CLASSES.indexOf(t) !== -1 ? t : global);
+  });
+}
+
 /**
  * Folien-Hintergrund-Zoom ({zoom=X} bei background: ![…](….html/Website)):
  * Reveal legt das Bg-Iframe mit 100%×100% an und skaliert es nicht
