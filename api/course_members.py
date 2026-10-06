@@ -288,7 +288,7 @@ async def update_member_annotation(
     session.commit()
 
     return {
-        "message": "Annotation aktualisiert.",
+        "message": "Gruppe aktualisiert.",
         "membership": {
             "user_id": membership.user_id,
             "username": membership.user.username if membership.user else "unknown",

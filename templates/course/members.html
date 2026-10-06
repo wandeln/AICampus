@@ -28,7 +28,7 @@
             <tr>
               <th class="text-left px-4 py-2 font-semibold">Name</th>
               <th class="text-left px-4 py-2 font-semibold">Username</th>
-              <th class="text-left px-4 py-2 font-semibold">Annotation</th>
+              <th class="text-left px-4 py-2 font-semibold">Gruppe</th>
               <th class="text-center px-4 py-2 font-semibold">Rolle</th>
               <th class="text-center px-4 py-2 font-semibold">Aktionen</th>
             </tr>
@@ -55,7 +55,7 @@
                   value="{{ member.annotation or '' }}"
                   placeholder="z.B. ÜG-1"
                   data-user-id="{{ member.user_id }}"
-                  title="Freie Anmerkung (z.B. Übungsgruppe) – wird beim Tippen automatisch gespeichert"
+                  title="Gruppe (z.B. Übungsgruppe) – wird beim Tippen automatisch gespeichert"
                   oninput="onAnnotationInput(this)">
               </td>
               <td class="px-4 py-3 text-center">
@@ -373,7 +373,7 @@
       });
       const data = await res.json();
       if (!res.ok) {
-        showToast(data.detail || 'Annotation konnte nicht gespeichert werden.', 'error');
+        showToast(data.detail || 'Gruppe konnte nicht gespeichert werden.', 'error');
         return;
       }
       // data-search des Rows aktualisieren (Annotation ist suchbar)

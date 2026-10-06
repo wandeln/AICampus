@@ -21,7 +21,7 @@
   <div class="card mb-6">
     <div class="flex items-center gap-4 flex-wrap">
         <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1" title="Studenten nach Annotation in der Mitgliederübersicht filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht vom Wortanfang (z.B. 'ÜG' → 'ÜG1' und 'ÜG-1'; '1' matcht aber nicht 'Jahrgang 2001').">Annotation / Übungsgruppe</label>
+            <label class="block text-sm font-medium text-gray-700 mb-1" title="Studenten nach ihrer Gruppe (wie in der Mitgliederübersicht hinterlegt) filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht vom Wortanfang (z.B. 'ÜG' → 'ÜG1' und 'ÜG-1'; '1' matcht aber nicht 'Jahrgang 2001').">Gruppe</label>
             <input type="text" id="annotation-filter" placeholder="z.B. ÜG-1"
                     class="border border-gray-300 rounded-lg px-3 py-2 text-sm w-[240px] focus:ring-2 focus:ring-blue-500">
         </div>
@@ -184,7 +184,7 @@
     let headerHtml = '<tr class="bg-gray-100">';
     headerHtml += '<th class="text-left py-3 px-4 font-semibold text-gray-700 border-b sticky left-0 bg-gray-100 z-10 min-w-[180px]">Name</th>';
     headerHtml += '<th class="text-left py-3 px-4 font-semibold text-gray-700 border-b min-w-[120px]">Matr.-Nr.</th>';
-    headerHtml += '<th class="text-left py-3 px-4 font-semibold text-gray-700 border-b min-w-[120px]">Annotation</th>';
+    headerHtml += '<th class="text-left py-3 px-4 font-semibold text-gray-700 border-b min-w-[120px]">Gruppe</th>';
 
     data.tasks.forEach((task, i) => {
       const typeBadge = {

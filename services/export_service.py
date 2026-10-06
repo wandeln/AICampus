@@ -57,7 +57,7 @@ class ExportService:
 
         Structure:
           Row 1: Course header (merged)
-          Row 2: Headers (Name, Matr.-Nr., Annotation, Task1, Task2, ..., Summe, Anteil)
+          Row 2: Headers (Name, Matr.-Nr., Gruppe, Task1, Task2, ..., Summe, Anteil)
           Row 3+: Data (name, matrnr, annotation, points, ..., SUM-formula, %-formula)
 
         Summe und Anteil werden als Excel-Formeln berechnet!
@@ -96,7 +96,7 @@ class ExportService:
         header_fill = self.HEADER_FILL
         header_font = self.HEADER_FONT
 
-        headers = ["Name", "Matr.-Nr.", "Annotation"]
+        headers = ["Name", "Matr.-Nr.", "Gruppe"]
         for task in tasks:
             headers.append(task.title)
         headers.extend(["Summe", "Anteil (%)"])
