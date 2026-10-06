@@ -267,7 +267,7 @@
             <span>Account-Einstellungen</span>
           </a>
           {% if is_admin %}
-          <a href="/admin" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-semibold bg-yellow-500 text-yellow-900 hover:bg-yellow-400 transition">
+          <a href="/admin" class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-semibold bg-yellow-500 text-yellow-900 hover:bg-yellow-400 transition mt-1.5">
             <span class="w-4 shrink-0 min-w-0 text-center">🔧</span>
             <span>Admin-Konsole</span>
           </a>
@@ -278,7 +278,7 @@
             hx-swap="none"
             hx-on::after-request="window.location.href = '/login'"
             onclick="closeUserMenu()"
-            class="flex w-full items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-blue-100 hover:bg-blue-600 transition text-left"
+            class="flex w-full items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-blue-100 hover:bg-blue-600 transition text-left mt-1.5"
           >
             <span class="w-4 shrink-0 min-w-0 text-center">🔑</span>
             <span>Abmelden</span>
