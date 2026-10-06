@@ -33,7 +33,7 @@ from fastapi.templating import Jinja2Templates
 from jinja2 import TemplateNotFound
 from sqlmodel import Session, func, select
 
-from config import BASE_DIR, DEBUG, LLM_TIMEOUT, PREVIEW_BASE_DOMAIN
+from config import BASE_DIR, DEBUG, LLM_TIMEOUT, PREVIEW_BASE_DOMAIN, VAPID_PUBLIC_KEY, push_enabled
 from database.base import create_db_and_tables, engine, get_session, migrate_schema
 from database.models import (
     Course,
@@ -74,7 +74,7 @@ from services.slides_service import (
     slide_count,
 )
 
-from api import admin, auth, forum, importer, image_specs, media as media_api, materials as materials_api, notifications as notifications_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
+from api import admin, auth, forum, importer, image_specs, media as media_api, materials as materials_api, notifications as notifications_api, push as push_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
 
 
 def _calculate_percentile(my_score: float, other_scores: list[float]) -> int:
@@ -266,6 +266,21 @@ def _asset(path: str) -> str:
 
 templates.env.globals["asset"] = _asset
 
+# Web Push (M3): Status + öffentlicher VAPID-Key für das Frontend
+# („Push aktivieren“-Button im Glocken-Menü + SW-Registration).
+# Evaluierung beim Import ist okay: uvicorn startet neu bei jedem Reload.
+templates.env.globals["push_config"] = {
+    "enabled": push_enabled(),
+    "public_key": VAPID_PUBLIC_KEY if push_enabled() else "",
+}
+
+
+@app.get("/sw.js", include_in_schema=False)
+async def service_worker():
+    """Service Worker (M3: Web Push). Muss auf / liegen: Nur dann
+    deckt das SW-Scope die ganze App ab und Push/Click greifen überall."""
+    return FileResponse(BASE_DIR / "static/sw.js", media_type="application/javascript")
+
 
 def _public_base_url(request: Request) -> str:
     """Öffentliche Basis-URL (canonical, og:url, Sitemap-Verweis).
@@ -348,6 +363,7 @@ app.include_router(script_api.router)
 app.include_router(forum.router)
 app.include_router(script_questions.router)
 app.include_router(notifications_api.router)  # /api/notifications/… (in-App-Glocke)
+app.include_router(push_api.router)  # /api/push/… (M3: Browser-Push-Subscriptions)
 app.include_router(versions_api.router)  # /api/versions/… (Versions-History + Autosave)
 app.include_router(importer.router)
 app.include_router(preview_proxy.router)  # /preview/{task}/{port}/… (same-origin)

@@ -119,6 +119,25 @@
     {% endif %}
   </div>
 
+  <!-- Push-Benachrichtigungen (M3) -->
+  {% if push_config.enabled %}
+  <div class="bg-white rounded-xl shadow-md border border-gray-200 p-6 mb-6">
+    <h2 class="text-lg font-semibold text-gray-700 mb-2">🔔 Push-Benachrichtigungen</h2>
+    <p class="text-sm text-gray-600">
+      Erhalte eine Push-Nachricht auf diesem Gerät, wenn AICampus im Hintergrund
+      ist — z.&nbsp;B. bei neuen Foren-Nachrichten, Antworten auf deine
+      Skript-Fragen oder fertigem LLM-Feedback.
+    </p>
+    <div id="push-settings-body" class="mt-4 hidden">
+      <p id="push-settings-status" class="text-sm mb-3"></p>
+      <button type="button" id="push-settings-btn" class="px-4 py-2 rounded-lg text-sm font-medium transition"></button>
+    </div>
+    <p id="push-settings-unsupported" class="mt-4 text-sm text-gray-400 hidden">
+      Dieser Browser kann keine Web-Push-Nachrichten anzeigen.
+    </p>
+  </div>
+  {% endif %}
+
   <!-- Dangerzone -->
   <div class="bg-white rounded-xl shadow-md border border-red-200 p-6 mb-6">
     <h2 class="text-lg font-semibold text-red-600 mb-2">⚠️ Dangerzone</h2>
@@ -299,6 +318,91 @@
       }
     });
   }
+  // ─── Push-Benachrichtigungen (M3) ─────────────────────────────
+  (function initPushSettings() {
+    const body = document.getElementById('push-settings-body');
+    if (!body) return;
+    const unsupported = document.getElementById('push-settings-unsupported');
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+      unsupported.classList.remove('hidden');
+      return;
+    }
+    const statusEl = document.getElementById('push-settings-status');
+    const btn = document.getElementById('push-settings-btn');
+    const PUBLIC_KEY = "{{ push_config.public_key }}";
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+      return Uint8Array.from([...window.atob(base64)].map((c) => c.charCodeAt(0)));
+    }
+
+    async function render() {
+      let sub = null;
+      const reg = await navigator.serviceWorker.getRegistration('/');
+      if (reg) {
+        try { sub = await reg.pushManager.getSubscription(); } catch { /* SW noch aktivierend */ }
+      }
+      body.classList.remove('hidden');
+      if (sub) {
+        statusEl.innerHTML = '<span class="text-emerald-600">●</span> <span class="text-gray-700">Aktiv auf diesem Gerät</span>';
+        btn.textContent = 'Push-Benachrichtigungen abschalten';
+        btn.className = 'border border-gray-300 text-gray-700 hover:bg-gray-100 px-4 py-2 rounded-lg text-sm font-medium transition';
+        btn.dataset.action = 'off';
+      } else if (Notification.permission === 'denied') {
+        statusEl.innerHTML = '<span class="text-red-500">●</span> <span class="text-gray-500">Im Browser blockiert — unter Adressleiste → Site-Einstellungen → Benachrichtigungen erlauben.</span>';
+        btn.classList.add('hidden');
+      } else {
+        statusEl.innerHTML = '<span class="text-gray-400">●</span> <span class="text-gray-500">Nicht aktiv auf diesem Gerät</span>';
+        btn.textContent = 'Push-Benachrichtigungen aktivieren';
+        btn.className = 'bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition';
+        btn.dataset.action = 'on';
+      }
+    }
+
+    btn.addEventListener('click', async () => {
+      try {
+        if (btn.dataset.action === 'off') {
+          const reg = await navigator.serviceWorker.ready;
+          const sub = await reg.pushManager.getSubscription();
+          if (sub) {
+            await sub.unsubscribe();
+            await fetch('/api/push/unsubscribe', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ endpoint: sub.endpoint }),
+            }).catch(() => {});
+          }
+          showToast('Push-Benachrichtigungen abgeschaltet.', 'success');
+        } else {
+          const perm = await Notification.requestPermission();
+          if (perm !== 'granted') { render(); return; }
+          const reg = await navigator.serviceWorker.ready;
+          const sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(PUBLIC_KEY),
+          });
+          await fetch('/api/push/subscribe', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(sub),
+          }).catch(() => {});
+          showToast('Push-Benachrichtigungen aktiviert.', 'success');
+        }
+        render();
+      } catch (err) {
+        showToast('Fehler: ' + err.message, 'error');
+      }
+    });
+
+    navigator.serviceWorker.getRegistration('/').then((reg) => {
+      if (!reg) { unsupported.classList.remove('hidden'); return; }
+      render();
+    }).catch(() => { unsupported.classList.remove('hidden'); });
+  })();
+
   // ─── Account löschen (Dangerzone) ──────────────────────────────
   const deleteBtn = document.getElementById('delete-account-btn');
   if (deleteBtn) {

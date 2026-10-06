@@ -12,12 +12,16 @@ darf den Hauptpfad (Forum-Post, Antwort, Grading) niemals brechen.
 """
 
 import asyncio
+import json
 import logging
+import threading
 from typing import Any, Iterable, Optional
 
 from sqlmodel import Session, select
 
-from database.models import Course, Notification, User, UserCourse
+from config import PUSH_APP_URL, VAPID_PRIVATE_KEY, push_enabled
+from database.base import engine
+from database.models import Course, Notification, PushSubscription, User, UserCourse
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +152,7 @@ def _create_many(
     session.commit()
     for n in rows:
         _push(n.user_id, _payload(n))
+        _schedule_webpush(n.user_id, n)
 
 
 def course_member_ids(session: Session, course_id: int) -> list[int]:
@@ -236,6 +241,75 @@ def notify_script_question_answer(
     except Exception:
         session.rollback()
         logger.exception("[Notifications] Skript-Frage-Antwort (Kurs %s) fehlgeschlagen.", course_id)
+
+
+# ─── Web Push (M3): Browser-Push via FCM (pywebpush) ─────────
+
+
+def _send_webpush_sync(user_id: int, payload: dict[str, Any]) -> None:
+    """Benachrichtigung an alle gespeicherten Push-Subscriptions eines
+    Users senden (blockiert → läuft immer im Thread-Pool).
+
+    Defensiv wie der Rest des Moduls: Fehler dürfen den Hauptpfad nicht
+    berühren. 404/410 vom Push-Service = Endpoint tot → Subscription
+    wird entfernt (sonst würde jede Nachricht an sie verloren gehen).
+    """
+    try:
+        from pywebpush import WebPushException, webpush
+
+        with Session(engine) as session:
+            subs: list[PushSubscription] = list(
+                session.exec(select(PushSubscription).where(PushSubscription.user_id == user_id)).all()
+            )
+        for sub in subs:
+            try:
+                webpush(
+                    subscription_info={
+                        "endpoint": sub.endpoint,
+                        "keys": {"p256dh": sub.p256dh, "auth": sub.auth},
+                    },
+                    data=json.dumps(payload, ensure_ascii=False),
+                    vapid_private_key=VAPID_PRIVATE_KEY,
+                    # sub: kanonische URL OHNE trailing slash (py-vapid-Regex)
+                    vapid_claims={"sub": PUSH_APP_URL},
+                    ttl=300,  # 5 min: kurz offline darf nichts verloren gehen, mehr nicht
+                )
+            except WebPushException as e:
+                status = e.response.status_code if e.response is not None else None
+                if status in (404, 410):
+                    with Session(engine) as session:
+                        row = session.get(PushSubscription, sub.id)
+                        if row:
+                            session.delete(row)
+                            session.commit()
+                    logger.info("[Push] Subscription %s entfernt (Endpoint tot, HTTP %s).", sub.id, status)
+                else:
+                    logger.warning("[Push] Zustellung an Subscription %s fehlgeschlagen (HTTP %s).", sub.id, status)
+    except Exception:
+        logger.exception("[Push] Versand (User %s) fehlgeschlagen.", user_id)
+
+
+def _schedule_webpush(user_id: int, n: Notification) -> None:
+    """Browser-Push für eine neue Benachrichtigung anlegen (nie blockierend).
+
+    Im Event-Loop → Thread-Pool; ohne Loop (z. B. aus einem
+    Hintergrund-Thread des Grading-Flows) → eigener Daemon-Thread.
+    """
+    if not push_enabled():
+        return
+    payload = {
+        "title": n.title,
+        "body": n.body,
+        "url": n.link,
+        "id": n.id,
+        "tag": str(n.id),
+    }
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        threading.Thread(target=_send_webpush_sync, args=(user_id, payload), daemon=True).start()
+        return
+    loop.run_in_executor(None, _send_webpush_sync, user_id, payload)
 
 
 def notify_llm_feedback(

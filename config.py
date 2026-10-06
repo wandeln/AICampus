@@ -116,6 +116,23 @@ COMPUTE_AGENT_KEY = os.getenv("COMPUTE_AGENT_KEY", "")
 # Der nackte Hardcoded-Default oben gilt nicht als Deklaration.
 COMPUTE_AGENT_URL_EXPLICIT = "COMPUTE_AGENT_URL" in os.environ
 
+# ─── Web Push (M3: Browser-Push via FCM/VAPID) ─────────────────
+# Einmalig generiertes ECDSA P-256 Paar (base64url). Der Private Key
+# signiert die VAPID-JWT für den FCM-Web-Push-Endpunkt (verlässt den
+# Server nie); der Public Key wird an die Browser ausgegeben
+# (PushManager.subscribe). PUSH_APP_URL = kanonische Site-URL,
+# dient als VAPID-"sub"-Claim. Push ist nur aktiv, wenn alle drei
+# Werte gesetzt sind → sonst wird das Feature sauber ausgeblendet.
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
+PUSH_APP_URL = os.getenv("PUSH_APP_URL", "").strip().rstrip("/")
+
+
+def push_enabled() -> bool:
+    """Web Push verfügbar? (Keys + Site-URL in .env gesetzt)"""
+    return bool(VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY and PUSH_APP_URL)
+
+
 # ─── Frontend ───────────────────────────────────────────────────
 CODEMIRROR_THEME = os.getenv("CODEMIRROR_THEME", "dracula")
 CODEMIRROR_VERSION = "5.65.16"

@@ -18,6 +18,9 @@ ldap3==2.9.1  # Pure-Python LDAP client (works without compilation)
 # LLM
 openai==1.61.1
 
+# Web Push (M3): Browser-Push via FCM mit VAPID-JWT
+pywebpush==2.5.0
+
 # Excel Export
 openpyxl==3.1.5
 

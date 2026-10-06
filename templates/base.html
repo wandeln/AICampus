@@ -164,6 +164,19 @@
         </button>
 
         <div id="notif-menu" class="hidden absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-xl bg-blue-700 border border-blue-500/50 shadow-2xl">
+          {# M3: Browser-Push — ganz oben im Menü, nur wenn VAPID-Keys
+             konfiguriert sind. Initially hidden; JS zeigt es je nach
+             Subscription-Status (bei aktivem Push wird in den
+             User-Settings verwalten). #}
+          {% if push_config.enabled %}
+          <div id="notif-push-row" class="hidden p-1.5 border-b border-blue-500/50">
+            <button type="button" id="notif-push-btn"
+                    class="flex w-full items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-blue-200 hover:bg-blue-600 hover:text-white transition">
+              <span class="w-4 shrink-0 text-center">🔔</span>
+              <span id="notif-push-label">Push-Benachrichtigungen aktivieren</span>
+            </button>
+          </div>
+          {% endif %}
           <div class="flex items-center justify-between px-3 py-2 border-b border-blue-500/50">
             <span class="text-sm font-semibold">Benachrichtigungen</span>
             <button type="button" id="notif-read-all" class="text-xs text-blue-200 hover:text-white transition">
@@ -171,7 +184,7 @@
             </button>
           </div>
           <div id="notif-list" class="notif-scroll max-h-96 overflow-y-auto p-1.5 space-y-1"></div>
-          <div class="border-t border-blue-500/50 p-1.5">
+          <div class="border-t border-blue-500/50 p-1.5 space-y-0.5">
             <a href="/notifications/archive"
                class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-blue-200 hover:bg-blue-600 hover:text-white transition">
               <span class="w-4 shrink-0 text-center">🗂️</span>
@@ -495,6 +508,72 @@
           if (!document.hidden) fetchNotifications();
           scheduleNotifPoll();
         }, sseAlive ? 30000 : 15000);
+      })();
+
+      // ─── Web Push (M3): Browser-Push via FCM ──────────────────
+      // Button oben im Glocken-Menü: Permission holen → SW-Subscription
+      // anlegen → ans Backend melden. Ist Push aktiv, verwaltet die
+      // User-Settings-Karte (über der Dangerzone) das Abschalten.
+      (function initPush() {
+        const row = document.getElementById("notif-push-row");
+        if (!row) return;
+        if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+          return; // Browser ohne Web-Push → Row bleibt hidden
+        }
+        const btn = document.getElementById("notif-push-btn");
+        const label = document.getElementById("notif-push-label");
+        const PUBLIC_KEY = "{{ push_config.public_key }}";
+
+        function urlBase64ToUint8Array(base64String) {
+          const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+          const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+          const rawData = window.atob(base64);
+          return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+        }
+
+        async function render() {
+          let sub = null;
+          const reg = await navigator.serviceWorker.getRegistration("/");
+          if (reg) {
+            try { sub = await reg.pushManager.getSubscription(); } catch { /* SW noch aktivierend */ }
+          }
+          if (sub) {
+            row.style.display = "none"; // aktiv → in den User-Settings verwalten
+            return;
+          }
+          row.style.display = "block";
+          if (Notification.permission === "denied") {
+            btn.classList.add("opacity-60", "pointer-events-none");
+            label.textContent = "Push im Browser erlauben (Adressleiste)";
+          } else {
+            btn.classList.remove("opacity-60", "pointer-events-none");
+            label.textContent = "Push-Benachrichtigungen aktivieren";
+          }
+        }
+
+        btn.addEventListener("click", () => {
+          (async () => {
+            const perm = await Notification.requestPermission();
+            if (perm !== "granted") { render(); return; }
+            const reg = await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: urlBase64ToUint8Array(PUBLIC_KEY),
+            });
+            await fetch("/api/push/subscribe", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(sub),
+            }).catch(() => {});
+            render();
+          })().catch(() => {});
+        });
+
+        navigator.serviceWorker
+          .register("/sw.js")
+          .then(() => render())
+          .catch(() => {}); // SW nicht möglich (z. B. kein HTTPS) → Row bleibt hidden
       })();
     </script>
   </nav>

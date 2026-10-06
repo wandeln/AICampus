@@ -1228,3 +1228,24 @@ class Notification(SQLModel, table=True):
     link: str = Field(default="", max_length=300)
     read_at: Optional[datetime] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.now, index=True)
+
+
+class PushSubscription(SQLModel, table=True):
+    """Browser-Web-Push-Subscription (M3): eine Zeile pro Browser/Gerät.
+
+    Der Service Worker (static/sw.js) meldet die PushManager-Subscription
+    per POST /api/push/subscribe; das Endpoint-URL (FCM) ist pro Gerät
+    eindeutig und dient als Dedupe-Key. Der Server braucht nur endpoint
+    + p256dh/auth, um per pywebpush (VAPID-JWT) eine Push-Nachricht zu
+    verschicken. Neue Tabelle wird beim App-Start per create_all angelegt.
+    """
+
+    __tablename__ = "push_subscriptions"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    endpoint: str = Field(unique=True, max_length=500)
+    p256dh: str = Field(max_length=255)  # E2E-Verschlüsselung (AES128GCM)
+    auth: str = Field(max_length=255)
+    user_agent: str = Field(default="", max_length=300)
+    created_at: datetime = Field(default_factory=datetime.now)
