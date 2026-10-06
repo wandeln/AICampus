@@ -16,6 +16,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 from config import EXCEL_SHEET_NAME
 from database.models import Task, User
+from services.task_filter import multi_keyword_matches
 
 
 class ExportService:
@@ -73,8 +74,7 @@ class ExportService:
 
         # ─── Filter Tasks wenn nötig ────────────────────────────
         if filter_text:
-            filter_lower = filter_text.lower()
-            tasks = [t for t in tasks if filter_lower in t.title.lower()]
+            tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
 
         num_tasks = len(tasks)
 

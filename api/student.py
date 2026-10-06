@@ -44,6 +44,7 @@ from services.llm_service import LLMService
 from services.media_service import all_media_for_course
 from services.sandbox_runner import SandboxedRunner
 from services.settings_resolver import get_effective_llm_config
+from services.task_filter import multi_keyword_matches
 from services.workspace_service import (
     MAX_FILE_BYTES,
     effective_file_access,
@@ -1076,7 +1077,7 @@ async def get_my_points(
     ).all()
 
     if filter_text:
-        tasks = [t for t in tasks if filter_text.lower() in t.title.lower()]
+        tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
     if type_filter:
         tasks = [t for t in tasks if t.task_type.value == type_filter]
 
@@ -1462,7 +1463,7 @@ async def generate_student_report(
     ).all())
 
     if filter_text:
-        tasks = [t for t in tasks if filter_text.lower() in t.title.lower()]
+        tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
     if type_filter:
         tasks = [t for t in tasks if t.task_type.value == type_filter]
 

@@ -20,15 +20,16 @@
   <!-- Filters -->
   <div class="card mb-6">
     <div class="flex items-center gap-4 flex-wrap">
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" title="Studenten nach Annotation in der Mitgliederübersicht filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht vom Wortanfang (z.B. 'ÜG' → 'ÜG1' und 'ÜG-1'; '1' matcht aber nicht 'Jahrgang 2001').">Annotation / Übungsgruppe</label>
+            <input type="text" id="annotation-filter" placeholder="z.B. ÜG-1"
+                    class="border border-gray-300 rounded-lg px-3 py-2 text-sm w-[240px] focus:ring-2 focus:ring-blue-500">
+        </div>
       <div class="flex-1 min-w-[200px]">
-        <label class="block text-sm font-medium text-gray-700 mb-1">Suche</label>
-        <input type="text" id="filter-input" placeholder="z.B. Blatt1, Rekursion..."
+        <label class="block text-sm font-medium text-gray-700 mb-1"
+               title="Aufgaben nach Titel filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht vom Wortanfang (z.B. 'Blatt rek' → 'Blatt 4: Rekursion'; '1' matcht aber nicht 'Teil 12').">Suche</label>
+        <input type="text" id="filter-input" placeholder="z.B. Blatt rek..."
                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1" title="Studenten nach Annotation in der Mitgliederübersicht filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht vom Wortanfang (z.B. 'ÜG' → 'ÜG1' und 'ÜG-1'; '1' matcht aber nicht 'Jahrgang 2001').">Annotation / Übungsgruppe</label>
-        <input type="text" id="annotation-filter" placeholder="z.B. ÜG-1"
-               class="border border-gray-300 rounded-lg px-3 py-2 text-sm w-[240px] focus:ring-2 focus:ring-blue-500">
       </div>
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">Aufgabentyp</label>
@@ -68,6 +69,15 @@
         <!-- Wird dynamisch per JS gefüllt -->
       </tbody>
     </table>
+  </div>
+
+  <!-- Keine Treffer (nur bei aktivem Filter, per JS eingeblendet) -->
+  <div id="filter-no-tasks" class="hidden text-center py-4">
+    <p class="text-gray-500 text-sm">🔍 Keine Aufgaben gefunden — Suchbegriff oder Aufgabentyp anpassen.</p>
+  </div>
+  <div id="filter-no-results" class="hidden text-center py-6">
+    <div class="text-4xl mb-3">🔍</div>
+    <p class="text-gray-500 text-sm">Keine Studierenden gefunden — Filter anpassen oder löschen.</p>
   </div>
 
   <!-- Legend -->
@@ -128,8 +138,13 @@
 
 {% block extra_scripts %}
 <script>
+  // Volldaten für die clientseitige Filterung (wird in loadOverview gesetzt)
+  let overviewData = null;
+
   // ─── Load Overview Data ─────────────────────────────────────
-  async function loadOverview(filterText = '', typeFilter = '', annotationFilter = '') {
+  // Immer Volldaten (alle Studenten x alle Aufgaben); die Filter laufen
+  // clientseitig (applyOverviewFilter) — kein neuer Request pro Eingabe.
+  async function loadOverview() {
     const loading = document.getElementById('loading-state');
     const tableContainer = document.getElementById('table-container');
 
@@ -137,11 +152,7 @@
     tableContainer.classList.add('hidden');
 
     try {
-      const params = new URLSearchParams({ filter_text: filterText });
-      if (typeFilter) params.set('type_filter', typeFilter);
-      if (annotationFilter) params.set('annotation_filter', annotationFilter);
-
-      const res = await fetch('/api/courses/' + courseId + '/overview?' + params, {
+      const res = await fetch('/api/courses/' + courseId + '/overview', {
         credentials: 'same-origin',
       });
 
@@ -152,8 +163,9 @@
         return;
       }
 
+      overviewData = data;
       renderTable(data);
-      renderStats(data);
+      applyOverviewFilter();
 
     } catch (err) {
       showToast('Fehler: ' + err.message, 'error');
@@ -174,11 +186,11 @@
     headerHtml += '<th class="text-left py-3 px-4 font-semibold text-gray-700 border-b min-w-[120px]">Matr.-Nr.</th>';
     headerHtml += '<th class="text-left py-3 px-4 font-semibold text-gray-700 border-b min-w-[120px]">Annotation</th>';
 
-    data.tasks.forEach(task => {
+    data.tasks.forEach((task, i) => {
       const typeBadge = {
         text: '📝', code: '💻', workspace: '🐳', mc: '🎯'
       }[task.task_type] || '📋';
-      headerHtml += '<th class="text-center py-3 px-3 font-semibold text-gray-700 border-b text-xs min-w-[120px]" title="' + task.title + '">' +
+      headerHtml += '<th data-task-idx="' + i + '" class="text-center py-3 px-3 font-semibold text-gray-700 border-b text-xs min-w-[120px]" title="' + task.title + '">' +
         typeBadge + ' ' + task.title + ' ' + task.max_points + 'P' +
       '</th>';
     });
@@ -193,13 +205,13 @@
 
     let bodyHtml = '';
     data.students.forEach(student => {
-      bodyHtml += '<tr class="hover:bg-gray-50 transition">';
+      bodyHtml += '<tr class="hover:bg-gray-50 transition" data-student-id="' + student.id + '" data-annotation="' + escapeHtml(student.annotation || '') + '">';
       bodyHtml += '<td class="py-2 px-4 font-medium text-gray-900 border-b sticky left-0 bg-white z-10 min-w-[180px]">' + student.name + '</td>';
       bodyHtml += '<td class="py-2 px-4 text-sm text-gray-500 border-b font-mono min-w-[120px]">' + student.username + '</td>';
       bodyHtml += '<td class="py-2 px-4 text-sm text-gray-500 border-b min-w-[120px]">' + (student.annotation ? escapeHtml(student.annotation) : '') + '</td>';
 
       let totalPoints = 0;
-      data.tasks.forEach(task => {
+      data.tasks.forEach((task, i) => {
         const points = data.scores[student.id]?.[task.id] || 0;
         const overridden = data.has_override?.[student.id]?.[task.id] || false;
         const submitted = data.has_submitted?.[student.id]?.[task.id] || false;
@@ -215,7 +227,7 @@
         const titleText = task.title + ': ' + points + '/' + task.max_points + (overridden ? ' (Tutor-Bewertung)' : '');
         const reviewUrl = '/courses/' + courseId + '/tasks/' + task.id + '/students/' + student.id + '/review';
 
-        bodyHtml += '<td class="py-2 px-3 text-center border-b ' + bgClass + ' font-mono text-sm cursor-pointer hover:opacity-80 hover:ring-2 hover:ring-blue-400 hover:rounded transition" title="' + titleText + '" onclick="window.location.href=\'' + reviewUrl + '\'">' +
+        bodyHtml += '<td data-task-idx="' + i + '" class="py-2 px-3 text-center border-b ' + bgClass + ' font-mono text-sm cursor-pointer hover:opacity-80 hover:ring-2 hover:ring-blue-400 hover:rounded transition" title="' + titleText + '" onclick="window.location.href=\'' + reviewUrl + '\'">' +
           displayVal + overrideBadge +
         '</td>';
       });
@@ -223,8 +235,8 @@
       const pctTotal = maxTotal > 0 ? (totalPoints / maxTotal * 100) : 0;
       const sumColor = pctTotal >= 80 ? 'text-green-700' : pctTotal >= 50 ? 'text-yellow-700' : 'text-red-700';
 
-      bodyHtml += '<td class="py-2 px-4 text-center font-bold border-b bg-blue-50 ' + sumColor + '">' + totalPoints + '</td>';
-      bodyHtml += '<td class="py-2 px-4 text-center font-bold border-b bg-blue-50 ' + sumColor + '">' + pctTotal.toFixed(1) + '%</td>';
+      bodyHtml += '<td data-sum-cell class="py-2 px-4 text-center font-bold border-b bg-blue-50 ' + sumColor + '">' + totalPoints + '</td>';
+      bodyHtml += '<td data-pct-cell class="py-2 px-4 text-center font-bold border-b bg-blue-50 ' + sumColor + '">' + pctTotal.toFixed(1) + '%</td>';
       bodyHtml += '</tr>';
     });
 
@@ -232,37 +244,22 @@
   }
 
   // ─── Render Summary Stats ───────────────────────────────────
-  function renderStats(data) {
+  // Werte werden clientseitig in applyOverviewFilter über die sichtbaren
+  // Zeilen x Spalten berechnet (selbe Semantik wie zuvor serverseitig).
+  function renderStats(count, sumTotals, maxPts, minPts, passed, filterActive) {
     const statsDiv = document.getElementById('summary-stats');
-    const students = data.students;
-    const tasks = data.tasks;
-    const maxTotal = tasks.reduce((sum, t) => sum + t.max_points, 0);
 
-    if (students.length === 0) {
-      statsDiv.innerHTML = '<p class="text-gray-400 col-span-4">Keine Studenten im Kurs.</p>';
+    if (count === 0) {
+      statsDiv.innerHTML = '<p class="text-gray-400 col-span-4 text-center">' +
+        (filterActive ? 'Keine Studierenden gefunden.' : 'Keine Studenten im Kurs.') + '</p>';
       return;
     }
 
-    // Calculate stats
-    let avgPoints = 0;
-    let maxPoints = 0;
-    let minPoints = Infinity;
-    let passed50 = 0;
-
-    students.forEach(student => {
-      const total = student.total_points || 0;
-      avgPoints += total;
-      if (total > maxPoints) maxPoints = total;
-      if (total < minPoints) minPoints = total;
-      if (maxTotal > 0 && total / maxTotal >= 0.5) passed50++;
-    });
-
-    avgPoints = students.length > 0 ? avgPoints / students.length : 0;
-    minPoints = minPoints === Infinity ? 0 : minPoints;
+    const avgPoints = sumTotals / count;
 
     statsDiv.innerHTML =
       '<div class="text-center p-3 rounded-lg bg-blue-50">' +
-        '<div class="text-2xl font-bold text-blue-600">' + students.length + '</div>' +
+        '<div class="text-2xl font-bold text-blue-600">' + count + '</div>' +
         '<div class="text-sm text-gray-500">Studenten</div>' +
       '</div>' +
       '<div class="text-center p-3 rounded-lg bg-green-50">' +
@@ -270,38 +267,120 @@
         '<div class="text-sm text-gray-500">Ø Punkte</div>' +
       '</div>' +
       '<div class="text-center p-3 rounded-lg bg-purple-50">' +
-        '<div class="text-2xl font-bold text-purple-600">' + maxPoints + ' / ' + minPoints + '</div>' +
+        '<div class="text-2xl font-bold text-purple-600">' + maxPts + ' / ' + minPts + '</div>' +
         '<div class="text-sm text-gray-500">Max / Min</div>' +
       '</div>' +
       '<div class="text-center p-3 rounded-lg bg-orange-50">' +
-        '<div class="text-2xl font-bold ' + (passed50 === students.length ? 'text-green-600' : 'text-orange-600') + '">' + passed50 + '</div>' +
+        '<div class="text-2xl font-bold ' + (passed === count ? 'text-green-600' : 'text-orange-600') + '">' + passed + '</div>' +
         '<div class="text-sm text-gray-500">≥ 50% erreicht</div>' +
       '</div>';
+  }
+
+  // ─── Filter (client-seitig: nur Zeilen/Spalten ausblenden, kein Request) ───
+  // Gleiche Semantik wie serverseitig (services/task_filter.py):
+  // alle leerzeichen-getrennten Begriffe müssen als Wort-Präfix vorkommen (UND).
+  function titleMatches(title, terms) {
+    const words = String(title).toLowerCase().split(/\s+/).filter(Boolean);
+    return terms.every(term => words.some(word => word.startsWith(term)));
+  }
+
+  function annotationMatches(annotation, filterText) {
+    const terms = filterText.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length || !annotation) return false;
+    const words = annotation.toLowerCase().split(/\s+/).filter(Boolean);
+    return terms.every(term => words.some(word => word.startsWith(term)));
+  }
+
+  function applyOverviewFilter() {
+    if (!overviewData) return;
+
+    const terms = document.getElementById('filter-input').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const typeFilter = document.getElementById('type-filter').value;
+    const annotationFilter = document.getElementById('annotation-filter').value.trim();
+    const filterActive = terms.length > 0 || typeFilter !== '' || annotationFilter !== '';
+
+    // 1. Aufgabenspalten (Titelsuche + Typ)
+    const visibleTasks = new Set();
+    overviewData.tasks.forEach((task, i) => {
+      if (titleMatches(task.title, terms) && (!typeFilter || task.task_type === typeFilter)) {
+        visibleTasks.add(i);
+      }
+    });
+    document.querySelectorAll('#overview-table [data-task-idx]').forEach(el => {
+      el.classList.toggle('hidden', !visibleTasks.has(parseInt(el.dataset.taskIdx, 10)));
+    });
+
+    const maxTotal = [...visibleTasks].reduce((sum, i) => sum + overviewData.tasks[i].max_points, 0);
+
+    // 2. Studentenzeilen (Annotation) + Summen-/Anteilsspalten + Statistik
+    let count = 0, sumTotals = 0, maxPts = 0, minPts = Infinity, passed = 0;
+    document.querySelectorAll('#table-body tr[data-student-id]').forEach(row => {
+      const show = annotationFilter === '' || annotationMatches(row.dataset.annotation || '', annotationFilter);
+      row.classList.toggle('hidden', !show);
+      if (!show) return;
+
+      const sid = row.dataset.studentId;
+      let total = 0;
+      visibleTasks.forEach(i => {
+        const task = overviewData.tasks[i];
+        total += (overviewData.scores[sid] || {})[task.id] || 0;
+      });
+
+      const pct = maxTotal > 0 ? (total / maxTotal) * 100 : 0;
+      const sumColor = pct >= 80 ? 'text-green-700' : pct >= 50 ? 'text-yellow-700' : 'text-red-700';
+      const baseCls = 'py-2 px-4 text-center font-bold border-b bg-blue-50 ';
+      const sumCell = row.querySelector('[data-sum-cell]');
+      const pctCell = row.querySelector('[data-pct-cell]');
+      if (sumCell) { sumCell.textContent = total; sumCell.className = baseCls + sumColor; }
+      if (pctCell) { pctCell.textContent = pct.toFixed(1) + '%'; pctCell.className = baseCls + sumColor; }
+
+      count++;
+      sumTotals += total;
+      if (total > maxPts) maxPts = total;
+      if (total < minPts) minPts = total;
+      if (maxTotal > 0 && total / maxTotal >= 0.5) passed++;
+    });
+
+    renderStats(count, sumTotals, maxPts, minPts === Infinity ? 0 : minPts, passed, filterActive);
+    document.getElementById('filter-no-tasks').classList.toggle('hidden', !(filterActive && visibleTasks.size === 0));
+    document.getElementById('filter-no-results').classList.toggle('hidden', !(filterActive && count === 0));
   }
 
   // ─── Filter Events ──────────────────────────────────────────
   let filterTimeout;
   let annotationTimeout;
 
-  document.getElementById('filter-input').addEventListener('input', (e) => {
+  document.getElementById('filter-input').addEventListener('input', () => {
     clearTimeout(filterTimeout);
-    filterTimeout = setTimeout(() => loadOverview(e.target.value, document.getElementById('type-filter').value, document.getElementById('annotation-filter').value), 300);
+    filterTimeout = setTimeout(applyOverviewFilter, 300);
+  });
+  document.getElementById('filter-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      clearTimeout(filterTimeout);
+      applyOverviewFilter();
+    }
   });
 
-  document.getElementById('type-filter').addEventListener('change', (e) => {
-    loadOverview(document.getElementById('filter-input').value, e.target.value, document.getElementById('annotation-filter').value);
-  });
+  document.getElementById('type-filter').addEventListener('change', applyOverviewFilter);
 
-  document.getElementById('annotation-filter').addEventListener('input', (e) => {
+  document.getElementById('annotation-filter').addEventListener('input', () => {
     clearTimeout(annotationTimeout);
-    annotationTimeout = setTimeout(() => loadOverview(document.getElementById('filter-input').value, document.getElementById('type-filter').value, e.target.value), 300);
+    annotationTimeout = setTimeout(applyOverviewFilter, 300);
+  });
+  document.getElementById('annotation-filter').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      clearTimeout(annotationTimeout);
+      applyOverviewFilter();
+    }
   });
 
   document.getElementById('clear-filter-btn').addEventListener('click', () => {
     document.getElementById('filter-input').value = '';
     document.getElementById('type-filter').value = '';
     document.getElementById('annotation-filter').value = '';
-    loadOverview('', '', '');
+    applyOverviewFilter();
   });
 
   // Live-Dashboard-Link: aktuelle Filter als Query-Parameter mitschicken,

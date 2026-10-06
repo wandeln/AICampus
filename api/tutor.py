@@ -60,6 +60,7 @@ from services.mc_service import (
 from services.media_service import all_media_for_course, sync_media_usages
 from services.references_service import build_references_text
 from services.settings_resolver import get_effective_compute_config, get_effective_llm_config
+from services.task_filter import multi_keyword_matches
 from services.workspace_presets import (
     IMAGE_SELECTION_FIELDS,
     validate_workspace_generation,
@@ -775,15 +776,9 @@ async def reorder_tasks(
 
 
 def _annotation_matches(annotation: Optional[str], filter_text: str) -> bool:
-    """Annotations-Filter: alle per Leerzeichen getrennten Wörter des Filters
-    müssen als Wortanfang (Präfix, Groß-/Kleinschreibung egal) in der
-    Annotation vorkommen — AND-Verknüpfung. Bindestrich gehört zum Wort.
-    So matcht "ÜG" auch "ÜG1"/"ÜG-1", aber "1" nicht "Jahrgang 2001"."""
-    terms = [t.casefold() for t in filter_text.split()]
-    if not terms or not annotation:
-        return False
-    words = [w.casefold() for w in annotation.split()]
-    return all(any(word.startswith(term) for word in words) for term in terms)
+    """Annotations-Filter: Semantik wie `multi_keyword_matches` (alle
+    leerzeichen-getrennten Begriffe müssen als Wort-Präfix matchten)."""
+    return multi_keyword_matches(annotation, filter_text)
 
 
 def _overview_data(
@@ -818,7 +813,7 @@ def _overview_data(
 
     # Aufgaben-Filter
     if filter_text:
-        tasks = [t for t in tasks if filter_text.lower() in t.title.lower()]
+        tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
     if type_filter:
         tasks = [t for t in tasks if t.task_type.value == type_filter]
 
@@ -1960,7 +1955,7 @@ async def export_excel(
 
     # Filter nach Suchbegriff
     if filter_text:
-        tasks = [t for t in tasks if filter_text.lower() in t.title.lower()]
+        tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
     if type_filter:
         tasks = [t for t in tasks if t.task_type.value == type_filter]
 
@@ -2060,7 +2055,7 @@ async def generate_course_report(
     ).all())
 
     if filter_text:
-        tasks = [t for t in tasks if filter_text.lower() in t.title.lower()]
+        tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
     if type_filter:
         tasks = [t for t in tasks if t.task_type.value == type_filter]
 

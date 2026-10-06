@@ -3,13 +3,46 @@
 {% block extra_head %}
 <!-- SortableJS (MIT) — Drag-and-Drop -->
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js"></script>
+<style>
+  /* Drag-Handle bei aktivem Filter ausblenden (Reorder mit Teilliste wäre falsch) */
+  #task-list.filtering .cursor-grab { display: none; }
+</style>
 {% endblock %}
 
 {% block course_content %}
+  <!-- Filter -->
+  <div class="card mb-6">
+    <div class="flex items-center gap-4 flex-wrap">
+      <div class="flex-1 min-w-[200px]">
+        <label class="block text-sm font-medium text-gray-700 mb-1"
+               title="Aufgaben nach Titel filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht vom Wortanfang (z.B. 'Blatt rek' → 'Blatt 4: Rekursion'; '1' matcht aber nicht 'Teil 12').">Suche</label>
+        <input type="text" id="filter-input" placeholder="z.B. Blatt rek..."
+               class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Aufgabentyp</label>
+        <select id="type-filter" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          <option value="">Alle</option>
+          <option value="text">Textaufgaben</option>
+          <option value="code">Codeaufgaben</option>
+          <option value="workspace">Workspace-Aufgaben</option>
+          <option value="mc">Multiple-Choice-Aufgaben</option>
+        </select>
+      </div>
+      <div class="flex items-end">
+        <button id="clear-filter-btn" class="text-gray-500 hover:text-gray-700 text-sm px-3 py-2" style="margin-top:20px">
+          ✕ Filter löschen
+        </button>
+      </div>
+    </div>
+    <p id="filter-active-hint" class="hidden text-xs text-gray-500 mt-3">ℹ️ Mit aktivem Filter ist die Drag-and-Drop-Reihenfolge-Anpassung deaktiviert — Filter löschen zum Umordnen.</p>
+  </div>
+
   <!-- Task List -->
   <div id="task-list" class="space-y-4">
     {% for task in tasks %}
-    <div class="card flex items-center justify-between" id="task-row-{{ task.id }}" data-task-id="{{ task.id }}">
+    <div class="card flex items-center justify-between" id="task-row-{{ task.id }}" data-task-id="{{ task.id }}"
+         data-title="{{ task.title | e }}" data-type="{{ task.task_type }}">
       <div class="flex items-center gap-3">
         <!-- Drag Handle -->
         <div class="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 transition select-none p-2"
@@ -83,6 +116,12 @@
   </div>
   {% endif %}
 
+  <!-- Keine Treffer (nur bei aktivem Filter, per JS eingeblendet) -->
+  <div id="filter-no-results" class="hidden text-center py-6">
+    <div class="text-4xl mb-3">🔍</div>
+    <p class="text-gray-500 text-sm">Keine Aufgaben gefunden — Filter anpassen oder löschen.</p>
+  </div>
+
   <!-- Neue Aufgabe (zentriert unter der Liste) -->
   <div class="mt-6 sm:mt-6 text-center">
     <a href="/courses/{{ course.id }}/tasks/new"
@@ -123,12 +162,69 @@
 
 {% block extra_scripts %}
 <script>
-  // ─── Drag-and-Drop Reihenfolge ────────────────────────────────
+  // ─── Filter (client-seitig: nur die Liste wird gefiltert, keine Reload) ───
+  const taskListEl = document.getElementById('task-list');
+  let sortableInstance = null;
+
+  function isFilterActive() {
+    return document.getElementById('filter-input').value.trim() !== '' ||
+           document.getElementById('type-filter').value !== '';
+  }
+
+  // Gleiche Semantik wie serverseitig (services/task_filter.py):
+  // alle leerzeichen-getrennten Begriffe müssen als Wort-Präfix vorkommen (UND).
+  function titleMatches(title, terms) {
+    const words = title.toLowerCase().split(/\s+/).filter(Boolean);
+    return terms.every(term => words.some(word => word.startsWith(term)));
+  }
+
+  function applyTaskFilter() {
+    const terms = document.getElementById('filter-input').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const typeFilter = document.getElementById('type-filter').value;
+    let visibleCount = 0;
+    const rows = Array.from(taskListEl.querySelectorAll('[data-task-id]'));
+    for (const row of rows) {
+      const show = titleMatches(row.getAttribute('data-title') || '', terms) &&
+                   (!typeFilter || row.getAttribute('data-type') === typeFilter);
+      row.classList.toggle('hidden', !show);
+      if (show) visibleCount++;
+    }
+    const active = isFilterActive();
+    // Drag & Drop nur ohne Filter (sonst würde nur die Teilliste umsortiert)
+    if (sortableInstance) sortableInstance.option('disabled', active);
+    taskListEl.classList.toggle('filtering', active);
+    document.getElementById('filter-active-hint').classList.toggle('hidden', !active);
+    document.getElementById('filter-no-results').classList.toggle('hidden', !(active && visibleCount === 0));
+  }
+
+  let filterTimeout;
+  document.addEventListener('DOMContentLoaded', () => {
+    const filterInput = document.getElementById('filter-input');
+    filterInput.addEventListener('input', () => {
+      clearTimeout(filterTimeout);
+      filterTimeout = setTimeout(applyTaskFilter, 300);
+    });
+    filterInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        clearTimeout(filterTimeout);
+        applyTaskFilter();
+      }
+    });
+    document.getElementById('type-filter').addEventListener('change', applyTaskFilter);
+    document.getElementById('clear-filter-btn').addEventListener('click', () => {
+      document.getElementById('filter-input').value = '';
+      document.getElementById('type-filter').value = '';
+      applyTaskFilter();
+    });
+  });
+
+  // ─── Drag-and-Drop Reihenfolge (Filter deaktiviert sie per option('disabled')) ───
   document.addEventListener('DOMContentLoaded', () => {
     const taskList = document.getElementById('task-list');
     if (!taskList) return;
 
-    Sortable.create(taskList, {
+    sortableInstance = Sortable.create(taskList, {
       handle: '.cursor-grab',
       animation: 150,
       ghostClass: 'bg-blue-50',
@@ -188,12 +284,18 @@
 
       showToast(data.message || 'Aufgabe gelöscht.', 'success');
 
-      // Eintrag mit Fade-Out entfernen
+      // Eintrag mit Fade-Out entfernen (danach Filter-State aktualisieren,
+      // z. B. für die "Keine Aufgaben gefunden"-Meldung)
       const row = document.getElementById('task-row-' + taskId);
       if (row) {
         row.style.opacity = '0';
         row.style.transition = 'opacity 0.3s';
-        setTimeout(() => row.remove(), 300);
+        setTimeout(() => {
+          row.remove();
+          applyTaskFilter();
+        }, 300);
+      } else if (isFilterActive()) {
+        applyTaskFilter();
       }
 
     } catch (err) {
