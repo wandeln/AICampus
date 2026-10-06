@@ -473,8 +473,21 @@
   // destroy() würde eine Instanz treffen, deren initialize() noch läuft.
   // Überholte Renders skippt renderPreviewInner per seq-Check.
   let previewRenderQueue = Promise.resolve();
+  // Inhalt des gerade laufenden Renders (null = keiner): ein
+  // gleich-contentiger Render dahinter würde ihn nur überholen und den
+  // Position-Restore verlieren (s. renderPreview).
+  let previewRenderContent = null;
 
   function renderPreview(content) {
+    // Gleicher Inhalt wie das bereits laufende/gerenderte Deck → nicht
+    // erneut queuen. WICHTIG: Der LLM-Flow feuert pro Antwort ZWEI
+    // Renders (direktes renderPreview(data.content) + das vom
+    // setValue-Change-Event kommende debounced schedulePreview). Ohne
+    // diesen Skip würde das Debounce bei größeren Decks (>500 ms Build)
+    // mitten im Build den ersten Render überholen — dessen prevIndex
+    // (Position-Restore nach dem Re-Render) ginge verloren, die
+    // Vorschau landete auf Folie 1, der Editor auf der alten Zeile.
+    if (content === lastRenderedContent && (previewRenderContent !== null || previewReveal)) return;
     const seq = ++previewSeq;
     previewRenderQueue = previewRenderQueue
       .catch(() => {}) // fehlgeschlagener Vorgänger blockiert die Queue nicht
@@ -490,6 +503,10 @@
   // vorherigen Folie nach einem Re-Render (unten in renderPreview) ist
   // keine bewusste Navigation und darf den Editor nicht springen lassen.
   let pendingSkipSlide = null;
+  // Letzte Nutzer-Navigation (vorheriges Deck): Fallback für den
+  // Position-Restore, wenn die alte Preview-Instanz schon weg ist, weil
+  // der Render, der ihren Index erfasst hat, im Build überholt wurde.
+  let lastViewedIndex = { h: 0, v: 0 };
   // Letzter gerendeter Inhalt: doppelte Requests mit gleichem Inhalt
   // (CM's setValue() feuert change → schedulePreview) rendern nicht erneut.
   let lastRenderedContent = null;
@@ -519,150 +536,177 @@
   }
 
   async function renderPreviewInner(content, seq) {
-    // Von neuem Render überholt (liefert in der Queue hinter ihm) → skippen;
-    // das leert die Queue nach schnellem Tippen auch zügig.
-    if (seq !== previewSeq) return;
-    // Doppelte Anfrage mit unverändertem Inhalt → kein zweiter Re-Render
-    if (previewReveal && content === lastRenderedContent) return;
-    lastRenderedContent = content;
-    // Aktuelle Folie merken: nach einem Live-Update macht die Vorschau dort
-    // weiter, wo der Tutor gerade war (statt zurück zu Folie 1 zu springen).
-    let prevIndex = null;
-    if (previewReveal) {
-      try { prevIndex = previewReveal.getIndices(); } catch (e) { /* ältere Instanz */ }
-      // Vorherige Instanz zurückbauen (Reveal 4: destroy() entfernt die
-      // viewport-Klasse, Inline-Styles und alle Komponenten).
-      try { previewReveal.destroy(); } catch (e) { /* ältere Instanz */ }
-      previewReveal = null;
-      window.__aicampusPreviewReveal = null;
-    }
-    // Nur der eigene Restore am Ende dieses Renders darf einen Jump
-    // unterdrücken — Reste aus überlappenden Renders zurücksetzen.
-    pendingSkipSlide = null;
-    previewSlidesEl.innerHTML = "";
-    // Footer am Canvas-Element (wandert nicht mit den Slide-Transitions)
-    if (FOOTER_ENABLED && FOOTER_TEXT) previewSlidesEl.setAttribute("data-footer", FOOTER_TEXT);
-    else previewSlidesEl.removeAttribute("data-footer");
-    const slides = await parseSlides(content || "");
-    // Zeilen-Mapping für den Editor-Jump (Slide-Wechsel in der Vorschau)
-    const lineMap = computeSlideLineMap(content || "");
-    // Blatt-Folien zählen (Stack zählt seine Unterfolien, wie Reveal's Zähler).
-    const total = countSlides(slides);
-    countEl.textContent = total ? `${total} Folie${total === 1 ? "" : "n"}` : "";
-    if (slides.length === 0) {
-      previewEmptyEl.innerHTML =
-        'Noch keine Folien. Trenne Folien durch eine eigene Zeile <code>---</code>.';
-      previewEmptyEl.classList.remove("hidden");
-      updatePreviewNotes();
-      return;
-    }
-    previewEmptyEl.classList.add("hidden");
-    for (let i = 0; i < slides.length; i++) {
-      if (seq !== previewSeq) return; // neuerer Render hat übernommen
-      const footer = FOOTER_ENABLED && FOOTER_TEXT ? FOOTER_TEXT : null;
-      // Folien-Position (S-Nummern unlabeled Subfigure-Komplexe):
-      const section = await buildSlideSection(slides[i], footer, { deckId: material.id, h: i });
-      // Nach dem await erneut prüfen: ein während des Baus überholter
-      // Render darf sein Section nicht ins neue DOM hängen (sonst
-      // doppelte Folie).
-      if (seq !== previewSeq) return;
-      previewSlidesEl.appendChild(section);
-    }
-    if (seq !== previewSeq) return;
-    // Gleiche Logik-Größe wie die Präsentation: Reveal skaliert das Deck
-    // (960 × 960/Ratio) auf die Größe des Preview-Fensters.
-    const ratio = (theme && theme.aspect_value) || 16 / 9;
-    const W = 960;
-    const H = Math.round(W / ratio);
-    const inst = new Reveal(revealRootEl, {
-      embedded: true,
-      keyboard: false, // Mini-Vorschau greift keine globalen Tasten ab
-      controls: true,
-      controlsTutorial: false,
-      progress: false,
-      center: false,
-      transition: "none",
-      slideNumber: true,
-      hash: false,
-      history: false,
-      width: W,
-      height: H,
-      autoAnimateMatcher: aicampusAutoAnimateMatcher,
-      // Code-Blöcke: s. slides_present.html (escapeHTML: false — der
-      // Renderer liefert bereits HTML-escapten Code).
-      highlight: { escapeHTML: false },
-      plugins: [RevealHighlight],
-    });
-    // Code-LaTeX nach Reveal's Highlight-Pass
-    aicampusWireCodeMath(inst);
-    previewReveal = inst;
-    window.__aicampusPreviewReveal = inst;
-    await inst.initialize();
-    // Zitations-Links → auto-Quellen-Folie (Click-Handler in slides.js)
-    aicampusRegisterSlideReveal(revealRootEl, inst);
-    // Slide-Wechsel in der Vorschau (Pfeile/Pointer) → Editor springt zur
-    // passenden Stelle im Markdown (Slide-Anfang an den oberen Rand).
-    // Das initiale slidechanged feuert während initialize() — VOR dieser
-    // Registrierung (s. slides.js).
-    inst.on("slidechanged", (ev) => {
-      // Indexe je nach Reveal-Version im Event selbst oder in ev.detail
-      const h = ev.indexh ?? (ev.detail && ev.detail.indexh);
-      const v = ev.indexv ?? (ev.detail && ev.detail.indexv);
-      // Ereignisse einer älteren Instanz (überlappende Renders) ignorieren
-      if (seq !== previewSeq) return;
-      updatePreviewNotes();
-      // Unsere eigene Folien-Wiederherstellung nach einem Re-Render (unten)
-      // ist keine bewusste Navigation → keinen Jump. v kann je nach
-      // Reveal-Version fehlen (undefined) → dann nur h vergleichen.
-      if (pendingSkipSlide) {
-        const skip = pendingSkipSlide;
-        pendingSkipSlide = null;
-        if (h === skip.h && (v == null || v === skip.v)) return;
-      }
-      if (!cmContent) return;
-      // Kein Eintrag = auto-generierte Quellen-Folie → nichts zu springen
-      const entry = lineMap[h];
-      if (!entry) return;
-      const line = v != null && v < entry.subs.length ? entry.subs[v] : entry.line;
-      if (line == null) return;
-      // Folien mit Fragment-Markern: „Weiter" blendet zuerst Fragments
-      // ein (kein slidechanged-Event → kein Editor-Jump, korrekt so).
-      // Cursor an den Slide-Anfang (--- bzw. --) + exakt an den oberen
-      // Rand des Editors scrollen (CM6: einziger Dispatch).
-      cmContent.scrollToLineTop(Math.min(line, cmContent.lastLine()));
-    });
-    if (seq !== previewSeq) {
-      // Nur zurückbauen, wenn sie noch die aktuelle Instanz ist
-      if (previewReveal === inst) {
-        try { inst.destroy(); } catch (e) { /* ignore */ }
-        previewReveal = null;
-      }
-      window.__aicampusPreviewReveal = null;
-      return;
-    }
-    // Visuelle Fragment-Reihenfolge (KaTeX-Underbraces): s. slides_present.html
-    wireKatexFragmentResort(inst, previewSlidesEl);
-    // Folien-Hintergrund-Zoom ({zoom=X} bei Applet-/Website-Backgrounds)
-    wireBgZoom(inst);
-    // Zur vorherigen Folie zurückkehren (Reveal clampet bei kürzerem Deck;
-    // f = -1 → Fragments im Ausgangszustand, transition:none → ohne Flash)
-    if (prevIndex && (prevIndex.h > 0 || prevIndex.v > 0 || (prevIndex.f || 0) > 0)) {
-      // Editor-Jump unterdrücken: das ist nur die Wiederherstellung der
-      // vorherigen Folie, keine bewusste Navigation.
-      pendingSkipSlide = { h: prevIndex.h, v: prevIndex.v };
-      try { inst.slide(prevIndex.h, prevIndex.v, prevIndex.f); } catch (e) { /* ignore */ }
-    }
-    // Per-Slide-Transition (transition: fade|slide|zoom|none): pro Instanz,
-    // NACH dem Restore-Jump oben — der Restore (Programm-Navigation nach
-    // Re-Render) bleibt so transition:none/ohne Flash, echte
-    // Nutzer-Navigtionen zeigen die Transition der ZIEL-Folie.
-    wirePerSlideTransitions(inst, revealRootEl);
-    // Das initiale slidechanged feuert vor der Listener-Registrierung und
-    // der Restore-Jump oben wird per pendingSkipSlide verworfen → Notiz-Panel
-    // hier einmalig auf den aktuellen Stand bringen.
-    updatePreviewNotes();
-  }
+    // Render-Zustand merken (Enqueue-Skip in renderPreview) und bei
+    // jedem Ausweg (Return/Abbruch/Fehler) wieder räumen:
+    previewRenderContent = content;
+    try {
 
+      // Von neuem Render überholt (liefert in der Queue hinter ihm) → skippen;
+      // das leert die Queue nach schnellem Tippen auch zügig.
+      if (seq !== previewSeq) return;
+      // Doppelte Anfrage mit unverändertem Inhalt → kein zweiter Re-Render
+      if (previewReveal && content === lastRenderedContent) return;
+      lastRenderedContent = content;
+      // Aktuelle Folie merken: nach einem Live-Update macht die Vorschau dort
+      // weiter, wo der Tutor gerade war (statt zurück zu Folie 1 zu springen).
+      let prevIndex = null;
+      if (previewReveal) {
+        try { prevIndex = previewReveal.getIndices(); } catch (e) { /* ältere Instanz */ }
+        // Vorherige Instanz zurückbauen (Reveal 4: destroy() entfernt die
+        // viewport-Klasse, Inline-Styles und alle Komponenten).
+        try { previewReveal.destroy(); } catch (e) { /* ältere Instanz */ }
+        previewReveal = null;
+        window.__aicampusPreviewReveal = null;
+      }
+      // Nur der eigene Restore am Ende dieses Renders darf einen Jump
+      // unterdrücken — Reste aus überlappenden Renders zurücksetzen.
+      pendingSkipSlide = null;
+      previewSlidesEl.innerHTML = "";
+      // Footer am Canvas-Element (wandert nicht mit den Slide-Transitions)
+      if (FOOTER_ENABLED && FOOTER_TEXT) previewSlidesEl.setAttribute("data-footer", FOOTER_TEXT);
+      else previewSlidesEl.removeAttribute("data-footer");
+      const slides = await parseSlides(content || "");
+      // Zeilen-Mapping für den Editor-Jump (Slide-Wechsel in der Vorschau)
+      const lineMap = computeSlideLineMap(content || "");
+      // Blatt-Folien zählen (Stack zählt seine Unterfolien, wie Reveal's Zähler).
+      const total = countSlides(slides);
+      countEl.textContent = total ? `${total} Folie${total === 1 ? "" : "n"}` : "";
+      if (slides.length === 0) {
+        previewEmptyEl.innerHTML =
+          'Noch keine Folien. Trenne Folien durch eine eigene Zeile <code>---</code>.';
+        previewEmptyEl.classList.remove("hidden");
+        updatePreviewNotes();
+        return;
+      }
+      previewEmptyEl.classList.add("hidden");
+      for (let i = 0; i < slides.length; i++) {
+        if (seq !== previewSeq) return; // neuerer Render hat übernommen
+        const footer = FOOTER_ENABLED && FOOTER_TEXT ? FOOTER_TEXT : null;
+        // Folien-Position (S-Nummern unlabeled Subfigure-Komplexe):
+        const section = await buildSlideSection(slides[i], footer, { deckId: material.id, h: i });
+        // Nach dem await erneut prüfen: ein während des Baus überholter
+        // Render darf sein Section nicht ins neue DOM hängen (sonst
+        // doppelte Folie).
+        if (seq !== previewSeq) return;
+        previewSlidesEl.appendChild(section);
+      }
+      if (seq !== previewSeq) return;
+      // Gleiche Logik-Größe wie die Präsentation: Reveal skaliert das Deck
+      // (960 × 960/Ratio) auf die Größe des Preview-Fensters.
+      const ratio = (theme && theme.aspect_value) || 16 / 9;
+      const W = 960;
+      const H = Math.round(W / ratio);
+      const inst = new Reveal(revealRootEl, {
+        embedded: true,
+        keyboard: false, // Mini-Vorschau greift keine globalen Tasten ab
+        controls: true,
+        controlsTutorial: false,
+        progress: false,
+        center: false,
+        transition: "none",
+        slideNumber: true,
+        hash: false,
+        history: false,
+        width: W,
+        height: H,
+        autoAnimateMatcher: aicampusAutoAnimateMatcher,
+        // Code-Blöcke: s. slides_present.html (escapeHTML: false — der
+        // Renderer liefert bereits HTML-escapten Code).
+        highlight: { escapeHTML: false },
+        plugins: [RevealHighlight],
+      });
+      // Code-LaTeX nach Reveal's Highlight-Pass
+      aicampusWireCodeMath(inst);
+      previewReveal = inst;
+      window.__aicampusPreviewReveal = inst;
+      await inst.initialize();
+      // Zitations-Links → auto-Quellen-Folie (Click-Handler in slides.js)
+      aicampusRegisterSlideReveal(revealRootEl, inst);
+      // Slide-Wechsel in der Vorschau (Pfeile/Pointer) → Editor springt zur
+      // passenden Stelle im Markdown (Slide-Anfang an den oberen Rand).
+      // Das initiale slidechanged feuert während initialize() — VOR dieser
+      // Registrierung (s. slides.js).
+      inst.on("slidechanged", (ev) => {
+        // Indexe je nach Reveal-Version im Event selbst oder in ev.detail
+        const h = ev.indexh ?? (ev.detail && ev.detail.indexh);
+        const v = ev.indexv ?? (ev.detail && ev.detail.indexv);
+        // Ereignisse einer älteren Instanz (überlappende Renders) ignorieren
+        if (seq !== previewSeq) return;
+        updatePreviewNotes();
+        // Unsere eigene Folien-Wiederherstellung nach einem Re-Render (unten)
+        // ist keine bewusste Navigation → keinen Jump. v kann je nach
+        // Reveal-Version fehlen (undefined) → dann nur h vergleichen.
+        if (pendingSkipSlide) {
+          const skip = pendingSkipSlide;
+          pendingSkipSlide = null;
+          if (h === skip.h && (v == null || v === skip.v)) {
+            // Restored (ggf. clampeter) Zustand merken — Fallback für den
+            // nächsten Re-Render.
+            lastViewedIndex = { h, v: v || 0 };
+            return;
+          }
+        }
+        lastViewedIndex = { h, v: v || 0 };
+        if (!cmContent) return;
+        // Kein Eintrag = auto-generierte Quellen-Folie → nichts zu springen
+        const entry = lineMap[h];
+        if (!entry) return;
+        const line = v != null && v < entry.subs.length ? entry.subs[v] : entry.line;
+        if (line == null) return;
+        // Folien mit Fragment-Markern: „Weiter" blendet zuerst Fragments
+        // ein (kein slidechanged-Event → kein Editor-Jump, korrekt so).
+        // Cursor an den Slide-Anfang (--- bzw. --) + exakt an den oberen
+        // Rand des Editors scrollen (CM6: einziger Dispatch).
+        cmContent.scrollToLineTop(Math.min(line, cmContent.lastLine()));
+      });
+      if (seq !== previewSeq) {
+        // Nur zurückbauen, wenn sie noch die aktuelle Instanz ist
+        if (previewReveal === inst) {
+          try { inst.destroy(); } catch (e) { /* ignore */ }
+          previewReveal = null;
+        }
+        window.__aicampusPreviewReveal = null;
+        return;
+      }
+      // Visuelle Fragment-Reihenfolge (KaTeX-Underbraces): s. slides_present.html
+      wireKatexFragmentResort(inst, previewSlidesEl);
+      // Folien-Hintergrund-Zoom ({zoom=X} bei Applet-/Website-Backgrounds)
+      wireBgZoom(inst);
+      // Zur vorherigen Folie zurückkehren. prevIndex fehlt, wenn die alte
+      // Instanz schon weg war (ihr Render wurde im Build überholt) → dann
+      // die zuletzt angezeigte Folie aus dem alten Deck nehmen (Reveal
+      // clampet bei kürzerem Deck selbst).
+      const restoreIdx = prevIndex || ((lastViewedIndex.h > 0 || lastViewedIndex.v > 0) ? lastViewedIndex : null);
+      if (restoreIdx && (restoreIdx.h > 0 || restoreIdx.v > 0 || (restoreIdx.f || 0) > 0)) {
+        // Auf die Grenzen des NEUEN Decks clampen, damit der Skip-Marker
+        // genau dem (geclampten) slidechanged-Event entspricht — sonst
+        // feuert ein geschrumpftes Deck ein nicht verworfenes Event →
+        // falscher Editor-Jump.
+        const rh = Math.min(restoreIdx.h, slides.length - 1);
+        const subCount = (slides[rh] && slides[rh].children && slides[rh].children.length) || 1;
+        const rv = Math.min(restoreIdx.v || 0, subCount - 1);
+        // Editor-Jump unterdrücken: das ist nur die Wiederherstellung der
+        // vorherigen Folie, keine bewusste Navigation (transition:none →
+        // ohne Flash).
+        pendingSkipSlide = { h: rh, v: rv };
+        try { inst.slide(rh, rv, restoreIdx.f); } catch (e) { /* ignore */ }
+      }
+      // Per-Slide-Transition (transition: fade|slide|zoom|none): pro Instanz,
+      // NACH dem Restore-Jump oben — der Restore (Programm-Navigation nach
+      // Re-Render) bleibt so transition:none/ohne Flash, echte
+      // Nutzer-Navigtionen zeigen die Transition der ZIEL-Folie.
+      wirePerSlideTransitions(inst, revealRootEl);
+      // Das initiale slidechanged feuert vor der Listener-Registrierung und
+      // der Restore-Jump oben wird per pendingSkipSlide verworfen → Notiz-Panel
+      // hier einmalig auf den aktuellen Stand bringen.
+      updatePreviewNotes();
+    } finally {
+      // Nur räumen, wenn dieser (noch aktuelle) Render das Flag gesetzt
+      // hat — ein überholter Render darf das Flag des Nachfolgers
+      // nicht löschen.
+      if (seq === previewSeq) previewRenderContent = null;
+    }
+  }
   // ─── LLM: Deck generieren / überarbeiten ────────────────────
 
   const aiBtn = document.getElementById("slide-ai-btn");
