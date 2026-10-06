@@ -341,6 +341,16 @@ async def create_script_question(
     )
     session.commit()
 
+    # Glocke: KI-Antwort wie eine normale Antwort benachrichtigen
+    # (konsistent mit menschlichen Antworten; der Fehlerfall ist nur im
+    # Dialog sichtbar und wird nicht benachrichtigt). Auto-Read läuft über
+    # den Fragen-Dialog (offener Dialog → read-type, templates/course/script.html).
+    if result.get("success"):
+        notifications.notify_script_question_answer(
+            session, course_id, q.student_id, q.question, "AICampus",
+            question_id=q.id,
+        )
+
     payload = load_questions_payload(session, course_id, viewer)
     return next((item for item in payload if item["id"] == q.id), payload[0])
 
@@ -376,7 +386,8 @@ async def add_script_question_response(
 
     # Glocke: Fragesteller über die neue Antwort informieren
     notifications.notify_script_question_answer(
-        session, q.course_id, q.student_id, q.question, user, content
+        session, q.course_id, q.student_id, q.question, user.name,
+        question_id=q.id, responder_id=user.id,
     )
 
     return {

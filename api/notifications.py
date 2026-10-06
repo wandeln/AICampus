@@ -15,11 +15,12 @@ DB (Historie/Statistik), aber die API-Liste zeigt nur noch Ungelesenes.
 import asyncio
 import json
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import update
-from sqlmodel import Session, func, select
+from sqlmodel import Field, Session, SQLModel, func, select
 
 from database.base import get_session
 from database.models import Notification, User
@@ -128,6 +129,38 @@ async def mark_all_notifications_read(
     )
     session.commit()
     if result.rowcount:  # andere offene Tabs sofort updaten (statt Poll abzuwarten)
+        notifications.notify_read(user.id)  # type: ignore[arg-type]
+    return {"ok": True}
+
+
+class ReadTypeRequest(SQLModel):
+    type: str = Field(max_length=50)
+    course_id: Optional[int] = None
+
+
+@router.post("/read-type")
+async def mark_notifications_read_by_type(
+    data: ReadTypeRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Benachrichtigungen eines Typs (optional pro Kurs) als gelesen markieren.
+
+    Auto-Read-Hook für Frontend-Flows, deren „Inhalte angesehen“ keinen
+    eigenen Endpoint hat (z. B. der Skript-Fragen-Dialog): Wer den Dialog
+    öffnet, sieht die Antworten → die Glocke darf leer sein.
+    """
+    stmt = (
+        update(Notification)
+        .where(Notification.user_id == user.id)
+        .where(Notification.type == data.type)
+        .where(Notification.read_at.is_(None))
+    )
+    if data.course_id is not None:
+        stmt = stmt.where(Notification.course_id == data.course_id)
+    result = session.exec(stmt.values(read_at=datetime.now()))
+    session.commit()
+    if result.rowcount:  # andere offene Tabs sofort updaten
         notifications.notify_read(user.id)  # type: ignore[arg-type]
     return {"ok": True}
 

@@ -1098,6 +1098,37 @@
     }, 100);
   }
 
+  // ─── Deep-Link: #sq:{id} → Fragen-Dialog öffnen, Thread hervorheben,
+  //     zur passenden Stelle im Skript scrollen (Notification-Klick) ───
+  async function handleQuestionHash() {
+    const m = location.hash.match(/^#sq:(\d+)$/);
+    if (!m) return;
+    const qid = parseInt(m[1]);
+    sqOpenDialog();
+    // Fragendaten werden async beim Seitenaufbau geladen (sqLoad)
+    let q = sqData.find((x) => x.id === qid);
+    const deadline = Date.now() + 15000;
+    while (!q && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+      q = sqData.find((x) => x.id === qid);
+    }
+    if (!q) return;
+    // Nur wechseln, wenn die Frage im aktiven Tab nicht sichtbar ist
+    // (im Tab „Alle Fragen“ sind alle Fragen sichtbar → dort bleiben)
+    if (sqActiveTab === 'mine' && !q.is_mine) sqSwitchTab('all');
+    // Erst die passende Stelle im Skript (Zitat) anfahren, dann den
+    // Fragen-Thread im Dialog hervorheben
+    sqScrollToQuestion(q);
+    const list = sqActiveTab === 'mine' ? document.getElementById('sq-body-mine') : document.getElementById('sq-body-all');
+    const tDeadline = Date.now() + 5000;
+    const flashLoop = () => {
+      const el = list.querySelector(`.sq-thread[data-sq-id="${qid}"]`);
+      if (el) { sqFlashEl(el); return; }
+      if (Date.now() < tDeadline) setTimeout(flashLoop, 100);
+    };
+    setTimeout(flashLoop, 80);
+  }
+
   // ─── Kapitel-Liste (alle Rollen; Inhalt per Klick ausklappbar) ────
   async function loadScript() {
     const container = document.getElementById('script-reading');
@@ -1232,6 +1263,7 @@
       handleChapterHash();
       handleObjectHash();
       handleSectionHash();
+      handleQuestionHash();
     } catch (e) {
       container.innerHTML = '<p class="text-red-500 text-sm">Fehler beim Laden des Skripts.</p>';
     }
@@ -1281,6 +1313,7 @@
     handleChapterHash();
     handleObjectHash();
     handleSectionHash();
+    handleQuestionHash();
   });
 
   loadScript();
@@ -1596,12 +1629,25 @@
   // ─── Dialog: öffnen/schließen, Tabs ───────────────────────────
   // focusInput: nur der "?"-Button fokussiert den Input (sonst springt auf
   // mobilen Geräten bei Markierungsklick die Tastatur auf)
+  // Glocke: Antworten auf Skript-Fragen auto-readen, wenn der Dialog offen
+  // ist (Ansehen = Gesehen; hält die Glocke auch von LLM-Antworten frei,
+  // die im Dialog schon sichtbar waren)
+  function sqAutoReadAnswerNotifs() {
+    fetch('/api/notifications/read-type', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'script_question_answer', course_id: courseId }),
+    }).catch(() => {});
+  }
+
   function sqOpenDialog(focusInput = false) {
     sqDialog.classList.remove('hidden');
     if (!sqLoaded) {
       sqLoaded = true;
       sqLoad();
     }
+    sqAutoReadAnswerNotifs();
     if (focusInput) setTimeout(() => document.getElementById('sq-input').focus(), 50);
   }
 
@@ -2315,6 +2361,7 @@
     if (sqDialog.classList.contains('hidden') || document.hidden || sqPolling) return;
     sqPolling = true;
     try { await sqLoad(); } finally { sqPolling = false; }
+    sqAutoReadAnswerNotifs();
   }, 6000);
 </script>
 {% endblock %}

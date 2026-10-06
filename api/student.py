@@ -18,6 +18,7 @@ from urllib.parse import quote
 import websockets
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, WebSocket
 from fastapi.responses import JSONResponse
+from sqlalchemy import update
 from sqlmodel import Session, SQLModel, select
 from starlette.websockets import WebSocketDisconnect
 
@@ -25,6 +26,7 @@ from compute_agent.auth import make_token
 from config import SUBMISSION_DIR
 from database.base import engine, get_session
 from database.models import (
+    Notification,
     User, Task, Submission, Feedback, HintExchange, ScriptSection,
     TaskType, SubmissionStatus, FeedbackSource,
     Course, UserCourse, CourseRole, WorkspaceRun, GlobalUserRole,
@@ -504,6 +506,28 @@ async def cancel_grading(
 # POLLING: Ergebnis abfragen
 # ──────────────────────────────────────────────────────────────
 
+def _auto_read_llm_feedback(session: Session, user: User, task: Task) -> None:
+    """Glocke: Wer das Ergebnis abruft, hat es gesehen → Auto-Read + SSE.
+
+    Link-Match: notify_llm_feedback speichert die Ergebnis-Seite als Link
+    (/courses/{cid}/tasks/{tid}) — dieselbe Formatierung beidseits.
+    """
+    try:
+        result = session.exec(
+            update(Notification)
+            .where(Notification.user_id == user.id)
+            .where(Notification.type == "llm_feedback")
+            .where(Notification.link == f"/courses/{task.course_id}/tasks/{task.id}")
+            .where(Notification.read_at.is_(None))
+            .values(read_at=datetime.now())
+        )
+        session.commit()
+        if result.rowcount:
+            notifications.notify_read(user.id)  # type: ignore[arg-type]
+    except Exception:
+        session.rollback()
+
+
 @router.get("/submissions/{submission_id}/result")
 async def get_submission_result(
     submission_id: int,
@@ -542,6 +566,7 @@ async def get_submission_result(
             # Liefere den Fehler
             for fb in submission.feedback_list:
                 if fb.comment.startswith("Grading-Fehler:"):
+                    _auto_read_llm_feedback(session, user, task)
                     return {
                         "status": "error",
                         "submission_id": submission.id,
@@ -559,6 +584,7 @@ async def get_submission_result(
             "message": "Loesung wird korrigiert... bitte warten.",
         }
 
+    _auto_read_llm_feedback(session, user, task)
     return _build_graded_result(submission, task, user, session)
 
 

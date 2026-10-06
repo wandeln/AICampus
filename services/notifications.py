@@ -206,23 +206,32 @@ def notify_script_question_answer(
     course_id: int,
     student_id: int,
     question: str,
-    responder: User,
-    content: str,
+    responder_name: str,
+    question_id: Optional[int] = None,
+    responder_id: Optional[int] = None,
 ) -> None:
-    """Neue menschliche Antwort auf eine Skript-Frage → der Fragesteller."""
+    """Neue Antwort auf eine Skript-Frage (menschlich oder LLM) → der Fragesteller.
+
+    ``responder_id=None`` = die KI („AICampus“). Der Deep-Link ``#sq:{id}``
+    öffnet die Frage im Fragen-Dialog der Skript-Seite.
+    """
     try:
-        if responder.id == student_id:
+        if responder_id is not None and responder_id == student_id:
             return  # Eigene Antwort: keine Benachrichtigung
         course_name = _course_name(session, course_id)
+        link = (
+            f"/courses/{course_id}/script#sq:{question_id}" if question_id
+            else f"/courses/{course_id}/script"
+        )
         _create_many(
             session,
             [student_id],
             type_="script_question_answer",
-            title=f"{responder.name} hat deine Frage beantwortet",
+            title=f"{responder_name} hat deine Frage beantwortet",
             body=f"{course_name} — „{_truncate(question, 120)}“",
-            link=f"/courses/{course_id}/script",
+            link=link,
             course_id=course_id,
-            actor_id=responder.id,
+            actor_id=responder_id,
         )
     except Exception:
         session.rollback()
