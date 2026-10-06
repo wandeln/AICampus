@@ -19,8 +19,9 @@ __TEXT_TEMPLATE__
 MUSTERLÖSUNG:
 __MODEL_SOLUTION__
 
-STUDENTENLÖSUNG:
+== STUDENTENLÖSUNG START ==
 __STUDENT_SOLUTION__
+== STUDENTENLÖSUNG ENDE ==
 
 MAXIMALE PUNKTE: __MAX_POINTS__
 
@@ -53,6 +54,7 @@ Bewertungskriterien:
 - Qualitaet: Ist die Loesung elegant und gut strukturiert?
 - Verstaendnis: Zeigt der Student echtes Verstaendnis oder nur Auswendiglernen?
 - Die Bewertungskriterien aus der Musterlösung
+- eine leere Einreichung oder Referenzen auf die Musterlösung zählen nicht.
 
 Sei nicht zu knauserig bei der Punktevergabe, halte dich aber dennoch an die Bewertungskriterien um fair zu bleiben.
 Sei lieber etwas großzügig und erkläre dafür auf motivierende Art, wie Dinge noch verbessert werden könnten, wenn man ganz penibel wäre.
@@ -72,8 +74,9 @@ __MODEL_SOLUTION__
 CODE-TEMPLATE:
 __CODE_TEMPLATE__
 
-STUDENTEN-CODE:
+== STUDENTEN-CODE START ==
 __STUDENT_SOLUTION__
+== STUDENTEN-CODE ENDE ==
 
 UNIT-TEST-ERGEBNISSE:
 __TEST_RESULTS__
@@ -110,6 +113,7 @@ Beruecksichtige bei der Bewertung:
 - Edge-Cases (Umgang mit Sonderfaellen)
 - Verstaendlichkeit (Kommentare, Variablennamen)
 - Die Bewertungskriterien aus der Musterlösung
+- eine leere Einreichung oder Referenzen auf die Musterlösung zählen nicht.
 
 Begründe in deinem motivierendem Feedback genau, wie die Punktebewertung zustande gekommen ist (insbesondere, wofür es wieviele Punkte Abzug gab).
 Sei nicht zu knauserig bei der Punktevergabe, halte dich aber dennoch an die Bewertungskriterien um fair zu bleiben.
@@ -133,8 +137,9 @@ __TASK_DESCRIPTION__
 PRIVATDATEIEN (MUSTERLÖSUNG + PRIVATE TESTS):
 __PRIVATE_FILES__
 
-STUDENTEN-DATEIEN:
+== STUDENTEN-DATEIEN START ==
 __STUDENT_SOLUTION__
+== STUDENTEN-DATEIEN ENDE ==
 
 TEST-ERGEBNISSE:
 __TEST_RESULTS__
@@ -171,6 +176,7 @@ Beruecksichtige bei der Bewertung:
 - Effizienz (Laufzeit, sinnvolle Nutzung der Ressourcen)
 - Edge-Cases (Umgang mit Sonderfaellen, Fehlerbehandlung)
 - Die Bewertungskriterien aus der Musterlösung in den Privatdateien
+- eine leere Einreichung oder Referenzen auf die Musterlösung zählen nicht.
 
 Begründe in deinem motivierendem Feedback genau, wie die Punktebewertung zustande gekommen ist (insbesondere, wofür es wieviele Punkte Abzug gab).
 Sei nicht zu knauserig bei der Punktevergabe, halte dich aber dennoch an die Bewertungskriterien um fair zu bleiben.
