@@ -163,6 +163,7 @@ IMPORT_PLAN_TOOL_BUDGET = int(os.getenv("IMPORT_PLAN_TOOL_BUDGET", "150000"))  #
 IMPORT_GATHER_MAX_ITERATIONS = int(os.getenv("IMPORT_GATHER_MAX_ITERATIONS", "8"))  # Agentic Quellen-Sammlung (Skript/Folien)
 IMPORT_PNG_DPI = int(os.getenv("IMPORT_PNG_DPI", "300"))                   # PDF-Figur → PNG
 IMPORT_PNG_MAX_DIM = int(os.getenv("IMPORT_PNG_MAX_DIM", "4096"))          # Dimensions-Cap (PNG-Dateigröße)
+IMPORT_EMBED_MIN_PX = int(os.getenv("IMPORT_EMBED_MIN_PX", "150"))         # PDF-eingebettetes Bild: max. Kante < → Rauschen (M2)
 IMPORT_SLIDE_DECK_MAX_SLIDES_1TO1 = int(os.getenv("IMPORT_SLIDE_DECK_MAX_SLIDES_1TO1", "150"))  # Sicherheits-Cap Quell-Folien (1:1-Modus)
 # Feature-Timeouts in Sekunden (lokale Modelle können langsam sein)
 IMPORT_TIMEOUT_ANALYSIS = int(os.getenv("IMPORT_TIMEOUT_ANALYSIS", "180"))

@@ -61,6 +61,7 @@ from config import (
     IMPORT_GATHER_MAX_ITERATIONS,
     IMPORT_PNG_DPI,
     IMPORT_PNG_MAX_DIM,
+    IMPORT_EMBED_MIN_PX,
     IMPORT_SLIDE_DECK_MAX_SLIDES_1TO1,
     IMPORT_TIMEOUT_ANALYSIS,
     IMPORT_TIMEOUT_MEDIA,
@@ -125,6 +126,14 @@ IMPORT_STAGES = ("filemap", "media", "references", "ref_extract", "plan",
                  "slides_plan", "script", "slides")
 
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+
+# Endungen, die als Einzeldateien (ohne Zip-Archiv) importiert werden können —
+# genau die Typen, die build_manifest sinnvoll klassifiziert.
+IMPORT_LOOSE_FILE_EXTS = (
+    ".pdf", ".tex", ".md", ".markdown", ".docx", ".pptx", ".odt", ".odp",
+    ".bib", ".bbl", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".eps",
+)
+
 IMAGE_MIME = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -567,6 +576,80 @@ def safe_extract_zip(
     return entries, warnings
 
 
+def store_loose_files(
+    staging: Path,
+    items: list[tuple[str, Any]],
+) -> tuple[list[dict], list[str]]:
+    """Einzeldatei-Uploads (ohne Zip) → extracted/ mit denselben Merge-
+    Semantiken wie die Zip-Extraktion: identischer Inhalt (SHA256) wird
+    übersprungen, Namenskollisionen werden umbenannt ("name (2).ext").
+
+    items: [(Dateiname, binärer Stream)]. Limits: max.
+    IMPORT_MAX_SINGLE_FILE_BYTES pro Datei, IMPORT_MAX_ZIP_BYTES gesamt.
+
+    Returns: ([{path, size}], warnings). Raises ValueError bei
+    ungültigem Namen/Dateityp oder überschrittenen Limits (Temp-Dateien
+    werden dabei bereinigt).
+    """
+    extracted = staging / "extracted"
+    extracted.mkdir(parents=True, exist_ok=True)
+    added: list[dict] = []
+    warnings: list[str] = []
+    total = 0
+    pending: list[Path] = []  # Temp-Dateien (bereinigt in finally)
+    try:
+        for orig_name, stream in items:
+            name = Path(orig_name or "").name  # Pfade aus dem Namen herausschneiden
+            if not name or name.startswith(".") or len(name) > 300:
+                raise ValueError(f"Ungültiger Dateiname: {orig_name!r}")
+            ext = Path(name).suffix.lower()
+            if ext == ".zip":
+                raise ValueError(f"Zip-Dateien bitte über den Zip-Upload senden: {name}")
+            if ext not in IMPORT_LOOSE_FILE_EXTS:
+                raise ValueError(f"Dateityp wird nicht unterstützt: {name}")
+
+            tmp = extracted / f".incoming-{uuid.uuid4().hex}"
+            pending.append(tmp)
+            size = 0
+            with open(tmp, "wb") as out:
+                while True:
+                    block = stream.read(1024 * 1024)
+                    if not block:
+                        break
+                    size += len(block)
+                    if size > IMPORT_MAX_SINGLE_FILE_BYTES:
+                        raise ValueError(
+                            f"Datei zu groß (max. {IMPORT_MAX_SINGLE_FILE_BYTES // (1024 * 1024)} MB): {name}"
+                        )
+                    total += size
+                    if total > IMPORT_MAX_ZIP_BYTES:
+                        raise ValueError(
+                            f"Upload insgesamt zu groß (max. {IMPORT_MAX_ZIP_BYTES // (1024 * 1024)} MB)."
+                        )
+                    out.write(block)
+
+            # Merge: vorhandene Datei? identisch → überspringen, sonst umbenennen
+            final = Path(name)
+            if (extracted / final).is_file():
+                if _sha256_file(tmp) == _sha256_file(extracted / final):
+                    warnings.append(f"Datei bereits vorhanden, übersprungen: {name}")
+                    continue
+                cand, k = final, 2
+                while (extracted / cand).exists():
+                    cand = Path(f"{cand.stem} ({k}){cand.suffix}")
+                    k += 1
+                final = cand
+                warnings.append(f"Dateikollision — als „{final.as_posix()}“ übernommen: {name}")
+            target = extracted / final
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp.rename(target)
+            added.append({"path": final.as_posix(), "size": size})
+    finally:
+        for t in pending:
+            t.unlink(missing_ok=True)
+    return added, warnings
+
+
 _INC_GRAPHICS_RE = re.compile(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}")
 
 
@@ -581,6 +664,70 @@ def _pdf_info(path: Path) -> tuple[int, int]:
         for page in doc[:5]:
             chars += len(page.get_text())
         return pages, chars
+    finally:
+        doc.close()
+
+
+def _describe_image_position(rect, page_rect) -> str:
+    """Lage-Beschreibung eines Bild-Rects relativ zur Seite (Input für M3-Prompt)."""
+    try:
+        if page_rect is None or page_rect.width <= 0 or page_rect.height <= 0:
+            return "unbekannt"
+        if (rect.width * rect.height) / (page_rect.width * page_rect.height) >= 0.8:
+            return "ganze Seite"
+        cx = (rect.x0 + rect.x1) / 2 / page_rect.width
+        cy = (rect.y0 + rect.y1) / 2 / page_rect.height
+        col = "links" if cx < 1 / 3 else ("rechts" if cx > 2 / 3 else "zentral")
+        row = "oben" if cy < 1 / 3 else ("unten" if cy > 2 / 3 else "mittig")
+        return f"{row} {col}"
+    except Exception:
+        return "unbekannt"
+
+
+def _analyze_pdf_doc(path: Path, need_text: bool) -> dict:
+    """Einmaliger Vollscan eines PDF-Dokuments (M1/M2, ohne LLM).
+
+    need_text=True speichert den Seitentext (für die Sidecar); beim Resume
+    (Sidecar existiert) läuft der Scan ohne Textspeicherung.
+
+    Returns: {page_count, no_text_pages, pages: [{no, text, images: [{idx,
+    xref, width_px, height_px, position}]}]} — images pro Seite in visueller
+    Reihenfolge (y, dann x; idx 1-basiert).
+    """
+    import fitz  # pymupdf
+
+    doc = fitz.open(str(path))
+    try:
+        no_text_pages = 0
+        pages_out: list[dict] = []
+        for i, page in enumerate(doc, 1):
+            text = page.get_text().strip()
+            if not text:
+                no_text_pages += 1
+            prect = page.rect
+            imgs: list[dict] = []
+            seen: set[int] = set()
+            for im in page.get_images(full=True):
+                xref = int(im[0])
+                if xref in seen:
+                    continue
+                seen.add(xref)
+                rects = page.get_image_rects(xref)
+                if not rects:
+                    continue
+                rect = max(rects, key=lambda r: r.width * r.height)
+                imgs.append({
+                    "xref": xref,
+                    "width_px": int(im[2] or 0),
+                    "height_px": int(im[3] or 0),
+                    "position": _describe_image_position(rect, prect),
+                    "sort": (float(rect.y0), float(rect.x0)),
+                })
+            imgs.sort(key=lambda d: d["sort"])
+            for n, d in enumerate(imgs, 1):
+                d["idx"] = n
+            pages_out.append({"no": i, "text": text if need_text else None, "images": imgs})
+        return {"page_count": len(doc), "no_text_pages": no_text_pages, "pages": pages_out}
     finally:
         doc.close()
 
@@ -659,14 +806,49 @@ def build_manifest(staging: Path, entries: list[dict]) -> tuple[list[dict], list
             if m["type"] == "pdf_doc":
                 read_path = f"sidecars/{path}.md"
                 sp = sidecars / f"{path}.md"
+                need_text = not sp.is_file()
+                # M1/M2: Vollscan — Textschicht-Zählung (UI) + eingebettete
+                # Bilder (Medien-Kandidaten + M3-Triage-Input)
+                analysis: Optional[dict] = None
+                try:
+                    analysis = _analyze_pdf_doc(p, need_text)
+                except Exception as exc:
+                    warnings.append(f"PDF-Analyse fehlgeschlagen: {path} ({exc})")
+                if analysis:
+                    m["no_text_pages"] = analysis["no_text_pages"]
+                unique_paths: list[str] = []
+                img_pages: list[dict] = []
+                if analysis:
+                    try:
+                        unique_paths, img_pages = _extract_pdf_media(p, path, analysis, extracted)
+                    except Exception as exc:
+                        warnings.append(f"PDF-Bild-Extraktion fehlgeschlagen: {path} ({exc})")
+                    if img_pages:
+                        m["pdf_images"] = img_pages
+                        m["embedded_images"] = len(unique_paths)
                 if not sp.is_file():
                     try:
                         sp.parent.mkdir(parents=True, exist_ok=True)
-                        sp.write_text(_pdf_to_md(p), encoding="utf-8")
+                        if analysis:
+                            page_markers = {
+                                pg["seite"]: [im["pfad"] for im in pg["images"]]
+                                for pg in img_pages
+                            }
+                            sp.write_text(_pdf_sidecar_md(analysis, page_markers), encoding="utf-8")
+                        else:
+                            sp.write_text(_pdf_to_md(p), encoding="utf-8")
                     except Exception as exc:
                         m["type"] = "other"
                         read_path = None
                         warnings.append(f"PDF-Konvertierung fehlgeschlagen: {path} ({exc})")
+                for mp in unique_paths:
+                    manifest.append({
+                        "path": mp,
+                        "size": int((extracted / mp).stat().st_size) if (extracted / mp).is_file() else 0,
+                        "type": "image",
+                        # wird von der M3-Triage (keep/latex/noise) aktualisiert
+                        "triage": "unbekannt",
+                    })
         elif ext == ".tex":
             m["type"] = "tex"
             m["read_path"] = f"extracted/{path}"
@@ -746,6 +928,107 @@ def _pdf_to_md(path: Path) -> str:
         return "\n\n".join(out)
     finally:
         doc.close()
+
+
+def _normalize_pdf_image(data: bytes, ext: str, dest: Path) -> Optional[Path]:
+    """Extrahiertes PDF-Bild nach dest schreiben; exotische Formate/
+    Colorspaces (z.B. CMYK-JPEG, JBig2, 16-Bit) per PIL nach PNG konvertieren.
+
+    Returns: geschriebener Pfad (ggf. andere Extension) oder None (undekodierbar).
+    """
+    import io
+    from PIL import Image
+
+    ext = ext.lower()
+    try:
+        im = Image.open(io.BytesIO(data))
+        if ext in (".png", ".jpg", ".jpeg", ".webp", ".gif") and im.mode in ("RGB", "RGBA", "L", "LA", "P"):
+            dest.write_bytes(data)
+            return dest
+        dest = dest.with_suffix(".png")
+        im.convert("RGB").save(dest, format="PNG")
+        return dest
+    except Exception:
+        return None
+
+
+def _extract_pdf_media(
+    src: Path, src_rel: str, analysis: dict, extracted: Path
+) -> tuple[list[str], list[dict]]:
+    """Eingebettete PDF-Bilder nach extracted/<src_rel>.media/ extrahieren
+    (idempotent, M2). Deterministische Namen img-<seite>-<xref>.<ext>
+    (seite = Erstvorkommen); Dedup per Content-Hash (wiederkehrende
+    Logos/Hintergründe landen so nur einmal). Filter: max. Kante ≥
+    IMPORT_EMBED_MIN_PX. Fullpage-Bilder bleiben (kein Inhalt-Filter, D2).
+
+    Returns: (eindeutige Medien-Pfade für das Manifest, Seiten-Liste
+    [{seite, images: [{idx, xref, pfad, position, width_px, height_px}]}]
+    — nur bestandene Bilder; Input für M3-Triage + Sidecar-Marker).
+    """
+    import fitz  # pymupdf
+
+    media_dir = extracted / f"{src_rel}.media"
+    seen_hash: dict[str, str] = {}
+    unique_paths: list[str] = []
+    img_pages: list[dict] = []
+    doc = fitz.open(str(src))
+    try:
+        for pg in analysis["pages"]:
+            if not pg["images"]:
+                continue
+            page_imgs: list[dict] = []
+            for im in pg["images"]:
+                if max(im["width_px"], im["height_px"]) < IMPORT_EMBED_MIN_PX:
+                    continue
+                try:
+                    info = doc.extract_image(im["xref"])
+                except Exception:
+                    continue
+                data = info.get("image") or b""
+                if not data:
+                    continue
+                h = hashlib.sha256(data).hexdigest()
+                fname = seen_hash.get(h)
+                if fname is None:
+                    media_dir.mkdir(parents=True, exist_ok=True)
+                    cand = media_dir / f"img-{pg['no']}-{im['xref']}.{info.get('ext') or 'bin'}"
+                    if cand.is_file():
+                        fname = cand.name
+                    else:
+                        saved = _normalize_pdf_image(data, info.get("ext") or "", cand)
+                        if saved is None:
+                            continue
+                        fname = saved.name
+                    seen_hash[h] = fname
+                    unique_paths.append(f"{src_rel}.media/{fname}")
+                page_imgs.append({
+                    "idx": im["idx"],
+                    "xref": im["xref"],
+                    "pfad": f"{src_rel}.media/{fname}",
+                    "position": im["position"],
+                    "width_px": im["width_px"],
+                    "height_px": im["height_px"],
+                })
+            if page_imgs:
+                img_pages.append({"seite": pg["no"], "images": page_imgs})
+        return unique_paths, img_pages
+    finally:
+        doc.close()
+
+
+def _pdf_sidecar_md(analysis: dict, page_markers: dict[int, list[str]]) -> str:
+    """Markdown-Sidecar aus der Textschicht + Bild-Markern in visueller
+    Reihenfolge (M2-Fallback ohne Transkription; M3 überschreibt pro Seite)."""
+    out: list[str] = []
+    for pg in analysis["pages"]:
+        marks = page_markers.get(pg["no"]) or []
+        body = pg.get("text") or ""
+        if marks:
+            markers = "\n".join(f"![Bild]({mp})" for mp in marks)
+            body = f"{body}\n\n{markers}" if body else markers
+        out.append(f"%% Seite {pg['no']} %%")
+        out.append(body)
+    return "\n\n".join(out)
 
 
 def _docx_para_images(para: "Paragraph", doc: "Document") -> list[str]:
@@ -1060,7 +1343,7 @@ async def run_filemap_job(course_id: int, import_id: int) -> None:
     logger.info("Import %s (Kurs %s): filemap gestartet", import_id, course_id)
     try:
         set_stage_status(import_id, "filemap", "running")
-        set_progress(import_id, current="Zip wird extrahiert …")
+        set_progress(import_id, current="Dateien werden extrahiert …")
 
         snap = job_snapshot(import_id)
         if snap is None:
@@ -1071,8 +1354,11 @@ async def run_filemap_job(course_id: int, import_id: int) -> None:
         # 1) Extraktion ALLER noch nicht extrahierten Zips (Merge-Support)
         try:
             zips = sorted(staging.glob("upload*.zip"))
-            if not zips:
-                raise ValueError("Keine Zip-Datei im Staging gefunden.")
+            # Ohne Zips geht's weiter, wenn Einzeldatei-Uploads bereits in
+            # extracted/ liegen; nur komplett leeres Staging ist ein Fehler.
+            has_files = extracted.is_dir() and any(extracted.rglob("*"))
+            if not zips and not has_files:
+                raise ValueError("Keine Dateien im Staging gefunden.")
             done_zips = set((snap["report"].get("extracted_zips") or []))
             deleted = set((snap["report"].get("deleted_paths") or []))
             existing = {
@@ -1110,6 +1396,12 @@ async def run_filemap_job(course_id: int, import_id: int) -> None:
         disk_entries: list[dict] = []
         for p in sorted(extracted.rglob("*")):
             if p.is_file():
+                rel_parts = p.relative_to(extracted).parts
+                # Synthetische Medienverzeichnisse (<doc>.media/ — Office-Media
+                # + PDF-M2) gehören zum Eltern-Dokument: aus dem Disk-Scan
+                # ausnehmen, sonst Doppel-Manifest-Einträge ab dem 2. Lauf.
+                if any(part.endswith(".media") for part in rel_parts[:-1]):
+                    continue
                 disk_entries.append(
                     {"path": p.relative_to(extracted).as_posix(), "size": p.stat().st_size}
                 )

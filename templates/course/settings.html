@@ -859,19 +859,24 @@
       renderImport();
     }
 
+    const ACCEPTED_FILE_RE = /\.(zip|pdf|tex|md|markdown|docx|pptx|odt|odp|bib|bbl|png|jpg|jpeg|webp|gif|svg|eps)$/i;
+    const FILE_INPUT_ACCEPT = '.zip,.pdf,.tex,.md,.markdown,.docx,.pptx,.odt,.odp,.bib,.bbl,.png,.jpg,.jpeg,.webp,.gif,.svg,.eps';
+
     function renderUpload() {
       root.innerHTML = `
       <p class="text-sm text-gray-600 mb-3">
-        Importiere Kurs-Materialien aus Zip-Archiven: TeX/Markdown-Quellen, PDFs,
-        Word-/PowerPoint-Dokumente und Bilder. Die Dateien werden gestaged und klassifiziert;
-        ein LLM-Wizard importiert danach Medien und Quellen und erstellt Skript-Kapitel und
-        Slide-Decks. Weitere Zips können später ergänzt, einzelne Dateien entfernt werden.
+        Importiere Kurs-Materialien: ganze Ordner als Zip-Archiv oder einzelne
+        Dateien (PDFs, TeX/Markdown-Quellen, Word-/PowerPoint-Dokumente, Bilder,
+        BibTeX). Die Dateien werden gestaged und klassifiziert; ein LLM-Wizard
+        importiert danach Medien und Quellen und erstellt Skript-Kapitel und
+        Slide-Decks. Weitere Dateien können später ergänzt, einzelne Dateien
+        entfernt werden.
       </p>
       <div id="dropzone" class="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-blue-400 transition">
         <div class="text-3xl mb-2">📦</div>
-        <p class="text-sm font-medium text-gray-700">Zip hierher ziehen oder klicken zum Auswählen</p>
-        <p class="text-xs text-gray-400 mt-1">Max. 500 MB · .zip</p>
-        <input type="file" id="import-file" accept=".zip,application/zip" class="hidden">
+        <p class="text-sm font-medium text-gray-700">Zips oder Dateien hierher ziehen oder klicken zum Auswählen</p>
+        <p class="text-xs text-gray-400 mt-1">Max. 500 MB · .zip, .pdf, .tex, .md, .docx, .pptx, .bib, Bilder …</p>
+        <input type="file" id="import-file" multiple accept="${FILE_INPUT_ACCEPT}" class="hidden">
       </div>
       <div id="upload-progress" class="hidden mt-4">
         <div class="flex justify-between text-xs text-gray-500 mb-1">
@@ -885,54 +890,97 @@
       const dz = document.getElementById('dropzone');
       const fi = document.getElementById('import-file');
       dz.addEventListener('click', () => fi.click());
-      fi.addEventListener('change', () => { if (fi.files[0]) upload(fi.files[0]); });
+      fi.addEventListener('change', () => {
+        if (fi.files && fi.files.length) uploadFiles(Array.from(fi.files));
+        fi.value = '';
+      });
       dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('border-blue-400'); });
       dz.addEventListener('dragleave', () => dz.classList.remove('border-blue-400'));
       dz.addEventListener('drop', (e) => {
         e.preventDefault();
         dz.classList.remove('border-blue-400');
-        const f = e.dataTransfer.files[0];
-        if (f) upload(f);
+        uploadFiles(Array.from(e.dataTransfer.files || []));
       });
     }
 
-    function upload(file, p) {
-      p = p || 'upload';
-      if (!/\.zip$/i.test(file.name)) {
-        showToast('Bitte eine .zip-Datei wählen.', 'error');
-        return;
-      }
-      const progEl = document.getElementById(p + '-progress');
-      const bar = document.getElementById(p + '-bar');
-      const pct = document.getElementById(p + '-pct');
-      const nameEl = document.getElementById(p + '-name');
-      if (!progEl || !bar || !pct || !nameEl) return;
-      progEl.classList.remove('hidden');
-      nameEl.textContent = file.name + ' (' + fmtBytes(file.size) + ')';
+    // XHR mit Fortschrittsbalken (Prefix p); löst mit true/false (Erfolg)
+    function _xhrUpload(post, label, p) {
+      return new Promise((resolve) => {
+        const progEl = document.getElementById(p + '-progress');
+        const bar = document.getElementById(p + '-bar');
+        const pct = document.getElementById(p + '-pct');
+        const nameEl = document.getElementById(p + '-name');
+        if (!progEl || !bar || !pct || !nameEl) { resolve(false); return; }
+        progEl.classList.remove('hidden');
+        nameEl.textContent = label;
 
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', API);
-      xhr.setRequestHeader('X-File-Name', file.name);
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const p = Math.round((e.loaded / e.total) * 100);
-          bar.style.width = p + '%';
-          pct.textContent = p + '%';
-        }
-      };
-      xhr.onload = async () => {
-        let data = {};
-        try { data = JSON.parse(xhr.responseText); } catch (e) { /* ignore */ }
-        if (xhr.status === 202) {
-          showToast(data.message || 'Upload erfolgreich.', 'success');
-          await refresh();
-        } else {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', post.url);
+        if (post.header) xhr.setRequestHeader(post.header[0], post.header[1]);
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const n = Math.round((e.loaded / e.total) * 100);
+            bar.style.width = n + '%';
+            pct.textContent = n + '%';
+          }
+        };
+        xhr.onload = async () => {
+          let data = {};
+          try { data = JSON.parse(xhr.responseText); } catch (e) { /* ignore */ }
+          if (xhr.status === 202) {
+            showToast(data.message || 'Upload erfolgreich.', 'success');
+            await refresh();
+            resolve(true);
+          } else {
+            progEl.classList.add('hidden');
+            showToast(data.detail || 'Upload fehlgeschlagen (' + xhr.status + ').', 'error');
+            resolve(false);
+          }
+        };
+        xhr.onerror = () => {
           progEl.classList.add('hidden');
-          showToast(data.detail || 'Upload fehlgeschlagen (' + xhr.status + ').', 'error');
-        }
-      };
-      xhr.onerror = () => showToast('Upload fehlgeschlagen (Netzwerkfehler).', 'error');
-      xhr.send(file);
+          showToast('Upload fehlgeschlagen (Netzwerkfehler).', 'error');
+          resolve(false);
+        };
+        xhr.send(post.body);
+      });
+    }
+
+    // Eine Zip → RAW-Body-Endpunkt (unverändertes Verhalten)
+    function uploadZip(file, p) {
+      return _xhrUpload(
+        { url: API, header: ['X-File-Name', file.name], body: file },
+        file.name + ' (' + fmtBytes(file.size) + ')',
+        p
+      );
+    }
+
+    // Mehrere Einzeldateien → ein Multipart-Request an /files
+    function uploadLooseFiles(files, p) {
+      const fd = new FormData();
+      files.forEach((f) => fd.append('files', f, f.name));
+      const total = files.reduce((s, f) => s + f.size, 0);
+      const label = files.length + (files.length === 1 ? ' Datei' : ' Dateien') + ' (' + fmtBytes(total) + ')';
+      return _xhrUpload({ url: API + '/files', body: fd }, label, p);
+    }
+
+    // Auswahl (File-Picker/Drag&Drop) validieren, in Zips/Einzeldateien
+    // aufteilen und sequenziell hochladen
+    async function uploadFiles(list, p) {
+      p = p || 'upload';
+      list = (list || []).filter(Boolean);
+      if (!list.length) return;
+      const ok = list.filter((f) => ACCEPTED_FILE_RE.test(f.name));
+      const rejected = list.filter((f) => !ACCEPTED_FILE_RE.test(f.name));
+      if (rejected.length) {
+        showToast('Nicht unterstützte Dateitypen (übersprungen): ' +
+          rejected.slice(0, 4).map((f) => f.name).join(', ') + (rejected.length > 4 ? ' …' : ''), 'error');
+      }
+      if (!ok.length) return;
+      const loose = ok.filter((f) => !/\.zip$/i.test(f.name));
+      const zips = ok.filter((f) => /\.zip$/i.test(f.name));
+      if (loose.length) await uploadLooseFiles(loose, p);
+      for (const z of zips) await uploadZip(z, p);
     }
 
     // ─── Render: Import vorhanden ───────────────────────────────────
@@ -947,8 +995,8 @@
         ⚠️ Ein Import-Lauf ist aktiv – bitte den Kurs in dieser Zeit nicht parallel bearbeiten.</div>`;
       }
 
-      // Weitere Zip-Dateien: oberhalb/außerhalb der Stufen (analog zur initialen Upload-Dropzone)
-      html += addZipBlock();
+      // Weitere Zips/Dateien: oberhalb/außerhalb der Stufen (analog zur initialen Upload-Dropzone)
+      html += addFilesBlock();
 
       for (const s of SECTIONS) {
         html += section(s, st);
@@ -1184,11 +1232,16 @@
         } else {
           badge = `<span class="text-gray-400 text-[11px] whitespace-nowrap">– ignoriert</span>`;
         }
+        // M1: PDF-Info-Zeile (Seiten, Seiten ohne Textschicht, eingebettete Bilder)
+        const pdfInfo = (m.type === 'pdf_doc' && m.pages)
+          ? `<span class="text-[10px] text-gray-400 whitespace-nowrap" title="PDF-Dokument">${m.pages} S.${m.no_text_pages ? ` · ${m.no_text_pages} ohne Text` : ''}${m.embedded_images ? ` · ${m.embedded_images} Bilder` : ''}</span>`
+          : '';
         const delBtn = st.has_active
           ? ''
           : `<button data-act="file-del" data-path="${esc(m.path)}" class="text-gray-300 hover:text-red-600 text-xs" title="Datei aus der Stage entfernen">🗑</button>`;
         return `<div class="flex items-center gap-2 px-3 py-1.5">
           <span class="text-xs text-gray-700 truncate flex-1" title="${esc(m.path)}">${esc(m.path)}</span>
+          ${pdfInfo}
           <span class="text-[10px] text-gray-400 whitespace-nowrap">${fmtBytes(m.size)}</span>
           ${badge}
           ${delBtn}
@@ -1201,13 +1254,13 @@
       </div>`;
     }
 
-    function addZipBlock() {
+    function addFilesBlock() {
       return `<div class="mb-4">
         <div id="add-dropzone" class="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-blue-400 transition">
           <div class="text-3xl mb-2">📦</div>
-          <p class="text-sm font-medium text-gray-700">Weitere Zip-Datei hierher ziehen oder klicken (wird in dieselbe Stage gemerged)</p>
-          <p class="text-xs text-gray-400 mt-1">Max. 500 MB · .zip</p>
-          <input type="file" id="add-file" accept=".zip,application/zip" class="hidden">
+          <p class="text-sm font-medium text-gray-700">Weitere Zips/Dateien hierher ziehen oder klicken (wird in dieselbe Stage gemerged)</p>
+          <p class="text-xs text-gray-400 mt-1">Max. 500 MB · .zip, .pdf, .tex, .md, .docx, .pptx, .bib, Bilder …</p>
+          <input type="file" id="add-file" multiple accept="${FILE_INPUT_ACCEPT}" class="hidden">
         </div>
         <div id="add-progress" class="hidden mt-3">
           <div class="flex justify-between text-xs text-gray-500 mb-1">
@@ -1265,8 +1318,8 @@
       }
 
       if (!items.length) {
-        if (p === 'skipped' || p === 'done') return '<div class="text-sm text-gray-500">Keine Medien (Bilder/SVG/EPS/PDF-Figuren) im Zip gefunden — nichts zu importieren.</div>';
-        return `<div class="text-sm text-gray-500">Keine Medien (Bilder/SVG/EPS/PDF-Figuren) im Zip gefunden.
+        if (p === 'skipped' || p === 'done') return '<div class="text-sm text-gray-500">Keine Medien (Bilder/SVG/EPS/PDF-Figuren) im Import gefunden — nichts zu importieren.</div>';
+        return `<div class="text-sm text-gray-500">Keine Medien (Bilder/SVG/EPS/PDF-Figuren) im Import gefunden.
         <div class="mt-2"><button data-act="media-skip" class="border border-gray-300 text-gray-600 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-100">Überspringen</button></div></div>`;
       }
 
@@ -1402,7 +1455,7 @@
       }
 
       if (!entries.length) {
-        html += `<div class="text-sm text-gray-500">Keine Quellen (keine .bib-Files, keine \\cite-Keys) im Zip gefunden — ggf. oben per LLM-Extraktion aus den Text-Dateien erzeugen.
+        html += `<div class="text-sm text-gray-500">Keine Quellen (keine .bib-Files, keine \\cite-Keys) im Import gefunden — ggf. oben per LLM-Extraktion aus den Text-Dateien erzeugen.
         <div class="mt-2"><button data-act="references-skip" class="border border-gray-300 text-gray-600 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-100">Überspringen</button></div></div>`;
         return html;
       }
@@ -1816,7 +1869,7 @@
     // ─── Events (delegiert) ─────────────────────────────────────────
 
     root.addEventListener('click', async (e) => {
-      // Dropzone für weitere Zips: Klick → File-Picker öffnen
+      // Dropzone für weitere Dateien: Klick → File-Picker öffnen
       if (e.target.closest('#add-dropzone')) {
         const fi = document.getElementById('add-file');
         if (fi) fi.click();
@@ -1828,7 +1881,7 @@
       try {
         switch (act) {
           case 'delete-import':
-            if (!confirm('Import wirklich löschen? (Zip-Dateien und Import-Plan; bereits generierte Skript-/Folien-Inhalte bleiben erhalten)')) return;
+            if (!confirm('Import wirklich löschen? (hochgeladene Dateien und Import-Plan; bereits generierte Skript-/Folien-Inhalte bleiben erhalten)')) return;
             await api('', { method: 'DELETE' });
             state = null;
             showToast('Import gelöscht.', 'success');
@@ -2022,7 +2075,8 @@
           markDirty('decks');
         }
       } else if (t.id === 'add-file') {
-        if (t.files[0]) upload(t.files[0], 'add');
+        if (t.files && t.files.length) uploadFiles(Array.from(t.files), 'add');
+        t.value = '';
       } else if (t.id === 'slides-del-cb') {
         deleteOriginal = t.checked;
       }
@@ -2066,7 +2120,7 @@
       row.classList.add('opacity-50');
     });
     root.addEventListener('dragover', (e) => {
-      // Zusätzliche Zip-Datei auf die Dropzone ziehen
+      // Zusätzliche Dateien auf die Dropzone ziehen
       const dz = e.target.closest('#add-dropzone');
       if (dz) {
         e.preventDefault();
@@ -2085,13 +2139,12 @@
       if (dz) dz.classList.remove('border-blue-400');
     });
     root.addEventListener('drop', (e) => {
-      // Zusätzliche Zip-Datei auf die Dropzone
+      // Zusätzliche Dateien auf die Dropzone
       const dz = e.target.closest('#add-dropzone');
       if (dz) {
         e.preventDefault();
         dz.classList.remove('border-blue-400');
-        const f = e.dataTransfer.files[0];
-        if (f) upload(f, 'add');
+        uploadFiles(Array.from(e.dataTransfer.files || []), 'add');
         return;
       }
       const row = e.target.closest('.plan-row');

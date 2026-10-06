@@ -9,6 +9,7 @@ Runner mit Pause/Resume/Cancel).
 
 Diese Module stellt nur die REST-Endpunkte bereit:
   POST   /api/courses/{course_id}/import                     (Zip-Upload, 202; erneut = Merge)
+  POST   /api/courses/{course_id}/import/files                (Einzeldatei-Upload, 202; erneut = Merge)
   GET    /api/courses/{course_id}/import                      (State/Polling)
   POST   /api/courses/{course_id}/import/media                (auswählen/skip)
   POST   /api/courses/{course_id}/import/references           (auswählen/skip)
@@ -23,11 +24,15 @@ Diese Module stellt nur die REST-Endpunkte bereit:
   DELETE /api/courses/{course_id}/import/files                (gestagte Dateien entfernen)
   DELETE /api/courses/{course_id}/import                      (Import + Staging löschen)
 
-Upload-Format: RAW Body (rohe Zip-Bytes, kein FormData/multipart!),
-Dateiname via Header X-File-Name.
+Upload-Formate:
+  Zip-Upload:  RAW Body (rohe Zip-Bytes, kein FormData/multipart!),
+               Dateiname via Header X-File-Name.
+  Datei-Upload: Multipart-Formular mit mehreren Teilen „files“ (PDF, TeX,
+               Markdown, Office, Bilder, BibTeX — see IMPORT_LOOSE_FILE_EXTS).
 """
 
 import asyncio
+import logging
 import shutil
 import uuid
 import zipfile
@@ -35,7 +40,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sqlmodel import Session, select
@@ -45,6 +50,8 @@ from database.base import get_session
 from database.models import CourseImport
 from services import import_service
 from api.course_members import require_prof_or_admin
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["Kurs-Import (PROF/Admin)"])
 
@@ -224,6 +231,120 @@ async def start_import(
     session.commit()
     session.refresh(imp)
     assert imp.id is not None
+
+    import_service.spawn_job(import_service.run_filemap_job(course_id, imp.id))
+    return {"message": "Import gestartet.", "import_id": imp.id}
+
+
+@router.post("/courses/{course_id}/import/files", status_code=202)
+async def start_import_files(
+    request: Request,
+    files: list[UploadFile] = File(...),
+    session: Session = Depends(get_session),
+    auth: tuple = Depends(require_prof_or_admin()),
+):
+    """Einzeldatei-Upload (Multipart, mehrere Teile „files“) → dieselbe
+    Staging wie der Zip-Upload; startet die Datei-Analyse (filemap).
+
+    Nur Dateitypen, die das Import-System verarbeitet (PDF, TeX, Markdown,
+    Office, Bilder, BibTeX) — Zips laufen über den RAW-Body-Endpunkt.
+    Bei bestehendem Import wird gemerged; die filemap läuft idempotent neu.
+    """
+    user, course_id, _ = auth
+    if not files or not any((f.filename or "").strip() for f in files):
+        raise HTTPException(400, "Keine Datei ausgewählt.")
+    existing = _get_import(session, course_id)
+
+    # Größen-/Platz-Checks vor dem Speichern (Content-Length = ganzer Multipart-Body)
+    total = int(request.headers.get("content-length") or 0)
+    if total > IMPORT_MAX_ZIP_BYTES:
+        raise HTTPException(
+            413, f"Upload zu groß (max. {IMPORT_MAX_ZIP_BYTES // (1024 * 1024)} MB)."
+        )
+    if total > 0 and shutil.disk_usage(IMPORT_DIR).free < total * IMPORT_MIN_FREE_DISK_FACTOR:
+        raise HTTPException(507, "Nicht genügend freier Festplattenspeicher für den Import.")
+
+    if existing is not None:
+        active = [
+            s for s in import_service.IMPORT_STAGES
+            if _status(existing, s) in ("running", "paused")
+        ]
+        if active:
+            raise HTTPException(
+                409, "Es läuft gerade ein Import-Job – bitte zuerst pausieren oder abbrechen."
+            )
+        staging = import_service.staging_dir(course_id, existing.job_id)
+        job_id = existing.job_id
+        is_merge = True
+    else:
+        job_id = uuid.uuid4().hex  # 32 Hex-Zeichen
+        staging = import_service.staging_dir(course_id, job_id)
+        is_merge = False
+
+    try:
+        _added, warnings = await asyncio.to_thread(
+            import_service.store_loose_files,
+            staging,
+            [(f.filename or "", f.file) for f in files],
+        )
+    except ValueError as exc:
+        # Bei neuem Import die (leere bzw. teilweise) Staging aufräumen;
+        # bei Merge bleibt das Staging erhalten (wie beim Zip-Upload).
+        if not is_merge:
+            shutil.rmtree(staging, ignore_errors=True)
+        raise HTTPException(400, str(exc))
+    except OSError as exc:
+        logger.error("Import-Datei-Upload fehlgeschlagen: %s", exc)
+        if not is_merge:
+            shutil.rmtree(staging, ignore_errors=True)
+        raise HTTPException(500, "Upload konnte nicht gespeichert werden.")
+
+    names = [Path(f.filename or "").name for f in files]
+    display = names[0] if len(names) == 1 else f"{len(names)} Dateien"
+
+    if is_merge:
+        imp = existing
+        report = dict(imp.report or {})
+        uploads = list(report.get("uploads") or [imp.zip_name])
+        for n in names:
+            if n not in uploads:
+                uploads.append(n)
+        # Alte Extraktions-Fehler aus misslungenen Läufen bereinigen
+        report = {
+            **report,
+            "uploads": uploads,
+            "errors": [
+                e for e in (report.get("errors") or [])
+                if not import_service.report_entry_msg(e).startswith("Zip-Extraktion fehlgeschlagen")
+            ],
+        }
+        imp.report = report
+        imp.updated_at = datetime.now()
+        session.add(imp)
+        session.commit()
+        session.refresh(imp)
+        assert imp.id is not None
+        if warnings:
+            import_service.append_report(imp.id, warnings=warnings)
+        import_service.spawn_job(import_service.run_filemap_job(course_id, imp.id))
+        return {
+            "message": (
+                f"Weitere Datei(n) hinzugefügt ({display}) – "
+                "die Dateianalyse wird fortgesetzt."
+            ),
+            "import_id": imp.id,
+        }
+
+    imp = CourseImport(
+        course_id=course_id, job_id=job_id, zip_name=display[:300], created_by=user.id,
+        report={"uploads": names},
+    )
+    session.add(imp)
+    session.commit()
+    session.refresh(imp)
+    assert imp.id is not None
+    if warnings:
+        import_service.append_report(imp.id, warnings=warnings)
 
     import_service.spawn_job(import_service.run_filemap_job(course_id, imp.id))
     return {"message": "Import gestartet.", "import_id": imp.id}
