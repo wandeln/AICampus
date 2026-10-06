@@ -324,10 +324,15 @@
     }
   });
 
-  // Textarea wächst mit dem Inhalt (max. 160 px)
+  // Textarea wächst mit dem Inhalt (max. 160 px). scrollHeight enthält
+  // das Padding, aber bei box-sizing: border-box nicht den Border — den
+  // müssen wir dazuaddieren, sonst wird das Feld beim ersten Tippen 2 px
+  // kleiner und zeigt eine Mini-Scrollbar im Feld selbst.
   forumInput.addEventListener('input', () => {
     forumInput.style.height = 'auto';
-    forumInput.style.height = Math.min(forumInput.scrollHeight, 160) + 'px';
+    const cs = getComputedStyle(forumInput);
+    const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    forumInput.style.height = Math.min(forumInput.scrollHeight + border, 160) + 'px';
   });
 
   // ─── Polling: neue Nachrichten alle 4 s ──────────────────────
