@@ -149,6 +149,12 @@
   let lastMessageId = initialMessages.length
     ? initialMessages[initialMessages.length - 1].id
     : 0;
+  // IDs, die bereits im DOM sind: Dedupe gegen das Race zwischen einem
+  // in-flight Poll und der POST-Antwort — ohne Filter würde eine eigene
+  // Nachricht doppelt erscheinen, wenn der Server den Poll-GET nach dem
+  // POST-Commit abarbeitet (verschwindet sonst erst nach Reload).
+  // Bleibt bewusst leer: der Initial-Load rendert über dieselbe Funktion.
+  const renderedMessageIds = new Set();
 
   // Rolle-Farben (konsistent mit der Mitglieder-Seite)
   const ROLE_STYLES = {
@@ -239,13 +245,19 @@
 
   let initialLoadDone = false;
   function appendForumMessages(msgs, forceScroll, countAsUnread = true) {
+    // Dedupe: schon gerenderte IDs überspringen (z. B. Poll, der dieselbe
+    // Nachricht liefert, die die POST-Antwort bereits angehängt hat).
+    msgs = msgs.filter((m) => !renderedMessageIds.has(m.id));
     if (!msgs.length) return;
     const nearBottom = forumIsNearBottom();
     const empty = document.getElementById('forum-empty');
     if (empty) empty.remove();
-    for (const m of msgs) forumList.appendChild(forumMessageEl(m));
+    for (const m of msgs) {
+      renderedMessageIds.add(m.id);
+      forumList.appendChild(forumMessageEl(m));
+    }
     if (nearBottom || forceScroll) forumList.scrollTop = forumList.scrollHeight;
-    lastMessageId = msgs[msgs.length - 1].id;
+    lastMessageId = Math.max(lastMessageId, msgs[msgs.length - 1].id);
     if (countAsUnread && chatVisible()) {
       // Initial-Load: Server-Zähler abziehen (lastMessageId markiert alles bis
       // zur letzten Nachricht als gelesen). Spätere Adds: nur die neuen zählen.
