@@ -353,6 +353,9 @@
       // Die initiale Ladung (setValue/setInitialContent feuern Change-Events)
       // ist keine Änderung → Baseline auf den geladenen Stand setzen.
       av.setBaseline(avPayload());
+      // „Unverändert“-Vergleichs-Basis für ?new=1-Decks (finishEdit):
+      // erst hier bekannt — die Inputs sind beim Parse noch leer.
+      initialDeckPayload = avPayload();
       renderPreview(contentGet());
     } catch (e) {
       previewEmptyEl.textContent = "Fehler beim Laden des Inhalts.";
@@ -974,11 +977,40 @@
   titleInput.addEventListener("input", () => av.onChange());
   summaryInput.addEventListener("input", () => av.onChange());
 
+  // Neues Deck (per „Neues Deck anlegen“ mit ?new=1 geöffnet): „Fertig“
+  // ohne jede Änderung verwirft es still (ohne Confirm — es ist leer,
+  // nichts zu verlieren), statt ein leeres Deck in der Liste zu
+  // hinterlassen (Konsistenz mit Skript-Kapiteln/Applets, die erst
+  // mit der ersten Änderung angelegt werden). Die Baseline kommt aus
+  // loadContent() — beim Parse sind die Inputs noch leer (Titel/Content/
+  // Summary werden per API geladen), ein Parse-Zeitpunkt-Snapshot wäre
+  // immer „unverändert ≠ leer“ falsch.
+  const isNewDeck = new URLSearchParams(window.location.search).has("new");
+  let initialDeckPayload = null;
+
   window.finishEdit = async function () {
     const res = await av.finish();
     if (!res.ok) {
       showToast("Das letzte Auto-Save ist noch nicht abgeschlossen – bitte kurz warten.", "warning");
       return;
+    }
+    if (isNewDeck && initialDeckPayload) {
+      const p = avPayload();
+      const unchanged = p.title === initialDeckPayload.title
+        && p.content === initialDeckPayload.content
+        && p.summary === initialDeckPayload.summary;
+      if (unchanged) {
+        try {
+          const r = await fetch(`/api/courses/${courseId}/materials/${material.id}`, {
+            method: "DELETE",
+            credentials: "same-origin",
+          });
+          if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "Fehler beim Verwerfen.");
+        } catch (err) {
+          showToast("Deck konnte nicht verworfen werden: " + (err.message || ""), "error");
+          return;
+        }
+      }
     }
     window.location.href = `/courses/${courseId}/slides`;
   };

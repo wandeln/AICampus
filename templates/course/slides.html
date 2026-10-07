@@ -364,7 +364,9 @@
         showToast(data.detail || "Fehler beim Anlegen.", "error");
         return;
       }
-      window.location.href = `/courses/${courseId}/slides/${data.material.id}`;
+      // ?new=1: „Fertig“ ohne Änderung verwirft das Deck wieder
+      // (slides_edit.html) — es bleibt kein leeres Deck in der Liste.
+      window.location.href = `/courses/${courseId}/slides/${data.material.id}?new=1`;
     } catch (err) {
       showToast("Fehler: " + err.message, "error");
     }

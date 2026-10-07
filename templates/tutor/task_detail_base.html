@@ -387,31 +387,28 @@ class PrivateTest(unittest.TestCase):
   // aber der aktuelle Datei-Stand muss in der Version landen.
   window._avTouch = () => { if (av && av.touch) av.touch(); };
 
-  // ─── Neu-Anlage: direkt anlegen (Default-Titel) + zur Task-Seite ──
-  // Die „Neue Aufgabe“-Seite ist nur noch eine Zwischenseite: Die Aufgabe
-  // wird sofort mit Default-Titel angelegt und das Bearbeiten findet auf
-  // /tasks/{id} statt (Prev/Next-Navigation, Workspace-Dateibaum o. ä.).
-  if (!isUpdate) {
-    (async () => {
-      try {
-        const body = buildTaskBody();
-        body.title = String(body.title || "").trim() || "Neue Aufgabe";
-        const res = await fetch(`/api/courses/${courseId}/tasks`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          credentials: "same-origin",
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.detail || "HTTP " + res.status);
-        window.location.replace(`/courses/${courseId}/tasks/${(data.task || data).id}`);
-      } catch (e) {
-        // Aufgabe bleibt hier unangelegt; der erste Auto-Save (createEntity)
-        // legt sie dann an und wechselt um.
-        showToast("Aufgabe konnte nicht angelegt werden: " + (e.message || ""), "warning");
-      }
-    })();
+  // ─── Neu-Anlage: erst bei der ersten echten Änderung ──────────
+  // Konsistenz mit Skript-Kapiteln/Applets: Eine neue Aufgabe taucht
+  // erst in der Liste auf, wenn tatsächlich etwas geändert wurde.
+  // Der erste Auto-Save (createEntity) legt sie an; onSaved(created)
+  // wechselt dann auf /tasks/{id} (Prev/Next-Navigation,
+  // Workspace-Dateibaum o. ä.). Ein Typ-Wechsel zählt ebenfalls als
+  // erste Änderung — wichtig bei Workspace, dessen Datei-Baum die
+  // serverseitige Aufgabe (Stub-Skripte) braucht. „Fertig“ ohne
+  // Änderung verwirft den Entwurf (siehe finishTask).
+  // Bei leerem Titel füllt die erste Änderung den Default-Titel, damit
+  // shouldSave (Titel-Pflicht) die Anlage zulässt.
+  function ensureNewTaskTitle() {
+    if (av.id != null || !taskTitleInput) return;
+    if (!String(taskTitleInput.value).trim()) {
+      taskTitleInput.value = "Neue Aufgabe";
+      syncTaskTitle();
+    }
   }
+  const _avOriginalOnChange = av.onChange;
+  const _avOriginalTouch = av.touch;
+  av.onChange = function () { ensureNewTaskTitle(); return _avOriginalOnChange.apply(this, arguments); };
+  av.touch = function () { ensureNewTaskTitle(); return _avOriginalTouch.apply(this, arguments); };
 
   // Feld-Änderungen → Auto-Save
   ["title", "max_points", "max_attempts", "deadline"].forEach((n) => {
@@ -459,6 +456,12 @@ class PrivateTest(unittest.TestCase):
       setTimeout(async () => {
         if (!(await flushBeforeTypeSwitch())) {
           showToast("Speichern des Typ-Wechsels fehlgeschlagen – bitte erneut versuchen.", "error");
+          return;
+        }
+        // Frisch angelegt (dieser Typ-Wechsel war der erste Save)? →
+        // direkt auf die Task-Seite; das Template folgt dem Typ in der DB.
+        if (!isUpdate && av.id != null) {
+          location.href = `/courses/${courseId}/tasks/${av.id}`;
           return;
         }
         const url = new URL(location.href);
@@ -980,8 +983,10 @@ class PrivateTest(unittest.TestCase):
   window.finishTask = async function () {
     const res = await av.finish();
     if (!res.id) {
-      // Noch nie gespeichert (z. B. nur Titel ohne Aufgabenstellung)
-      if (confirm("Die Aufgabe wurde noch nicht gespeichert. Verwerfen und zur Aufgabensammlung zurückkehren?")) {
+      // Entwurf nie gespeichert: Ohne ausstehende Änderungen ist nichts
+      // zu verlieren → einfach zurück. Warnen nur, wenn tatsächlich
+      // ungespeicherte Änderungen drohen (z. B. fehlgeschlagener Save).
+      if (!av.dirty || confirm("Die Aufgabe hat ungespeicherte Änderungen. Verwerfen und zur Aufgabensammlung zurückkehren?")) {
         window.location.href = `/courses/${courseId}/tasks`;
       }
       return;
