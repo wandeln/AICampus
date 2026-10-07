@@ -386,6 +386,7 @@ async def update_task(
     body = await request.json()
     
     # Update allowed fields
+    old_task_type = task.task_type
     if "title" in body: task.title = body["title"]
     if "task_type" in body: task.task_type = TaskType(body["task_type"])
     if "description" in body: task.description = body["description"]
@@ -434,6 +435,13 @@ async def update_task(
     # Typ-Wechsel weg von Text: altes text_template entsorgen
     if "task_type" in body and task.task_type != TaskType.TEXT and task.text_template:
         task.text_template = None
+    # Typ-Wechsel weg von Workspace: Workspace-Rows/Dateien entsorgen, damit
+    # session.delete(task) später keine verwaisten NOT-NULL-FK-Rows hinterlässt.
+    # Version-Snapshots bleiben erhalten (alte Workspace-Versionen wiederherstellbar).
+    if "task_type" in body and old_task_type == TaskType.WORKSPACE \
+            and task.task_type != TaskType.WORKSPACE:
+        workspace_service.discard_workspace_content(
+            session, task, keep_version_snapshots=True)
 
     # Workspace-Felder (Umgebung + Dateien; nur explizit übergebene Keys)
     if task.task_type == TaskType.WORKSPACE:
@@ -484,16 +492,16 @@ async def delete_task(
         raise HTTPException(403, "Keine Berechtigung, diese Aufgabe zu löschen.")
 
     task_course_id = task.course_id
-    task_was_workspace = task.task_type.value == "workspace"
-    # Agent-Ressourcen + lokale Dateien aufräumen, BEVOR der Task aus der
-    # DB gelöscht wird (Instanz ist danach expired/detached)
-    if task_was_workspace:
-        try:
-            workspace_service.on_task_deleted(session, task)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Workspace-Aufräumen (task %s) fehlgeschlagen: %s", task_id, e)
-        # Workspace-DB-Rows löschen (NOT NULL-FKs ohne Relationship-Cascade)
-        workspace_service.delete_task_db_rows(session, task)
+    # Workspace-Zeilen können auch bei nicht-Workspace-Typen vorhanden sein
+    # (z. B. per Typ-Wechsel verwaist) — dann ebenfalls aufräumen, sonst
+    # bricht session.delete(task) mit IntegrityError ab (500).
+    task_has_workspace_rows = session.exec(
+        select(TaskWorkspaceFile.id).where(TaskWorkspaceFile.task_id == task.id)
+    ).first() is not None
+    if task.task_type.value == "workspace" or task_has_workspace_rows:
+        # Agent-Ressourcen + lokale Dateien + Workspace-DB-Rows, BEVOR der
+        # Task aus der DB gelöscht wird (Instanz ist danach expired/detached)
+        workspace_service.discard_workspace_content(session, task)
 
     for sub in task.submissions:
         for fb in sub.feedback_list:

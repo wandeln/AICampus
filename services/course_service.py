@@ -31,6 +31,7 @@ from database.models import (
     ScriptSection,
     Submission,
     Task,
+    TaskWorkspaceFile,
     UserCourse,
 )
 from services import import_service
@@ -134,14 +135,15 @@ def delete_course(session: Session, course: Course) -> str:
     tasks = session.exec(select(Task).where(Task.course_id == course_id)).all()
     for task in tasks:
         task_id = task.id
-        if task.task_type.value == "workspace":
+        # Workspace-Zeilen können auch bei nicht-Workspace-Typen vorhanden
+        # sein (z. B. per Typ-Wechsel verwaist) — dann ebenfalls aufräumen.
+        task_has_workspace_rows = session.exec(
+            select(TaskWorkspaceFile.id).where(TaskWorkspaceFile.task_id == task.id)
+        ).first() is not None
+        if task.task_type.value == "workspace" or task_has_workspace_rows:
             # Agent-Ressourcen + lokale Dateien + Workspace-DB-Rows
             # (NOT NULL-FKs ohne Relationship-Cascade)
-            try:
-                workspace_service.on_task_deleted(session, task)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Workspace-Aufräumen (task %s) fehlgeschlagen: %s", task_id, e)
-            workspace_service.delete_task_db_rows(session, task)
+            workspace_service.discard_workspace_content(session, task)
         submissions = session.exec(
             select(Submission).where(Submission.task_id == task_id)
         ).all()

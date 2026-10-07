@@ -38,6 +38,7 @@ from database.models import (
     ScriptSection,
     Submission,
     Task,
+    TaskWorkspaceFile,
     User,
     UserCourse,
     WorkspaceRun,
@@ -86,12 +87,13 @@ def delete_user_with_data(session: Session, user: User) -> str:
     # 3. In anderen Kursen erstellte Tasks
     #    (Workspace-Aufräumen + Einreichungen/Feedback/Hints anderer Studenten)
     for task in session.exec(select(Task).where(Task.created_by == user_id)).all():
-        if task.task_type.value == "workspace":
-            try:
-                workspace_service.on_task_deleted(session, task)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Workspace-Aufräumen (task %s) fehlgeschlagen: %s", task.id, e)
-            workspace_service.delete_task_db_rows(session, task)
+        # Workspace-Zeilen können auch bei nicht-Workspace-Typen vorhanden
+        # sein (z. B. per Typ-Wechsel verwaist) — dann ebenfalls aufräumen.
+        task_has_workspace_rows = session.exec(
+            select(TaskWorkspaceFile.id).where(TaskWorkspaceFile.task_id == task.id)
+        ).first() is not None
+        if task.task_type.value == "workspace" or task_has_workspace_rows:
+            workspace_service.discard_workspace_content(session, task)
         # Media-Usages der Aufgabe vorher entfernen (NOT-NULL-FK task_id)
         for usage in session.exec(
             select(MediaUsage).where(MediaUsage.task_id == task.id)

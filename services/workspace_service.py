@@ -1514,8 +1514,8 @@ class WorkspaceService:
         session.commit()
         return results
 
-    def on_task_deleted(self, session: Session, task: Task) -> None:
-        """Task-Entfernung: Agent-Ressourcen + lokale Dateien aufräumen."""
+    def _cleanup_workspace_assets(self, session: Session, task: Task) -> None:
+        """Agent-Ressourcen + lokale Workspace-Dateien der Aufgabe entfernen."""
         for agent in self.get_agents(session, task.course_id):
             client = self.client_for(agent)
             try:
@@ -1526,6 +1526,10 @@ class WorkspaceService:
         base = task_workspace_dir(task.id)
         if base.exists():
             shutil.rmtree(base, ignore_errors=True)
+
+    def on_task_deleted(self, session: Session, task: Task) -> None:
+        """Task-Entfernung: Agent-Ressourcen + lokale Dateien aufräumen."""
+        self._cleanup_workspace_assets(session, task)
         # Version-Snapshots der Aufgabe entfernen
         for v in session.exec(
             select(ContentVersion)
@@ -1554,6 +1558,29 @@ class WorkspaceService:
             select(WorkspaceRun).where(WorkspaceRun.task_id == task.id)
         ).all():
             session.delete(run)
+
+    def discard_workspace_content(self, session: Session, task: Task,
+                                  keep_version_snapshots: bool = False) -> None:
+        """Workspace-Inhalt einer Aufgabe entsorgen (DB-Rows + Dateien).
+
+        Wird aufgerufen, wenn eine Aufgabe aufhört, Workspace zu sein, aber
+        noch Workspace-Zeilen trägt (z. B. per Typ-Wechsel verwaist):
+        session.delete(task) würde die NOT-NULL-FKs sonst auf NULL setzen
+        und mit IntegrityError abbrechen (500).
+
+        keep_version_snapshots: bei einem Typ-Wechsel bleiben die
+        Version-Snapshots der alten Workspace-Zustände erhalten (die
+        Workspace-Versionen bleiben damit wiederherstellbar); bei einer
+        endgültigen Löschung werden sie mit entfernt.
+        """
+        try:
+            if keep_version_snapshots:
+                self._cleanup_workspace_assets(session, task)
+            else:
+                self.on_task_deleted(session, task)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Workspace-Aufräumen (task %s) fehlgeschlagen: %s", task.id, e)
+        self.delete_task_db_rows(session, task)
 
     # ═══════════════════════════════════════════════════════════
     # Abgabe (Snapshot) & Lauf-Historie
