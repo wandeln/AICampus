@@ -2,8 +2,8 @@
 Kurs-Mitglieder-Management für PROFs und Admins.
 
 Eine PROF kann Mitglieder ihres Kurses hinzufügen, Rollen ändern
-oder entfernen. Ein globaler Administrator hat die gleichen Rechte
-und darf zusätzlich PROFs ernennen.
+(inkl. PROF-Verleihung) oder entfernen. Ein globaler Administrator
+hat die gleichen Rechte.
 
 Diese Endpunkte sind unter /api/courses/{course_id}/members erreichbar.
 """
@@ -91,9 +91,8 @@ async def add_members_to_course(
             "role_in_course": "prof" | "tutor" | "student"
         }
 
-    Nur ein Admin darf PROFs ernennen.
+    Jede PROF im Kurs darf alle Rollen vergeben.
     """
-    user, _, is_admin = auth_result
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(404, "Kurs nicht gefunden.")
@@ -101,15 +100,6 @@ async def add_members_to_course(
     body = await request.json()
     user_ids = body.get("user_ids", [])
     role_in_course_str = body.get("role_in_course", "STUDENT").upper()
-
-    # Nur PROF kann keine PROF ernennen — Admin darf
-    if role_in_course_str == "PROF" and not is_admin:
-        raise HTTPException(
-            403,
-            "Du kannst keine PROF zu diesem Kurs ernennen. "
-            "Nur ein Administrator kann das.",
-        )
-
     role_in_course = CourseRole(role_in_course_str)
 
     added = []
@@ -213,19 +203,10 @@ async def update_member_role(
             "role_in_course": "prof" | "tutor" | "student"
         }
 
-    Nur ein Admin darf PROFs ernennen.
+    Jede PROF im Kurs darf alle Rollen vergeben.
     """
-    user, _, is_admin = auth_result
     body = await request.json()
     role_in_course_str = body.get("role_in_course", "").upper()
-
-    if role_in_course_str == "PROF" and not is_admin:
-        raise HTTPException(
-            403,
-            "Du kannst keine PROF zu diesem Kurs ernennen. "
-            "Nur ein Administrator kann das.",
-        )
-
     role_in_course = CourseRole(role_in_course_str)
 
     membership = session.exec(

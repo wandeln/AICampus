@@ -67,7 +67,6 @@
                     {% else %}border-green-200 bg-green-50 text-green-700{% endif %}"
                   data-user-id="{{ member.user_id }}"
                   onchange="changeRole({{ course.id }}, {{ member.user_id }}, this)"
-                  {% if member.role_in_course == 'PROF' and not is_admin %}disabled{% endif %}
                 >
                   <option value="PROF"{% if member.role_in_course == 'PROF' %} selected{% endif %}>PROF</option>
                   <option value="TUTOR"{% if member.role_in_course == 'TUTOR' %} selected{% endif %}>TUTOR</option>
@@ -150,7 +149,7 @@
           <select id="add-role" class="w-full border rounded-lg px-4 py-2 text-sm">
             <option value="STUDENT">STUDENT</option>
             <option value="TUTOR">TUTOR</option>
-            {% if is_admin %}<option value="PROF">PROF</option>{% endif %}
+            <option value="PROF">PROF</option>
           </select>
         </div>
 
