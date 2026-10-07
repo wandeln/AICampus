@@ -187,7 +187,7 @@
 
     data.tasks.forEach((task, i) => {
       const typeBadge = {
-        text: '📝', workspace: '🐳', mc: '🎯'
+        text: '📝', workspace: '💻', mc: '🎯'
       }[task.task_type] || '📋';
       headerHtml += '<th data-task-idx="' + i + '" class="text-center py-3 px-3 font-semibold text-gray-700 border-b text-xs min-w-[120px]" title="' + task.title + '">' +
         typeBadge + ' ' + task.title + ' ' + task.max_points + 'P' +

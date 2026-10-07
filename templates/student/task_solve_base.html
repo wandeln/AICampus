@@ -63,7 +63,7 @@
         {% if task.task_type == 'workspace' %}bg-indigo-100 text-indigo-700
         {% else %}bg-gray-100 text-gray-600
         {% endif %}" style="align-content: center;">
-        {{ '🐳 Workspace' if task.task_type == 'workspace' else '📄 Text' }}
+        {{ '💻 Workspace' if task.task_type == 'workspace' else '📄 Text' }}
       </span>
       <span class="badge px-2 py-0.5 rounded bg-gray-100 text-gray-600">
         {{ latest_points }} /  {{ task.max_points }} Punkte
