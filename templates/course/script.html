@@ -1486,7 +1486,6 @@
       </div>
       ${selection && selection.quote ? `<div class="mt-2 bg-yellow-50 border-l-4 border-yellow-300 rounded-r-lg px-2.5 py-1.5 text-xs text-gray-600 break-words">📖 „${sqEscapeHtml(selection.quote)}“${selection.sectionTitle ? ` <span class="text-gray-400">— ${sqEscapeHtml(selection.sectionTitle)}</span>` : ''}</div>` : ''}
       <div class="mt-1.5 text-sm text-gray-800 whitespace-pre-wrap break-words">${sqEscapeHtml(question)}</div>
-      <div class="sq-waiting mt-2 text-xs text-purple-500">⏳ Die KI denkt nach… (0 s)</div>
     `;
     return el;
   }
@@ -1506,13 +1505,7 @@
     list.prepend(sqTempThreadEl(tempId, question, sqSelection));
     sqSwitchTab('mine');
 
-    let seconds = 0;
-    const timer = setInterval(() => {
-      seconds += 1;
-      const waiting = list.querySelector(`[data-sq-id="${tempId}"] .sq-waiting`);
-      if (waiting) waiting.textContent = `⏳ Die KI denkt nach… (${seconds} s)`;
-    }, 1000);
-
+    // Die KI-Antwort kommt asynchron im Hintergrund und erscheint per Polling.
     try {
       const res = await fetch(`/api/courses/${courseId}/script-questions`, {
         method: 'POST',
@@ -1537,7 +1530,6 @@
       const tmp = list.querySelector(`[data-sq-id="${tempId}"]`);
       if (tmp) tmp.remove();
     } finally {
-      clearInterval(timer);
       sqSelection = null;
       sqUpdateQuoteChip();
       await sqLoad();
@@ -1598,6 +1590,9 @@
       const content = input.value.trim();
       if (!content) return;
       input.value = '';
+      // Hinweis: Der Server prüft im Hintergrund, ob die KI auf die Nachricht
+      // antworten soll (Folgefrage an sie, …) — die Antwort erscheint ggf.
+      // kurz darauf per Polling, ohne dass die Eingabe blockiert wird.
       try {
         const res = await fetch(`/api/script-questions/${sendBtn.dataset.id}/responses`, {
           method: 'POST',

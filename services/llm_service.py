@@ -46,7 +46,7 @@ from prompts.markdown_manual import (
 )
 from prompts.mc_task_prompt import MC_TASK_PROMPT_TEMPLATE
 from prompts.hint_prompt import SOCRATIC_HINT_PROMPT_TEMPLATE
-from prompts.script_question_prompt import SCRIPT_QUESTION_PROMPT_TEMPLATE
+from prompts.script_question_prompt import SCRIPT_FOLLOW_UP_PROMPT_TEMPLATE, SCRIPT_QUESTION_PROMPT_TEMPLATE
 from prompts.report_prompt import COURSE_REPORT_PROMPT_TEMPLATE, STUDENT_REPORT_PROMPT_TEMPLATE
 from prompts.applet_prompt import APPLET_PROMPT_TEMPLATE
 from prompts.import_prompt import (
@@ -1274,6 +1274,59 @@ class LLMService:
         # Passe das Return-Format an: "text" statt "model_solution"
         if result["success"]:
             result["data"] = {"text": result["data"]["model_solution"]}
+
+        return result
+
+    async def maybe_answer_script_follow_up(
+        self,
+        course_name: str,
+        section_context: str,
+        quote_context: str,
+        chapter_index: str,
+        thread_text: str,
+        author_name: str,
+        author_role: str,
+        new_message: str,
+        config: Optional[dict] = None,
+    ):
+        """Prüft, ob eine neue menschliche Nachricht in einem Skript-Fragen-Thread
+        die KI anspricht (Folgefrage/Hinterfragung), und beantwortet sie ggf.
+
+        thread_text: chronologischer Verlauf (Frage + vorherige Antworten inkl.
+            Namen/Rollen; die KI spricht dort als „AICampus (KI)“).
+        author_name/author_role: Absender:in der neuen Nachricht.
+
+        Returns:
+            Dict mit "success", "data"{"respond": bool, "answer": markdown},
+            "latency_ms", "raw_response" — "answer" ist leer, wenn respond=False.
+        """
+        prompt = self._render_prompt(
+            SCRIPT_FOLLOW_UP_PROMPT_TEMPLATE,
+            course_name=course_name,
+            section_context=section_context,
+            quote_context=quote_context,
+            chapter_index=chapter_index,
+            thread_text=thread_text,
+            author_name=author_name,
+            author_role=author_role,
+            new_message=new_message,
+        )
+
+        result = await self._call_with_json(
+            prompt, response_format={"type": "json_object"}, config=config
+        )
+
+        # Daten normalisieren (respond=bool, answer=str, ggf. leer)
+        if result["success"] and isinstance(result.get("data"), dict):
+            data = result["data"]
+            respond_raw = data.get("respond", False)
+            if isinstance(respond_raw, str):
+                # Modell liefert teils "true"/"false" als String
+                respond = respond_raw.strip().lower() in ("true", "1", "ja", "yes")
+            else:
+                respond = bool(respond_raw)
+            answer = str(data.get("answer") or "").strip()
+            result["data"] = {"respond": respond, "answer": answer if respond else ""}
 
         return result
 

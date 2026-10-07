@@ -1,7 +1,15 @@
 """
 Skript-Fragen: alle Kurs-Mitglieder (Studierende/Tutoren/PROFs) stellen Fragen
-zum Skript — die KI antwortet sofort, zusätzlich dürfen alle Kurs-Mitglieder
-menschliche Antworten geben, sodass pro Frage ein Dialog entsteht.
+zum Skript — die KI antwortet (asynchron im Hintergrund), zusätzlich dürfen
+alle Kurs-Mitglieder menschliche Antworten geben, sodass pro Frage ein Dialog
+entsteht.
+
+Die KI-Antworten kommen immer asynchron: Die POST-Endpoints geben sofort
+zurück, die Antwort erscheint per Polling im Fragen-Dialog (Erst-Antwort:
+_llm_initial_answer). Auf jede menschliche Antwort folgt eine
+Hintergrund-Prüfung, ob die KI von der Nachricht angesprochen wird
+(Folgefrage auf ihre Antwort, Korrektur, …) — wenn ja, antwortet sie im
+selben Thread (siehe _llm_followup_check).
 
 Die Fragen werden persistiert (inkl. optionaler Text-Auswahl „quote“), damit
 Tutoren/PROFs schwierige Stellen im Skript identifizieren und es verbessern
@@ -18,13 +26,15 @@ Endpoints:
 - DELETE /script-questions/{question_id}         (Autor oder Staff)
 """
 
+import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Field, Session, SQLModel, select
 
-from database.base import get_session
+from database.base import engine, get_session
 from database.models import (
     Course,
     CourseRole,
@@ -42,6 +52,7 @@ from services.settings_resolver import get_effective_llm_config
 from api.script import _check_member
 
 router = APIRouter(prefix="/api", tags=["Skript-Fragen"])
+logger = logging.getLogger(__name__)
 llm_service = LLMService()
 
 # Forum ist für alle Kurs-Mitglieder (Student/Tutor/PROF) + Admins offen.
@@ -51,6 +62,10 @@ _ALL_COURSE_ROLES = (CourseRole.PROF, CourseRole.TUTOR, CourseRole.STUDENT)
 _SECTION_CONTENT_LIMIT = 16000
 # Eigene letzte Fragen als Kontext für das LLM
 _HISTORY_LIMIT = 5
+# Folgefrage-Kontext: max. vorherige Antworten + Zeichen-Budgets pro Nachricht
+_FOLLOWUP_RESPONSE_LIMIT = 8
+_FOLLOWUP_RESPONSE_CHARS = 1500
+_FOLLOWUP_QUESTION_CHARS = 2000
 
 
 class ScriptQuestionCreate(SQLModel):
@@ -115,6 +130,235 @@ def _chapter_index_text(session: Session, course_id: int) -> str:
         for s in sections
     ]
     return "\n".join(lines)
+
+
+# ─── KI-Antworten (Hintergrund-Tasks) ─────────────────────────────
+# Sowohl die Erst-Antwort auf eine neue Frage als auch die Folgefrage-Prüfung
+# laufen losgelöst vom Request: Die POST-Endpoints geben sofort zurück, die
+# KI-Antworten erscheinen per Polling im Fragen-Dialog (keine UI-Blockade,
+# kein „Denken“-Indikator).
+
+# Starke Referenzen auf laufende Tasks, damit der GC sie nicht abräumt,
+# während sie noch laufen (s. spawn_job in import_service).
+_LLM_TASKS: set[asyncio.Task] = set()
+
+
+def _llm_task_done(t: asyncio.Task) -> None:
+    _LLM_TASKS.discard(t)
+    if not t.cancelled():
+        exc = t.exception()
+        if exc is not None:
+            logger.error("KI-Antwort-Task unerwartet mit Fehler beendet: %s", exc)
+
+
+def _spawn_llm_task(coro) -> None:
+    t = asyncio.create_task(coro)
+    _LLM_TASKS.add(t)
+    t.add_done_callback(_llm_task_done)
+
+
+def _llm_context(session: Session, q: ScriptQuestion) -> tuple[str, dict, str, str, str]:
+    """LLM-Kontext für eine Frage: (Kursname, Config, Kapitel, Zitat, Kapitel-Index)."""
+    course = session.get(Course, q.course_id)
+    course_name = course.name if course else "Kurs"
+    config = get_effective_llm_config(session, q.course_id)
+    section = session.get(ScriptSection, q.section_id) if q.section_id else None
+    if section:
+        sec_content = section.content or ""
+        section_context = sec_content[:_SECTION_CONTENT_LIMIT]
+        if len(sec_content) > _SECTION_CONTENT_LIMIT:
+            section_context += "\n…(Ausschnitt — das Kapitel ist länger)"
+    else:
+        section_context = "(Kein Kapitel ausgewählt — die Frage ist allgemein zum Skript.)"
+    quote_context = f"„{q.quote}“" if q.quote else "(Keine Textauswahl — die Frage ist keiner konkreten Stelle zugeordnet.)"
+    chapter_index = _chapter_index_text(session, q.course_id)
+    return course_name, config, section_context, quote_context, chapter_index
+
+
+async def _llm_initial_answer(question_id: int) -> None:
+    """Erst-Antwort der KI auf eine neue Frage (Hintergrund-Task).
+
+    Bei LLM-Fehler wird ein Warnhinweis als Antwort gespeichert (der
+    Fehlerfall wird nicht per Glocke benachrichtigt). Der Call landet im
+    LLM-Debug-Log mit Label ANSWER_SCRIPT_QUESTION.
+    """
+    try:
+        with Session(engine) as session:
+            q = session.get(ScriptQuestion, question_id)
+            if q is None:
+                return  # Frage wurde inzwischen gelöscht
+            course_name, config, section_context, quote_context, chapter_index = _llm_context(session, q)
+            question_text = q.question
+            # Eigene letzte Fragen als Kontext für das LLM
+            history = session.exec(
+                select(ScriptQuestion)
+                .where(ScriptQuestion.course_id == q.course_id)
+                .where(ScriptQuestion.student_id == q.student_id)
+                .where(ScriptQuestion.id != q.id)  # type: ignore[union-attr]
+                .order_by(ScriptQuestion.created_at.desc())  # type: ignore[attr-defined]
+            ).all()[:_HISTORY_LIMIT]
+            history_text = "(Dies ist die erste Frage.)"
+            if history:
+                history_text = "\n".join(f"Q{i}: {h.question}" for i, h in enumerate(history, 1))
+
+        result = await llm_service.answer_script_question(
+            course_name=course_name,
+            section_context=section_context,
+            quote_context=quote_context,
+            chapter_index=chapter_index,
+            question_history=history_text,
+            student_question=question_text,
+            config=config,
+        )
+
+        if result.get("success"):
+            llm_data = result.get("data")
+            answer = (llm_data.get("text") or "").strip() if isinstance(llm_data, dict) else ""
+            answer = answer or "(Die KI konnte keine Antwort geben.)"
+            notify = True
+        else:
+            # LLM-Fehler nicht verschleiern, aber die Frage trotzdem beantworten
+            answer = "⚠️ Die KI konnte gerade keine Antwort geben. Bitte versuche es später erneut oder wende dich im Forum an die Tutoren."
+            notify = False
+
+        with Session(engine) as session:
+            q = session.get(ScriptQuestion, question_id)
+            if q is None:
+                return  # Frage wurde während der Generierung gelöscht
+            session.add(
+                ScriptQuestionResponse(
+                    question_id=q.id,  # type: ignore[arg-type]
+                    user_id=None,
+                    source="llm",
+                    content=answer,
+                )
+            )
+            q.updated_at = datetime.now(timezone.utc)
+            session.add(q)
+            session.commit()
+            # Glocke: KI-Antwort wie eine normale Antwort benachrichtigen
+            # (Auto-Read läuft über den Fragen-Dialog; Fehlerfall wird nicht
+            # benachrichtigt)
+            if notify:
+                notifications.notify_script_question_answer(
+                    session, q.course_id, q.student_id, q.question, "AICampus",
+                    question_id=q.id,
+                )
+    except Exception:
+        logger.exception("KI-Initialantwort fehlgeschlagen (Frage %s).", question_id)
+
+
+async def _llm_followup_check(
+    question_id: int,
+    response_id: int,
+    author_id: int,
+    message: str,
+) -> None:
+    """Prüft im Hintergrund, ob die KI von einer neuen menschlichen Nachricht
+    angesprochen wird (Folgefrage auf ihre Antwort, Korrektur, …), und
+    antwortet ggf. im Thread.
+
+    Läuft losgelöst vom Request (UI blockiert nicht) und mit eigenen
+    DB-Sessions — die Antwort erscheint über das Polling des Fragen-Dialogs.
+    LLM-Fehler bleiben folgenlos (nur Log; der Call landet zusätzlich im
+    LLM-Debug-Log mit Label MAYBE_ANSWER_SCRIPT_FOLLOW_UP).
+    """
+    try:
+        with Session(engine) as session:
+            q = session.get(ScriptQuestion, question_id)
+            author = session.get(User, author_id)
+            if q is None or author is None:
+                return  # Frage/Autor:in wurde inzwischen gelöscht
+            author_role = _role_in_course(session, author, q.course_id) or "STUDENT"
+            author_name = author.name
+            course_name, config, section_context, quote_context, chapter_index = _llm_context(session, q)
+
+            # Verlauf bis kurz vor der neuen Nachricht (die wird per ID
+            # ausgeschlossen und kommt als „NEUE NACHRICHT“ in den Prompt)
+            previous = session.exec(
+                select(ScriptQuestionResponse)
+                .where(ScriptQuestionResponse.question_id == q.id)
+                .where(ScriptQuestionResponse.id != response_id)  # type: ignore[union-attr]
+                .order_by(ScriptQuestionResponse.created_at.asc())  # type: ignore[attr-defined]
+            ).all()
+            thread_text = _followup_thread_text(session, q, list(previous))
+
+        result = await llm_service.maybe_answer_script_follow_up(
+            course_name=course_name,
+            section_context=section_context,
+            quote_context=quote_context,
+            chapter_index=chapter_index,
+            thread_text=thread_text,
+            author_name=author_name,
+            author_role=author_role,
+            new_message=message,
+            config=config,
+        )
+
+        llm_data = result.get("data") or {} if result.get("success") else {}
+        answer = (llm_data.get("answer") or "").strip()
+        if not answer:
+            return  # respond=false, leere Antwort oder LLM-Fehler
+
+        with Session(engine) as session:
+            q = session.get(ScriptQuestion, question_id)
+            if q is None:
+                return  # Thread wurde während der Generierung gelöscht
+            session.add(
+                ScriptQuestionResponse(
+                    question_id=q.id,  # type: ignore[arg-type]
+                    user_id=None,
+                    source="llm",
+                    content=answer,
+                )
+            )
+            q.updated_at = datetime.now(timezone.utc)
+            session.add(q)
+            session.commit()
+            # Glocke: Absender:in der Folgefrage über die KI-Antwort informieren
+            notifications.notify_script_question_answer(
+                session, q.course_id, author_id, q.question, "AICampus",  # type: ignore[arg-type]
+                question_id=q.id,
+            )
+    except Exception:
+        logger.exception("KI-Folgefrage-Prüfung fehlgeschlagen (Frage %s).", question_id)
+
+
+def _followup_thread_text(
+    session: Session,
+    q: ScriptQuestion,
+    responses: list[ScriptQuestionResponse],
+) -> str:
+    """Chronologischer Thread (Frage + vorherige Antworten) als Text für das LLM.
+
+    Namen/Rollen werden mitgegeben, damit die KI eigene („AICampus (KI)“) von
+    menschlichen Beiträgen unterscheiden kann.
+    """
+    user_ids = {q.student_id}
+    user_ids.update(r.user_id for r in responses if r.user_id is not None)
+    users = {
+        u.id: u
+        for u in session.exec(select(User).where(User.id.in_(user_ids))).all()  # type: ignore[attr-defined]
+    }
+    roles = {
+        uc.user_id: uc.role_in_course.value
+        for uc in session.exec(
+            select(UserCourse)
+            .where(UserCourse.course_id == q.course_id)
+            .where(UserCourse.user_id.in_(user_ids))  # type: ignore[attr-defined]
+        ).all()
+    }
+
+    def speaker(user_id: int) -> str:
+        u = users.get(user_id)
+        name = u.name if u else "unknown"
+        return f"{name} ({roles.get(user_id) or 'STUDENT'})"
+
+    lines = [f"FRAGE — {speaker(q.student_id)}: {q.question[:_FOLLOWUP_QUESTION_CHARS]}"]
+    for r in responses[-_FOLLOWUP_RESPONSE_LIMIT:]:
+        prefix = "AICampus (KI)" if (r.source == "llm" or r.user_id is None) else speaker(r.user_id)
+        lines.append(f"{prefix}: {r.content[:_FOLLOWUP_RESPONSE_CHARS]}")
+    return "\n\n".join(lines)
 
 
 def load_questions_payload(
@@ -250,7 +494,11 @@ async def create_script_question(
     session: Session = Depends(get_session),
     viewer_and_course: tuple[User, int] = Depends(require_course_access(*_ALL_COURSE_ROLES)),
 ):
-    """Neue Skript-Frage (alle Kurs-Mitglieder) — die KI antwortet synchron."""
+    """Neue Skript-Frage (alle Kurs-Mitglieder).
+
+    Die KI-Antwort kommt asynchron im Hintergrund (siehe _llm_initial_answer)
+    und erscheint per Polling im Fragen-Dialog — der POST gibt sofort zurück.
+    """
     viewer, _ = viewer_and_course
 
     question_text = data.question.strip()
@@ -288,75 +536,9 @@ async def create_script_question(
     session.commit()
     session.refresh(q)
 
-    # ── LLM-Antwort (synchron, wie beim Hinweis-System) ──────────
-    course = session.get(Course, course_id)
-    course_name = course.name if course else "Kurs"
-    config = get_effective_llm_config(session, course_id)
-
-    if section:
-        content = section.content or ""
-        section_context = content[:_SECTION_CONTENT_LIMIT]
-        if len(content) > _SECTION_CONTENT_LIMIT:
-            section_context += "\n…(Ausschnitt — das Kapitel ist länger)"
-    else:
-        section_context = "(Kein Kapitel ausgewählt — die Frage ist allgemein zum Skript.)"
-
-    quote_context = f"„{quote}“" if quote else "(Keine Textauswahl — die Frage ist keiner konkreten Stelle zugeordnet.)"
-
-    history = session.exec(
-        select(ScriptQuestion)
-        .where(ScriptQuestion.course_id == course_id)
-        .where(ScriptQuestion.student_id == viewer.id)
-        .where(ScriptQuestion.id != q.id)
-        .order_by(ScriptQuestion.created_at.desc())  # type: ignore[attr-defined]
-    ).all()[:_HISTORY_LIMIT]
-    history_text = "(Dies ist die erste Frage.)"
-    if history:
-        history_text = "\n".join(f"Q{i}: {h.question}" for i, h in enumerate(history, 1))
-
-    chapter_index = _chapter_index_text(session, course_id)
-
-    # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
-    # Session sie die gesamte Generierung; s. database/base.py). Der
-    # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
-    session.rollback()
-
-    result = await llm_service.answer_script_question(
-        course_name=course_name,
-        section_context=section_context,
-        quote_context=quote_context,
-        chapter_index=chapter_index,
-        question_history=history_text,
-        student_question=question_text,
-        config=config,
-    )
-
-    if result.get("success"):
-        llm_data = result.get("data")
-        answer = (llm_data.get("text") or "").strip() if isinstance(llm_data, dict) else ""
-        answer = answer or "(Die KI konnte keine Antwort geben.)"
-    else:
-        # LLM-Fehler nicht verschleiern, aber die Frage trotzdem speichern
-        answer = "⚠️ Die KI konnte gerade keine Antwort geben. Bitte versuche es später erneut oder wende dich im Forum an die Tutoren."
-    session.add(
-        ScriptQuestionResponse(
-            question_id=q.id,  # type: ignore[arg-type]
-            user_id=None,
-            source="llm",
-            content=answer,
-        )
-    )
-    session.commit()
-
-    # Glocke: KI-Antwort wie eine normale Antwort benachrichtigen
-    # (konsistent mit menschlichen Antworten; der Fehlerfall ist nur im
-    # Dialog sichtbar und wird nicht benachrichtigt). Auto-Read läuft über
-    # den Fragen-Dialog (offener Dialog → read-type, templates/course/script.html).
-    if result.get("success"):
-        notifications.notify_script_question_answer(
-            session, course_id, q.student_id, q.question, "AICampus",
-            question_id=q.id,
-        )
+    # KI-Antwort im Hintergrund (s. _llm_initial_answer) — erscheint per
+    # Polling im Fragen-Dialog, der POST gibt sofort zurück.
+    _spawn_llm_task(_llm_initial_answer(question_id=q.id))  # type: ignore[arg-type]
 
     payload = load_questions_payload(session, course_id, viewer)
     return next((item for item in payload if item["id"] == q.id), payload[0])
@@ -369,7 +551,12 @@ async def add_script_question_response(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Menschliche Antwort auf eine Skript-Frage (alle Kurs-Mitglieder)."""
+    """Menschliche Antwort auf eine Skript-Frage (alle Kurs-Mitglieder).
+
+    Triggert zusätzlich eine nicht blockierende KI-Prüfung: antwortet die KI
+    auf die Nachricht (Folgefrage an sie, Korrektur, …)? Die Antwort erscheint
+    ggf. über das Polling des Fragen-Dialogs (siehe _llm_followup_check).
+    """
     q = session.get(ScriptQuestion, question_id)
     if not q:
         raise HTTPException(404, "Frage nicht gefunden.")
@@ -395,6 +582,18 @@ async def add_script_question_response(
     notifications.notify_script_question_answer(
         session, q.course_id, q.student_id, q.question, user.name,
         question_id=q.id, responder_id=user.id,
+    )
+
+    # KI-Folgefrage: Im Hintergrund prüfen, ob die KI von der Nachricht
+    # angesprochen wird (Folgefrage auf ihre Antwort, Korrektur, …) — die
+    # Antwort erscheint ggf. über das Polling; die UI blockiert nicht.
+    _spawn_llm_task(
+        _llm_followup_check(
+            question_id=q.id,  # type: ignore[arg-type]
+            response_id=r.id,  # type: ignore[arg-type]
+            author_id=user.id,  # type: ignore[arg-type]
+            message=content,
+        )
     )
 
     return {
