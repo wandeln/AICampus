@@ -113,7 +113,7 @@
     <div class="space-y-4 min-w-0">
 
       <!-- LLM-Box -->
-      <div class="bg-purple-50 border-2 border-purple-300 rounded-xl p-4">
+      <div data-llm-box class="bg-purple-50 border-2 border-purple-300 rounded-xl p-4">
         <h3 class="font-semibold text-gray-800 mb-3 text-sm">🤖 LLM-Deck generieren</h3>
         <textarea id="slide-topic" rows="2"
                   placeholder="Thema / Anweisung (z.B. „Folien zu Kapitel 3: Rekursion erstellen“, „Übungen am Ende ergänzen“, „kürzer fassen“) — leer lassen, wenn das LLM frei überarbeiten soll."
@@ -134,8 +134,9 @@
           </div>
           <p class="mt-1.5 text-xs text-amber-600">⚠️ Warnung: LLMs können Fehler machen – prüfe das Ergebnis bitte selbst.</p>
         </div>
-        <div class="flex items-center justify-end">
-          <button type="button" id="slide-ai-btn" onclick="slideAiGenerate()"
+        <div class="flex items-center justify-end gap-2">
+          <span class="text-xs text-purple-400 select-none" title="Strg+Enter startet die Generierung">Strg+Enter</span>
+          <button type="button" id="slide-ai-btn" data-llm-generate-btn onclick="slideAiGenerate()"
                   class="bg-purple-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-purple-700 transition font-medium">
             ✨ Generieren / Überarbeiten
           </button>

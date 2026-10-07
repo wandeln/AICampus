@@ -646,6 +646,22 @@
   <!-- Autosave + Versions-History (Skript, Slides, Applets, Aufgaben) -->
   <script src="{{ asset('js/autosave-versions.js') }}"></script>
 
+  <!-- LLM-Boxen: Strg+Enter (Mac: Cmd+Enter) startet die Generierung,
+       solange der Fokus in einer LLM-Box liegt (z. B. im Thema-Textarea).
+       Die Box trägt data-llm-box, der Start-Button data-llm-generate-btn. -->
+  <script>
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey)) return;
+      if (!(e.target instanceof Element)) return;
+      const box = e.target.closest("[data-llm-box]");
+      if (!box) return;
+      const btn = box.querySelector("[data-llm-generate-btn]");
+      if (!btn || btn.disabled) return;
+      e.preventDefault();
+      btn.click();
+    });
+  </script>
+
   {% block extra_scripts %}{% endblock %}
 </body>
 </html>

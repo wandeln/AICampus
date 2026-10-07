@@ -277,7 +277,7 @@
   // Formular-HTML; KEY macht alle IDs pro Karte eindeutig
   function sqEditFormHtml(key) {
     return `
-      <div class="bg-purple-50 border-2 border-purple-300 rounded-xl p-4 mb-4">
+      <div data-llm-box class="bg-purple-50 border-2 border-purple-300 rounded-xl p-4 mb-4">
         <h3 class="font-semibold text-gray-800 mb-3 text-sm">🤖 LLM-Kapitel generieren</h3>
         <div class="flex flex-wrap gap-x-4 gap-y-2 mb-3">
           <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer">
@@ -302,8 +302,9 @@
           </div>
           <p class="mt-1.5 text-xs text-amber-600">⚠️ Warnung: LLMs können Fehler machen – prüfe das Ergebnis bitte selbst.</p>
         </div>
-        <div class="flex items-center justify-end">
-          <button type="button" id="sqe-ai-${key}" class="bg-purple-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-purple-700 transition font-medium">Generieren / Ändern</button>
+        <div class="flex items-center justify-end gap-2">
+          <span class="text-xs text-purple-400 select-none" title="Strg+Enter startet die Generierung">Strg+Enter</span>
+          <button type="button" id="sqe-ai-${key}" data-llm-generate-btn class="bg-purple-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-purple-700 transition font-medium">Generieren / Ändern</button>
         </div>
       </div>
       <div class="mb-4">
