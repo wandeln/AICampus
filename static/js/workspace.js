@@ -198,7 +198,8 @@
   // opts:
   //   treeEl, editorEl      HTMLElement (Pflicht)
   //   mediaEl               HTMLElement | null (Medien-Preview-Bereich)
-  //   apiBase               string | null (null = Task noch nicht gespeichert)
+  //   apiBase               string | null (null = Task noch nicht gespeichert;
+  //                         nachträglich setzbar per setApiBase — „Neu"-Seite)
   //   mainFile              Ausgangs-Main-Datei ("" = keine)
   //   allowMain             ⭐-Marker + Main-Datei setzbar (Kontextmenü)
   //   readOnlyCheck         fn(path) -> bool
@@ -233,7 +234,7 @@
   //                         Student: null (ignoriert)
   function init(opts) {
     const {
-      treeEl, editorEl, mediaEl = null, apiBase = null,
+      treeEl, editorEl, mediaEl = null, apiBase: _apiBase = null,
       mainFile = "", allowMain = false,
       readOnlyCheck = () => false,
       canCreate = false, canDelete = false, canMove = false, allowBulk = false,
@@ -248,6 +249,10 @@
       onMainFileChange = null, onFilesLoaded = null,
       onViewChanged = null, onChanged = null,
     } = opts;
+    // Mutabel: auf der „Neue Aufgabe"-Seite null (Task noch nicht angelegt) —
+    // nach dem ersten Save per setApiBase() setzen, dann lädt refresh()
+    // den Baum ohne Reload.
+    let apiBase = _apiBase;
 
     const state = {
       files: [],            // [{path, size, is_binary, access, file_access, init}]
@@ -2407,6 +2412,10 @@
         });
       },
       refresh,
+      // „Neue Aufgabe"-Seite: nach der Direktanlage (erster Auto-Save) den
+      // Files-API-Basis setzen, der Init-Zeit null war — Baum lädt dann
+      // ohne Reload (s. task_detail_workspace.html, _wsActivate).
+      setApiBase: (url) => { apiBase = url || null; },
       openFile,
       saveFile,
       createFile,

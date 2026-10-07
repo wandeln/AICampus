@@ -280,16 +280,44 @@
   // damit die passende Sektion/Dateibaum-Vorlage geladen wird).
   const PAGE_TYPE = {{ tpl_type|tojson }};
   // Titel live synchron halten: Kopfzeile + Browser-Tab (bei leerem
-  // Titel bleibt der Ursprungs-Text stehen)
+  // Titel zeigt der Fallback den zuletzt gespeicherten Titel)
   const taskTitleHeading = document.getElementById("task-title-heading");
   const taskTitleInput = document.querySelector('input[name="title"]');
   const originalTab = document.title;
-  const initialHeading = taskTitleHeading ? taskTitleHeading.textContent.trim() : "";
+  // Letzter tatsächlich gespeicherter Titel: Fallback, wenn das Titel-Feld
+  // geleert wird (leere Titel werden nie gespeichert — shouldSave). Der
+  // Load-Zeit-Stand wäre hier falsch: veraltet nach Titel-Änderungen und
+  // nach In-Place-Anlage („Neue Aufgabe erstellen“ statt angelegtem Titel).
+  let savedTitle = String(taskTitleInput ? taskTitleInput.value : "").trim();
   const syncTaskTitle = AV.bindTitleSync(taskTitleInput, (v) => {
     const t = v.trim();
-    if (taskTitleHeading) taskTitleHeading.textContent = t ? t + " — Bearbeiten" : (initialHeading || "Neue Aufgabe erstellen");
-    document.title = t ? "AICampus - " + t : originalTab;
+    const shown = t || savedTitle;
+    if (taskTitleHeading) taskTitleHeading.textContent = shown ? shown + " — Bearbeiten" : "Neue Aufgabe erstellen";
+    document.title = shown ? "AICampus - " + shown : originalTab;
   });
+  // Direktanlage auf der „Neue Aufgabe"-Seite: nach dem ersten Auto-Save
+  // (createEntity) die Seite OHNE Reload umstellen — URL, task_id-Input
+  // (LLM-Box & hasTaskId-Checks kennen ihn), Student-View-Link, Heading.
+  // Der Prev-Link bleibt korrekt (neue Aufgabe landet am Listenende);
+  // Workspace: Dateibaum + Asset-Polling per _wsActivate nachaktivieren.
+  function activateCreatedTask(taskId) {
+    const url = `/courses/${courseId}/tasks/${taskId}`;
+    // replaceState: Back geht direkt zur Aufgabenliste (ein zweiter
+    // /tasks/new-Eintrag wäre eine Falle für versehentliche Doppelanlage).
+    history.replaceState(history.state, "", url);
+    const form = document.getElementById("task-form");
+    if (form && !form.querySelector('input[name="task_id"]')) {
+      const idInput = document.createElement("input");
+      idInput.type = "hidden";
+      idInput.name = "task_id";
+      idInput.value = taskId;
+      form.prepend(idInput);
+    }
+    const svl = document.getElementById("student-view-link");
+    if (svl) svl.href = url + "?as_student=1";
+    syncTaskTitle();  // Heading: „… — Bearbeiten“
+    if (typeof window._wsActivate === "function") window._wsActivate(taskId);
+  }
   const av = AV.create({
     entityType: "task",
     entityId: (function () {
@@ -313,14 +341,18 @@
     // keinen Text, das ist legitim (weitere Auto-Saves füllen sie auf).
     shouldSave: (p) => !!(p && String(p.title || "").trim()),
     onSaved: (info) => {
+      // Payload-Stand = gerade gespeichertes → Fallback-Titel aktualisieren
+      // (Input-Wert ist bis hierher die gespeicherte Quelle).
+      savedTitle = String(taskTitleInput.value).trim() || savedTitle;
       // Fallback: Falls die Direktanlage auf der „Neue Aufgabe“-Seite
       // fehlgeschlagen ist, legt der erste Auto-Save die Aufgabe hier an —
-      // dann zur Task-Seite wechseln (Prev/Next, Header, Workspace-Dateibaum).
-      if (info.created) {
-        window.location.replace(`/courses/${courseId}/tasks/${info.id}`);
-      }
+      // danach Seite ohne Reload umstellen (s. activateCreatedTask).
+      if (info.created) activateCreatedTask(info.id);
     },
     onRestored: (v) => {
+      // Restore hat das Titel-Feld neu befüllt (applyPayload) → Fallback-Titel
+      // nachziehen, sonst würde ein geleertes Feld den alten Stand zeigen.
+      savedTitle = String(taskTitleInput.value).trim() || savedTitle;
       // Typ-Wechsel durch den Restore (z. B. Workspace → Text): passende
       // Template-Variante neu laden (Sektionen + Dateibaum aus der DB).
       const pt = v && v.snapshot ? v.snapshot.task_type : null;
@@ -344,11 +376,13 @@
   // Konsistenz mit Skript-Kapiteln/Applets: Eine neue Aufgabe taucht
   // erst in der Liste auf, wenn tatsächlich etwas geändert wurde.
   // Der erste Auto-Save (createEntity) legt sie an; onSaved(created)
-  // wechselt dann auf /tasks/{id} (Prev/Next-Navigation,
-  // Workspace-Dateibaum o. ä.). Ein Typ-Wechsel zählt ebenfalls als
-  // erste Änderung — wichtig bei Workspace, dessen Datei-Baum die
-  // serverseitige Aufgabe (Stub-Skripte) braucht. „Fertig“ ohne
-  // Änderung verwirft den Entwurf (siehe finishTask).
+  // stellt die Seite dann OHNE Reload um (activateCreatedTask: URL,
+  // ID, Links, Workspace-Dateibaum). Ein Typ-Wechsel zählt nur dann als
+  // erste Änderung, wenn bereits ungespeicherte Änderungen vorliegen
+  // (reiner Typ-Wechsel auf leerem Formular bleibt UI, keine Anlage);
+  // der LLM-Button speichert dagegen immer zuerst, damit der Workspace-
+  // Dateibaum die serverseitige Aufgabe (Stub-Skripte) bekommt.
+  // „Fertig“ ohne Änderung verwirft den Entwurf (siehe finishTask).
   // Bei leerem Titel füllt die erste Änderung den Default-Titel, damit
   // shouldSave (Titel-Pflicht) die Anlage zulässt.
   function ensureNewTaskTitle() {
@@ -406,6 +440,15 @@
 
     const redirectWithSave = (type) => {
       setTimeout(async () => {
+        // Leerer Entwurf (keine Aufgabe, keine Änderungen): nichts
+        // speichern — sonst würde eine leere Aufgabe angelegt. Nur das
+        // Template umschalten (location.replace: kein Extra-History-Eintrag).
+        if (av.id == null && !av.dirty) {
+          const url = new URL(location.href);
+          url.searchParams.set("task_type", type);
+          location.replace(url.toString());
+          return;
+        }
         if (!(await flushBeforeTypeSwitch())) {
           showToast("Speichern des Typ-Wechsels fehlgeschlagen – bitte erneut versuchen.", "error");
           return;
@@ -460,18 +503,25 @@
       solHint.classList.remove('hidden');
     }
 
+    // Leerer Entwurf (keine Aufgabe, keine Änderungen): Typ-Wechsel ist
+    // eine reine UI-Aktion — nichts speichern (sonst würde eine leere
+    // Aufgabe angelegt). Die Anlage erfolgt bei der ersten echten Änderung
+    // bzw. beim LLM-Generate.
+    const isPristine = av.id == null && !av.dirty;
     if (isWorkspace) {
       // In-page-Wechsel (Template enthält die Workspace-Sektionen): erst
       // speichern (die Stub-Skripte entstehen dabei serverseitig), dann den
       // Dateibaum neu laden — sonst bliebe der leere Baum stehen.
-      flushBeforeTypeSwitch().then((ok) => {
-        if (!ok) {
-          showToast("Speichern des Typ-Wechsels fehlgeschlagen – bitte erneut versuchen.", "error");
-          return;
-        }
-        if (window._wsUI) window._wsUI.refresh();
-      });
-    } else {
+      if (!isPristine) {
+        flushBeforeTypeSwitch().then((ok) => {
+          if (!ok) {
+            showToast("Speichern des Typ-Wechsels fehlgeschlagen – bitte erneut versuchen.", "error");
+            return;
+          }
+          if (window._wsUI) window._wsUI.refresh();
+        });
+      }
+    } else if (!isPristine) {
       av.onChange();
     }
   });
@@ -537,6 +587,18 @@
       showToast("Bitte ein Thema angeben, damit das LLM die Aufgabe generieren kann.", "error");
       document.getElementById("ai-topic").focus();
       return;
+    }
+
+    // Aufgabe existiert noch nicht (auch bei sauberem Formular): erst
+    // speichern (createEntity + in-place-Umstellung). Workspace: die
+    // Stub-Dateien sind danach DB-Rows → stehen dem LLM als Kontext zur
+    // Verfügung; zudem können Server-Anlage und Client-Auto-Save nicht
+    // parallel zwei Aufgaben anlegen.
+    if (av.id == null) {
+      if (!(await flushBeforeTypeSwitch()) || av.id == null) {
+        showToast("Speichern fehlgeschlagen – bitte erneut versuchen.", "error");
+        return;
+      }
     }
 
     const progressDiv = document.getElementById("ai-generate-progress");
@@ -846,11 +908,13 @@
       showToast("Das letzte Auto-Save ist noch nicht abgeschlossen – bitte kurz warten.", "warning");
       return;
     }
-    // Neue Aufgabe → auf die Detail-Seite (Reload mit Task-ID aktiviert
-    // u. a. den Workspace-Dateibaum); bestehende → zur Übersicht.
-    window.location.href = isUpdate
+    // Bestehende Aufgabe oder bereits in-place angelegt (onSaved: Detail-URL
+    // steht schon, Workspace-Baum aktiv) → zur Übersicht; andernfalls
+    // (noch auf /tasks/new, z. B. Anlage erst jetzt per Finish) → Detail-Seite.
+    const detailUrl = `/courses/${courseId}/tasks/${res.id}`;
+    window.location.href = (isUpdate || window.location.pathname === detailUrl)
       ? `/courses/${courseId}/tasks`
-      : `/courses/${courseId}/tasks/${res.id}`;
+      : detailUrl;
   };
 
   // ─── Student View: erst Auto-Save abschließen, dann anzeigen ─

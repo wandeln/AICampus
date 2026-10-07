@@ -216,7 +216,9 @@
   // Workspace-Typ: Umgebungsfelder, Engine/Image-Dropdowns,
   // Status je Engine, Datei-Baum + Editor
   // ══════════════════════════════════════════════════════════════
-  const WS_TASK_ID = {{ task.id if task else "null" }};
+  // let: Auf der „Neue Aufgabe"-Seite null, nach der Direktanlage (erster
+  // Auto-Save) per _wsActivate (unten) ohne Reload gesetzt.
+  let WS_TASK_ID = {{ task.id if task else "null" }};
   const WS_ASSETS_INIT = {{ (task.workspace_assets_status or "") | tojson }};
   const WS_ENGINES_INIT = {{ (task.workspace_engines if task else []) | tojson }};
   const WS_IMAGE_INIT = {{ ((task.workspace_image if task else None) or "") | tojson }};
@@ -226,7 +228,7 @@
   const WS_DISK_INIT = {{ (task.workspace_disk_quota if task else None) | tojson }};
   const WS_INTERNET_INIT = {{ (task.workspace_internet if task else false) | tojson }};
   const WS_MAIN_FILE_INIT = {{ ((task.workspace_main_file if task else None) or "") | tojson }};
-  const WS_TUTOR_FILES_API = WS_TASK_ID ? "/api/tasks/" + WS_TASK_ID + "/workspace" : null;
+  let WS_TUTOR_FILES_API = WS_TASK_ID ? "/api/tasks/" + WS_TASK_ID + "/workspace" : null;
 
   // ─── Umgebung (Simple-Fields) ─────────────────────────────────
   // (Main-Datei: nur noch per ⭐ im Datei-Baum — State lebt in wsUI)
@@ -825,6 +827,20 @@
   // Workspace-Wechsel in derselben Seite muss der Dateibaum neu geladen
   // werden (Stubs entstehen erst serverseitig beim Save).
   window._wsUI = wsUI;
+
+  // „Neue Aufgabe"-Seite: Direktanlage (erster Auto-Save) ohne Reload
+  // nachaktivieren — Task-ID + Files-API setzen, Baum laden und das
+  // Asset-Polling starten (Stub-Sync läuft serverseitig direkt nach der
+  // Anlage an, s. create_task; Polling rendert Status + Refresh bei ready).
+  window._wsActivate = (taskId) => {
+    taskId = parseInt(taskId, 10);
+    if (!taskId || WS_TASK_ID === taskId) return;
+    WS_TASK_ID = taskId;
+    WS_TUTOR_FILES_API = "/api/tasks/" + taskId + "/workspace";
+    wsUI.setApiBase(WS_TUTOR_FILES_API);
+    wsUI.refresh();
+    wsStartPolling();
+  };
 
   document.getElementById("ws-files-refresh-btn").addEventListener("click", () => wsUI.refresh());
 
