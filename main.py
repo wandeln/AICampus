@@ -1795,6 +1795,17 @@ async def new_task_page(
         tpl_type = "text"
     template = _pick_task_template([f"tutor/task_detail_{tpl_type}.html", "tutor/task_detail_base.html"])
 
+    # Prev-Link schon auf der New-Seite zeigen: Die neue Aufgabe landet
+    # am Ende der Liste (display_order = max + 1, s. create_task) →
+    # „Vorherige“ ist die aktuell letzte Aufgabe (TUT/PROF sieht auch
+    # versteckte, wie in task_page). Ohne den Link springt das Layout
+    # erst nach Anlage + Reload.
+    prev_task = session.exec(
+        select(Task)
+        .where(Task.course_id == course_id)
+        .order_by(Task.display_order.desc())  # type: ignore[attr-defined]
+    ).first()
+
     # Kurs-Tab-Leiste: „Aufgaben" ist aktiv
     _tab_membership, tab_ctx = _course_tab_context(
         session, user, request, course_id, active_tab="tasks"
@@ -1817,6 +1828,8 @@ async def new_task_page(
                 "description": course.description,
             },
             "task": None,
+            "prev_task": {"id": prev_task.id, "title": prev_task.title} if prev_task else None,
+            "next_task": None,
             "tpl_type": tpl_type,
             "is_tutor": True,
             "code_editor": True,  # CodeMirror (Markdown-Mode) für Aufgabenstellung/Musterlösung
