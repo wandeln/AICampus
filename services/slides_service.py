@@ -9,8 +9,8 @@ Format „Markdown plus":
   einer Folie: teilt sie in vertikal gestapelte Unterfolien (Reveal-Nest
   <section><section>…</section></section>). Jeder Segment wird wie eine
   normale Folie geparsed (eigene Direktiven/Notiz/Hintergrund).
-- Pro Folie dürfen am Anfang (aufeinanderfolgende Zeilen) Richtlinien stehen:
-    layout: center | topleft
+- Pro Folie dürfen am Anfang (aufeinanderfolgenden Zeilen) Richtlinien stehen:
+    layout: center | topleft | default   (Default: default)
     transition: fade | slide | zoom | none | autoanimate   (Default: autoanimate)
     class: [A-Za-z0-9_-]+
     notes: <eine Zeile>
@@ -39,7 +39,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-LAYOUTS = ("center", "topleft")
+# "default" (Standard): Titel oben, übriger Inhalt vertikal zentriert;
+# "topleft": Inhalt direkt unter dem Titel (Folien mit viel Text).
+LAYOUTS = ("center", "topleft", "default")
 # "autoanimate" ist die Standard-Transition (Reveal-Auto-Animate: Inhalte
 # animieren zwischen den Folien ineinander); fade/slide/zoom/none sind die
 # klassischen Reveal-Transitions.
@@ -99,7 +101,7 @@ class Slide:
     dann die Liste der (vertikalen) Unterfolien, der Stack selbst ist ein
     leerer Container (``columns == [""]``, keine Direktiven)."""
 
-    layout: str = "topleft"  # Default: Inhalt oben links (konstante Titel-Höhe)
+    layout: str = "default"  # Default: Titel oben, Rest vertikal zentriert
     transition: Optional[str] = None
     css_class: Optional[str] = None
     notes: Optional[str] = None

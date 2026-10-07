@@ -487,7 +487,12 @@
     // mitten im Build den ersten Render überholen — dessen prevIndex
     // (Position-Restore nach dem Re-Render) ginge verloren, die
     // Vorschau landete auf Folie 1, der Editor auf der alten Zeile.
-    if (content === lastRenderedContent && (previewRenderContent !== null || previewReveal)) return;
+    if (content === lastRenderedContent && (previewRenderContent !== null || previewReveal)) {
+      // Läuft aktuell KEIN Render (Deck schon fertig), ist das Ausrichten
+      // obsolet → Flag löschen. Läuft noch einer, verbraucht der es selbst.
+      if (previewRenderContent === null) alignEditorContentFor = null;
+      return;
+    }
     const seq = ++previewSeq;
     previewRenderQueue = previewRenderQueue
       .catch(() => {}) // fehlgeschlagener Vorgänger blockiert die Queue nicht
@@ -507,6 +512,12 @@
   // Position-Restore, wenn die alte Preview-Instanz schon weg ist, weil
   // der Render, der ihren Index erfasst hat, im Build überholt wurde.
   let lastViewedIndex = { h: 0, v: 0 };
+  // Content, zu dem der Editor nach dem Re-Render auf die Zeile der
+  // aktuellen Folie ausgerichtet werden soll (LLM-Update). Content-Vergleich
+  // statt Boolean, weil der Render, für den die Ausrichtung gedacht ist,
+  // von einem neueren überholt werden kann — nur der Render mit exakt
+  // diesem Content führt sie aus (am Ende von renderPreviewInner).
+  let alignEditorContentFor = null;
   // Letzter gerendeter Inhalt: doppelte Requests mit gleichem Inhalt
   // (CM's setValue() feuert change → schedulePreview) rendern nicht erneut.
   let lastRenderedContent = null;
@@ -700,6 +711,20 @@
       // der Restore-Jump oben wird per pendingSkipSlide verworfen → Notiz-Panel
       // hier einmalig auf den aktuellen Stand bringen.
       updatePreviewNotes();
+      // LLM-Re-Render abgeschlossen: Editor zur (restorierten) aktuellen
+      // Folie ausrichten, statt an der alten Pixel-Position zu bleiben
+      // (contentSet's Scroll-Restore würde sonst „mitten drin" stehen).
+      if (alignEditorContentFor === content && cmContent) {
+        alignEditorContentFor = null;
+        try {
+          const idx = inst.getIndices();
+          const entry = lineMap[idx.h];
+          if (entry) {
+            const line = idx.v != null && idx.v < entry.subs.length ? entry.subs[idx.v] : entry.line;
+            if (line != null) cmContent.scrollToLineTop(Math.min(line, cmContent.lastLine()));
+          }
+        } catch (e) { /* Instanz im Umbau */ }
+      }
     } finally {
       // Nur räumen, wenn dieser (noch aktuelle) Render das Flag gesetzt
       // hat — ein überholter Render darf das Flag des Nachfolgers
@@ -751,6 +776,7 @@
 
       if (data.title) { titleInput.value = data.title; syncTitle(); }
       if (data.content) {
+        alignEditorContentFor = data.content;
         contentSet(data.content);
         renderPreview(data.content);
       }

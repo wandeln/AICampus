@@ -102,6 +102,65 @@
   margin-inline: auto;
 }
 
+/* .markdown-preview: als Flex-Item der center-Folie (align-items:center)
+   shrink-to-fit → max-content-Breite. Medien (Applet-Iframes width:100%,
+   Bilder) zählen in dieser Berechnung als unresolved Percentages →
+   intrinsische Breite (~300 px) → center-Folien mit Applet/Bild liefen
+   schmal. Explizite volle Breite (Pre-existing-Issue, s. Default-Layout-
+   Figuren-Fix unten): Text bleibt unverändert zentriert (text-align:
+   center je Zeile), Listen bleiben fit-content (Regel oben), Medien
+   können die Folienbreite nutzen. In Thumbnails ist das Canvas-Basis-
+   Layout bereits gestreckt (align-items stretch) → dort no-op. */
+:is(.reveal .slides > section.layout-center, .reveal .slides section.slides-stack > section.layout-center, .slides-canvas.layout-center, html.print-pdf .reveal .slides .pdf-page > section.layout-center) > .markdown-preview {
+  width: 100%;
+}
+
+/* layout: default (Standard-Layout) — wie topleft (linksbündig, volle
+   Breite, Titel oben), aber der Folienkörper (alles NACH der ersten
+   Überschrift; renderSlideInto hüllt ihn in .aicampus-slide-body) wird im
+   verbleibenden Folienraum vertikal zentriert.
+   display:flex !important für ALLE Zustände: s. layout-center-Kommentar
+   (Reveal's SlideContent.load() setzt inline „display:block“; die
+   block↔flex-Umschaltung beim past/present-Wechsel würde den Inhalt
+   während der Transition in die Ecke springen lassen).
+   aside.notes ist display:none → kein Flex-Item; das print-pdf-Bg ist
+   position:absolute → ebenfalls kein Flex-Item. */
+:is(.reveal .slides > section.layout-default, .reveal .slides section.slides-stack > section.layout-default, .slides-canvas.layout-default, html.print-pdf .reveal .slides .pdf-page > section.layout-default) {
+  display: flex !important;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
+  text-align: left;
+}
+:is(.reveal .slides > section.layout-default, .reveal .slides section.slides-stack > section.layout-default, .slides-canvas.layout-default, html.print-pdf .reveal .slides .pdf-page > section.layout-default) > .markdown-preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+:is(.reveal .slides > section.layout-default, .reveal .slides section.slides-stack > section.layout-default, .slides-canvas.layout-default, html.print-pdf .reveal .slides .pdf-page > section.layout-default) .aicampus-slide-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Bei Überlauf (Inhalt höher als der Folienraum) statt Centering nach
+     oben ausrichten — „safe“ wird von neueren Browsern unterstützt,
+     die Zeile davor ist der Fallback. */
+  justify-content: center;
+  justify-content: safe center;
+}
+/* Medien-/Applet-Figuren: main.css gibt .aicampus-figure
+   „margin: 1.25rem auto“ — in Block-Layout (topleft) harmlos, aber im
+   Flex-Container .aicampus-slide-body schlagen die Auto-Margen in der
+   Querachse dem align-items:stretch entgegen (CSS-Flexbox §6.3.1): die
+   Figure würde nicht gedehnt, sondern mit ihrer Inhaltsbreite zentriert
+   → Applet/Bild sieht schmal aus. Explizite volle Breite → die Auto-
+   Margen lösen auf 0 auf, das Medium (width:100% bei Applets) füllt.
+   (Code-/Tabellen-Figuren haben „margin: 1.25rem 0“ → nicht betroffen.) */
+:is(.reveal .slides > section.layout-default, .reveal .slides section.slides-stack > section.layout-default, .slides-canvas.layout-default, html.print-pdf .reveal .slides .pdf-page > section.layout-default) .aicampus-slide-body > .aicampus-figure {
+  width: 100%;
+}
+
 /* ─── Fußzeile & Logo ─────────────────────────────────────────── */
 
 /* Fußzeile am .slides-Canvas statt am Section: Reveal skaliert das

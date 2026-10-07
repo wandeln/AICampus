@@ -46,7 +46,7 @@
  *                            transform-Zoom bleibt erhalten.
  */
 
-const SLIDE_LAYOUTS = new Set(["center", "topleft"]);
+const SLIDE_LAYOUTS = new Set(["center", "topleft", "default"]);
 const SLIDE_TRANSITIONS = new Set(["fade", "slide", "zoom", "none", "autoanimate"]);
 const SLIDE_DEFAULT_TRANSITION = "autoanimate";
 
@@ -134,7 +134,7 @@ function _splitSlideBlocks(content) {
 
 function _parseSlideBlock(block, index) {
   const slide = {
-    layout: "topleft",
+    layout: "default",
     transition: null,
     css_class: null,
     notes: null,
@@ -350,6 +350,21 @@ async function renderSlideInto(slide, container, slidePos) {
   // Subfigure-Komplexe aus der slides-refmap).
   const md = slide.columns[0] || "";
   if (md) await renderMarkdown(md, container, { slideMode: true, slidePos: slidePos ? { ...slidePos, p: 0 } : null });
+  if (md && slide.layout === "default") {
+    // layout "default": Folienkörper (alles NACH der ersten Überschrift)
+    // im verbleibenden Folienraum vertikal zentrieren — dazu in einen
+    // Flex-Container hüllen (.aicampus-slide-body, s. slides.css). Ohne
+    // Überschrift bzw. ohne weiteren Inhalt bleibt es beim
+    // topleft-Verhalten (Inhalt von oben, nichts zu zentrieren).
+    const mp = container.querySelector(".markdown-preview");
+    const first = mp && mp.children[0];
+    if (mp && first && /^H[1-6]$/.test(first.tagName) && mp.children.length > 1) {
+      const body = document.createElement("div");
+      body.className = "aicampus-slide-body";
+      while (mp.children.length > 1) body.appendChild(mp.children[1]);
+      mp.appendChild(body);
+    }
+  }
 }
 
 /* Seitenverhältnis (Breite/Höhe) aus dem Theme — kommt als CSS-Variable

@@ -93,6 +93,15 @@ MARKDOWN_MANUAL = """\
   Inhalt VOR "@startcolumn" (z. B. eine Überschrift) bleibt vollbreit über der Spaltenzeile. 2–4 Spalten
   sinnvoll — für Gegenüberstellungen (z. B. zwei Ansätze, Vorher/Nachher) und gemischte Zeilen
   (z. B. oben Vollbreit, darunter 2 Spalten).
+  WICHTIG: Pro Spaltenzeile gibt es genau EINEN "@endcolumn"-Marker, ganz am ENDE — die Spalten
+  werden NICHT einzeln geschlossen (anders als Boxen!). "@nextcolumn[:gewicht]" trennt sie nur.
+  FALSCH ist also:
+  @startcolumn:2
+  ...1. Spalte...
+  @endcolumn        ← zu früh: reißt die Spaltenzeile nach der 1. Spalte ab
+  @nextcolumn:1
+  ...2. Spalte...
+  @endcolumn
 - Code-Blöcke: gefenceter Block mit Sprache auf der öffnenden Zeile (``` + Sprache, jede
   highlight.js-Sprache, z. B. python) → wird mit Syntax-Highlighting gerendert.
 - Tabellen: Pipe-Tabellen; Label-ZEILE {#tab:label}[Caption] direkt unter der Tabelle (s. o.).
@@ -122,7 +131,7 @@ SLIDES_MARKDOWN_MANUAL = MARKDOWN_MANUAL + """\
 - Folien werden durch eine eigene Zeile mit genau "---" getrennt (nichts anderes auf der Zeile).
 - Optional: Eine Folie kann in vertikal gestapelte UNTERFOLIEN aufgeteilt werden, die in der Präsentation nacheinander (mit ↓) erscheinen — z. B. zum schrittweisen Aufbauen einer Erklärung: trenne sie mit einer eigenen Zeile mit genau "--" (nichts anderes auf der Zeile). Jede Unterfolie ist wie eine normale Folie (eigene Direktiven, "notes" etc.). Sparsam einsetzen (max. 1–2 Folien pro Deck mit je max. 3–4 Unterfolien); "--" ist NUR innerhalb einer Folie erlaubt und NIEMALS als Ersatz für "---".
 - Am Anfang einer Folie (vor dem eigentlichen Inhalt) dürfen Direktiven stehen, JEWEILS auf eigener Zeile, jede Direktive maximal EINMAL pro Folie, nur diese Werte:
-  layout: center | topleft
+  layout: center | topleft | default
   transition: fade | slide | zoom | none | autoanimate
   class: <kennung>
   notes: <Sprechernotiz, einzeilig>
@@ -131,7 +140,7 @@ SLIDES_MARKDOWN_MANUAL = MARKDOWN_MANUAL + """\
   ACHTUNG: Eine Direktive, die NICHT in den ersten Zeilen steht (z. B. nach dem Titel oder mitten im Text), wird NICHT erkannt und stattdessen als sichtbarer Folieninhalt gerendert — das ist ein Fehler.
 - "notes" ist PFLICHT für jede Inhaltsfolie (1–3 Sätze in vollem Deutsch: was du als Dozent zu der Folie sagst — etwas mehr Tiefe/Kontext als auf der Folie selbst; die Notizen sind NICHT für die Studenten sichtbar). Titelfolie und Abschnittsfolien dürfen ohne "notes".
 - ZUORDNUNG DER NOTES: Die "notes:"-Zeile gehört zur Folie, deren INHALT sie erklärt — sie steht ans ANFANG genau dieser Folie (direkt nach der "---"-Trennzeile, VOR dem "## Titel"). Schreibe NIEMALS die Notiz zur vorangegangenen Folie ans Anfang der nächsten Folie: Ist der Inhalt von Folie 3 fertig und du schreibst das "---" für Folie 4, dann muss die Notiz zu Folie 3 bereits am ANFANG von Folie 3 stehen — niemals hinter dem "---".
-- "layout:" wird bei normalen Inhaltsfolien WEGLASSEN: der Inhalt beginnt dann oben links und die Titel stehen auf allen Folien auf derselben Höhe (Standard für Folien mit viel Text).
+- "layout:" wird bei normalen Inhaltsfolien meist WEGLASSEN → Standard-Layout "default": Titel oben links, übriger Inhalt vertikal zentriert im Folienraum. "layout: topleft" nur für Folien mit VIELEm Text (Inhalt direkt unter dem Titel, ohne Zentrierung).
 - "layout: center" NUR für die Titelfolie und kurze, zentrierte Folien (z. B. Abschnitts-Überschrift).
 - "background" (optional) NUR verwenden, wenn die Anweisung explizit einen Folien-Hintergrund verlangt (z. B. animierten Applet-Hintergrund für die Titelfolie): Vollflächiges Bild, .html-Applet oder (wenn explizit verlangt) eine externe Website (https://…) hinter der Folie — Pfad exakt wie in der Medienliste; .html-Applets und externe Websites bleiben hinter der Folie interaktiv. Das Medium NICHT zusätzlich als Snippet in den Folientext einbinden. Hinweis: Applet-/Website-Hintergründe werden beim PDF-Export nicht mitgedruckt — wenn der Hintergrund auch im PDF sichtbar sein soll, ein Bild (.png/.jpg) verwenden.
 - "transition" ist standardmäßig "autoanimate" (Reveal-Auto-Animate: der Inhalt animiert zwischen den Folien ineinander). Setze für eine einzelne Folie eine klassische Transition ("fade", "slide", "zoom" oder "none"), wenn Auto-Animate dort stört oder ein bestimmter Übergang gewünscht ist (z. B. "none" bei Abschnittsfolien). Hinweis: Ein gezoomtes Applet ({zoom=X}) wird vom Auto-Animate automatisch übersprungen (der Applet-Zoom bleibt erhalten, das Applet fadet einfach ein/aus) — das ändert nichts an der Übergangs-Wahl der Folie.
