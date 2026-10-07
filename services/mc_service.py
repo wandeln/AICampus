@@ -394,16 +394,16 @@ def mc_report_summary(mc_result: dict) -> list[str]:
     return lines
 
 
-def parse_student_answers(code_solution: Optional[str]) -> Optional[list]:
-    """Strukturierte MC-Antworten aus Submission.code_solution lesen.
+def parse_student_answers(mc_answers: Optional[str]) -> Optional[list]:
+    """Strukturierte MC-Antworten aus Submission.mc_answers lesen.
 
     Format: "mc:v1:<json>" (z. B. mc:v1:[[0],[1,3]]).
     Returns None, wenn kein MC-Answer-Payload.
     """
-    if not code_solution or not code_solution.startswith("mc:v1:"):
+    if not mc_answers or not mc_answers.startswith("mc:v1:"):
         return None
     try:
-        parsed = json.loads(code_solution[len("mc:v1:"):])
+        parsed = json.loads(mc_answers[len("mc:v1:"):])
     except (json.JSONDecodeError, TypeError):
         return None
     return parsed if isinstance(parsed, list) else None

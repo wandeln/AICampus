@@ -12,7 +12,7 @@
     <h2 class="font-semibold text-gray-800 mb-1">Arbeitsumgebung <span class="text-xs text-gray-400">(Docker-Workspace je Student)</span></h2>
     {% if task and task.task_type != 'workspace' %}
     <p class="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 mb-3">
-      ℹ️ Diese Aufgabe ist aktuell als „{{ {'text': 'Text', 'code': 'Code'}.get(task.task_type, task.task_type) }}"
+      ℹ️ Diese Aufgabe ist aktuell als „{{ {'text': 'Text', 'mc': 'Multiple Choice'}.get(task.task_type, task.task_type) }}"
       gespeichert. Nach dem Speichern wechselt sie auf den Workspace-Typ —
       die Umgebung unten ist bereits jetzt einrichtbar.
     </p>

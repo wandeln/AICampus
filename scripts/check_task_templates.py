@@ -21,9 +21,7 @@ TASK_WS = {
     "max_points": 10,
     "max_attempts": 3,
     "deadline": "2026-10-01T23:59:00",
-    "code_template": None,
     "model_solution": None,
-    "test_code": None,
     "is_visible": True,
     "hints_enabled": True,
     "workspace_main_file": "main.py",
@@ -38,11 +36,7 @@ TASK_WS = {
                                '"task_image": "building", "image": "ready"}}',
 }
 
-TASK_CODE = dict(TASK_WS, id=43, task_type="code", title="Code-Aufgabe",
-                 code_template="def main(): pass", test_code="class PublicTest: pass")
-
-TASK_TEXT = dict(TASK_WS, id=44, task_type="text", title="Text-Aufgabe",
-                 code_template=None, test_code=None)
+TASK_TEXT = dict(TASK_WS, id=44, task_type="text", title="Text-Aufgabe")
 
 # Kurs-Tab-Leiste (wie von _course_tab_context() gebaut)
 TABS = [
@@ -65,13 +59,12 @@ def base_ctx(task, is_tutor, tpl_type):
         "task": task,
         "is_tutor": is_tutor,
         "is_student_view": False,
-        "is_code": (task or {}).get("task_type") == "code",
         "tabs": TABS,
         "compute_enabled": True,
         "tpl_type": tpl_type,
         "code_editor": True,
         "my_submissions": [{
-            "id": 1, "solution": "📦 Workspace: 3 Datei(en)", "code_solution": None,
+            "id": 1, "solution": "📦 Workspace: 3 Datei(en)",
             "workspace_snapshot": task and task.get("task_type") == "workspace",
             "attempt_number": 1,
             "submitted_at": datetime(2026, 9, 1, 12, 0),
@@ -117,11 +110,9 @@ def main():
     cases = [
         # (template, ctx)
         ("student/task_solve_text.html", base_ctx(TASK_TEXT, False, "text")),
-        ("student/task_solve_code.html", base_ctx(TASK_CODE, False, "code")),
         ("student/task_solve_workspace.html", base_ctx(TASK_WS, False, "workspace")),
         ("student/task_solve_workspace.html", base_ctx(TASK_WS, True, "workspace")),  # as_student
         ("tutor/task_detail_text.html", base_ctx(TASK_TEXT, True, "text")),
-        ("tutor/task_detail_code.html", base_ctx(TASK_CODE, True, "code")),
         ("tutor/task_detail_workspace.html", base_ctx(TASK_WS, True, "workspace")),
         ("tutor/task_detail_workspace.html", base_ctx(None, True, "workspace")),  # neue Aufgabe
         ("tutor/submission_review.html", review_ctx(TASK_WS)),

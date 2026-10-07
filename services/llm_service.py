@@ -29,7 +29,6 @@ from services.auth_service import get_current_user_id
 from services.workspace_presets import IMAGE_SELECTION_FIELDS
 from prompts.grading_prompt import (
     GRADING_TEXT_PROMPT_TEMPLATE,
-    GRADING_CODE_PROMPT_TEMPLATE,
     GRADING_WORKSPACE_PROMPT_TEMPLATE,
 )
 from prompts.creation_prompt import UNIFIED_TASK_PROMPT_TEMPLATE
@@ -45,7 +44,6 @@ from prompts.markdown_manual import (
     SCRIPT_CONTENT_EDITS_SPEC,
     SLIDES_CONTENT_EDITS_SPEC,
 )
-from prompts.code_task_prompt import CODE_TASK_PROMPT_TEMPLATE
 from prompts.mc_task_prompt import MC_TASK_PROMPT_TEMPLATE
 from prompts.hint_prompt import SOCRATIC_HINT_PROMPT_TEMPLATE
 from prompts.script_question_prompt import SCRIPT_QUESTION_PROMPT_TEMPLATE
@@ -419,31 +417,6 @@ class LLMService:
 
         return await self._call_with_json(prompt, response_format={"type": "json_object"}, config=config)
 
-    async def grade_code_task(
-        self,
-        task_description: str,
-        model_solution: str,
-        student_code: str,
-        test_results: str,
-        max_points: int,
-        code_template: Optional[str] = None,
-        custom_prompt: Optional[str] = None,
-        config: Optional[dict] = None,
-    ):
-        """Korrigiert eine Codeaufgabe via LLM (inkl. Test-Ergebnissen)."""
-
-        prompt = self._render_prompt(
-            custom_prompt or GRADING_CODE_PROMPT_TEMPLATE,
-            task_description=task_description,
-            model_solution=model_solution,
-            code_template=code_template or "(Kein Template hintergelegt)",
-            student_solution=student_code,
-            test_results=test_results,
-            max_points=max_points,
-        )
-
-        return await self._call_with_json(prompt, response_format={"type": "json_object"}, config=config)
-
     async def grade_workspace_task(
         self,
         task_description: str,
@@ -478,7 +451,6 @@ class LLMService:
         current_title: str = "",
         current_description: str = "",
         current_model_solution: str = "",
-        code_template: str = "",
         current_text_template: str = "",
         script_chapters: Optional[list[dict]] = None,
         course_media: Optional[list[dict]] = None,
@@ -494,13 +466,13 @@ class LLMService:
         references: Kurs-Quellenverzeichnis als Text (Zitations-Keys) — leer,
         wenn der Kurs kein Quellenverzeichnis hat.
 
-        Code- und Workspace-Aufgaben laufen je über EINEN eigenen
-        Single-Prompt: generate_code_task_fields / generate_workspace_task_fields.
+        Workspace-Aufgaben laufen über einen eigenen Single-Prompt:
+        generate_workspace_task_fields.
 
         Enthält keine sensitive Studentendaten — nutzt daher den Public
         Endpoint, falls konfiguriert.
         """
-        task_type_description = {"text": "Textaufgabe", "code": "Codeaufgabe"}.get(task_type, task_type)
+        task_type_description = {"text": "Textaufgabe"}.get(task_type, task_type)
         generate_list = ", ".join(f'"{f}"' for f in generate_fields)
 
         prompt = Template(UNIFIED_TASK_PROMPT_TEMPLATE).render(
@@ -512,59 +484,10 @@ class LLMService:
             current_title=current_title,
             current_description=current_description,
             current_model_solution=current_model_solution,
-            code_template=code_template,
             current_text_template=current_text_template,
             script_chapters=script_chapters or [],
             course_media=course_media or [],
             references=references,
-        )
-
-        return await self._call_with_json(
-            prompt, response_format={"type": "json_object"}, config=self._public_config(config)
-        )
-
-    async def generate_code_task_fields(
-        self,
-        topic: str,
-        difficulty: str,
-        max_points: int,
-        generate_fields: list[str],
-        current_title: str = "",
-        current_description: str = "",
-        current_model_solution: str = "",
-        current_code_template: str = "",
-        script_chapters: Optional[list[dict]] = None,
-        course_media: Optional[list[dict]] = None,
-        references: str = "",
-        config: Optional[dict] = None,
-    ):
-        """Generiert/ändert die angeforderten Felder einer CODE-Aufgabe in
-        EINEM LLM-Call (Single-Prompt): code_template, public_tests,
-        private_tests, model_solution, description, title (Untermenge).
-
-        generate_fields ist in der Abarbeitungs-REIHENFOLGE übergeben
-        (Implementierung zuerst, dann Lösung/Kriterien, dann Beschreibung/Titel)
-        — das Template weist das LLM darauf hin, genau dieser Reihenfolge zu
-        folgen, damit sich spätere Felder (Kriterien/Aufgabenstellung) auf
-        die konkrete Implementierung beziehen können.
-
-        Enthält keine sensitive Studentendaten — nutzt daher den Public
-        Endpoint, falls konfiguriert.
-        """
-        generate_list = ", ".join(f'"{f}"' for f in generate_fields)
-
-        prompt = Template(CODE_TASK_PROMPT_TEMPLATE).render(
-            topic=topic,
-            difficulty=difficulty,
-            max_points=max_points,
-            generate_list=generate_list,
-            script_chapters=script_chapters or [],
-            course_media=course_media or [],
-            references=references,
-            current_title=current_title,
-            current_description=current_description,
-            current_model_solution=current_model_solution,
-            current_code_template=current_code_template,
         )
 
         return await self._call_with_json(
@@ -925,7 +848,7 @@ class LLMService:
         self,
         task_description: str,
         model_solution: str,
-        code_template: str,
+        text_template: str,
         current_solution: str,
         previous_submissions: str,
         hint_history: str,
@@ -948,7 +871,7 @@ class LLMService:
             custom_prompt or SOCRATIC_HINT_PROMPT_TEMPLATE,
             task_description=task_description,
             model_solution=model_solution,
-            code_template=code_template or "(Kein Code-Template)",
+            text_template=text_template or "(Keine Vorlage hintergelegt)",
             current_solution=current_solution or "(Noch keine Loesung)",
             previous_submissions=previous_submissions or "(Keine vorherigen Abgaben)",
             hint_history=hint_history or "(Dies ist die erste Frage)",

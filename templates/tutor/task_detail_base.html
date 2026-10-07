@@ -103,14 +103,6 @@
           <input type="checkbox" id="field-solution" checked class="rounded text-purple-600">
           Musterlösung
         </label>
-        <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer ai-code-field {% if tpl_type != 'code' %}hidden{% endif %}">
-          <input type="checkbox" id="field-template" checked class="rounded text-purple-600">
-          Code-Vorlage
-        </label>
-        <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer ai-code-field {% if tpl_type != 'code' %}hidden{% endif %}">
-          <input type="checkbox" id="field-tests" checked class="rounded text-purple-600">
-          Tests (Public + Private)
-        </label>
         <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer ai-workspace-field {% if tpl_type != 'workspace' %}hidden{% endif %}">
           <input type="checkbox" id="field-ws-env" checked class="rounded text-purple-600">
           Umgebung (Timeout, Limits, Internet, Artefakte)
@@ -183,7 +175,6 @@
           <select name="task_type" required id="task_type_select"
                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
             <option value="text" {% if tpl_type == 'text' %}selected{% endif %}>Textaufgabe</option>
-            <option value="code" {% if tpl_type == 'code' %}selected{% endif %}>Codeaufgabe</option>
             <option value="workspace" {% if tpl_type == 'workspace' %}selected{% endif %}>Workspace-Aufgabe (Container)</option>
             <option value="mc" {% if tpl_type == 'mc' %}selected{% endif %}>Multiple Choice</option>
           </select>
@@ -255,7 +246,6 @@
     {% endif %}
 
     {# Typspezifische Sektionen: #}
-    {# task_detail_code.html (Code-Vorlage + Unit-Tests) #}
     {# task_detail_workspace.html (Umgebung + Dateien/Workspace) #}
     {% block type_section %}{% endblock %}
 
@@ -270,44 +260,7 @@
   // MUSS vor der ersten createMarkdownEditor()-Aufruf stehen (startInPreview rendert sofort).
   const courseId = {{ course.id }};
 
-  // ─── CodeMirror Editors ─────────────────────────────────────
-  const codeMirrorConfig = {
-    mode: { name: "python", version: 3 },
-    theme: "oneDark",
-    lineNumbers: true,
-    autoCloseBrackets: true,
-    indentUnit: 4,
-    tabSize: 4,
-    lineWrapping: true,
-    matchBrackets: true,
-  };
-
-  // Default test template
-  const defaultTestCode = `import unittest
-
-class PublicTest(unittest.TestCase):
-    """Tests die Studenten sehen koennen."""
-    def test_example(self):
-        # Ersetze my_function mit deiner Funktion
-        # self.assertEqual(my_function(1), 2)
-        pass
-
-class PrivateTest(unittest.TestCase):
-    """Verborgeene Tests (nur Dozent sieht Ergebnisse)."""
-    def test_example_private(self):
-        # Ersetze my_function mit deiner Funktion
-        # self.assertEqual(my_function(99), 100)
-        pass`;
-
-  // Code-Template Editor (Element existiert nur im Code-Template)
-  const codeTemplateEditor = document.getElementById("code-template-editor");
-  let codeTemplateCM = null;
-
-  // Test-Code Editor (Element existiert nur im Code-Template)
-  const testCodeEditor = document.getElementById("test-code-editor");
-  let testCodeCM = null;
-
-  {# Typspezifisches JS: task_detail_code.html initialisiert CodeMirror #}
+  {# Typspezifisches JS (Blocks aus den Typ-Templates) #}
   {% block type_scripts %}{% endblock %}
 
   // ─── Initialize Markdown Editors ─────────────────────────
@@ -447,7 +400,6 @@ class PrivateTest(unittest.TestCase):
     return res.ok;
   }
   document.getElementById("task_type_select").addEventListener("change", (e) => {
-    const isCode = e.target.value === "code";
     const isWorkspace = e.target.value === "workspace";
     const isMc = e.target.value === "mc";
     const isText = e.target.value === "text";
@@ -470,35 +422,23 @@ class PrivateTest(unittest.TestCase):
       }, 0);
     };
 
-    // Code-Sektionen fehlen in diesem Template (Text-Variante)?
-    // → Navigation auf das Code-Template.
-    if (isCode && !document.getElementById("code-section")) {
-      redirectWithSave("code");
-      return;
-    }
-
-    // Workspace-Sektionen fehlen (Text/Code-Variante)? → Workspace-Template
+    // Workspace-Sektionen fehlen (Text/Workspace-Variante)? → Workspace-Template
     if (isWorkspace && !document.getElementById("workspace-section")) {
       redirectWithSave("workspace");
       return;
     }
 
-    // MC-Sektionen fehlen (Text/Code/Workspace-Variante)? → MC-Template
+    // MC-Sektionen fehlen (Text/Workspace-Variante)? → MC-Template
     if (isMc && !document.getElementById("mc-section")) {
       redirectWithSave("mc");
       return;
     }
 
-    // Text-Vorlagen-Sektion fehlt (Code/Workspace/MC-Variante)? → Text-Template
+    // Text-Vorlagen-Sektion fehlt (Workspace/MC-Variante)? → Text-Template
     if (isText && !document.getElementById("text-template-section")) {
       redirectWithSave("text");
       return;
     }
-
-    const codeSection = document.getElementById("code-section");
-    const testsSection = document.getElementById("tests-section");
-    if (codeSection) codeSection.classList.toggle("hidden", !isCode);
-    if (testsSection) testsSection.classList.toggle("hidden", !isCode);
 
     const wsSections = document.querySelectorAll("[data-workspace-section]");
     wsSections.forEach(el => el.classList.toggle("hidden", !isWorkspace));
@@ -506,8 +446,6 @@ class PrivateTest(unittest.TestCase):
     const mcSections = document.querySelectorAll("[data-mc-section]");
     mcSections.forEach(el => el.classList.toggle("hidden", !isMc));
 
-    // Show/hide AI code checkboxes (only for code tasks)
-    document.querySelectorAll(".ai-code-field").forEach(el => el.classList.toggle("hidden", !isCode));
     // Show/hide AI text-template checkbox (only for text tasks)
     document.querySelectorAll(".ai-text-field").forEach(el => el.classList.toggle("hidden", !isText));
     // Show/hide AI workspace checkboxes (only for workspace tasks)
@@ -520,30 +458,6 @@ class PrivateTest(unittest.TestCase):
     if (solHint) {
       solHint.textContent = '💡 Markdown und LaTeX ($...$) werden unterstützt. Beschreibe die Lösung, füge Code-Beispiele und Bewertungskriterien ein.';
       solHint.classList.remove('hidden');
-    }
-
-    // Code-Template: bei Code-Aufgaben → CodeMirror, sonst normaler Textarea
-    const codeTemplateTa = document.getElementById("code-template-editor");
-    if (isCode && !codeTemplateCM && codeTemplateTa) {
-      codeTemplateCM = CodeMirror.fromTextArea(codeTemplateTa, codeMirrorConfig);
-    } else if (!isCode && codeTemplateCM) {
-      codeTemplateCM.save();
-      codeTemplateCM.toTextArea();
-      codeTemplateCM = null;
-    }
-
-    // Test-Code: bei Code-Aufgaben → CodeMirror, sonst normaler Textarea
-    const testCodeTa = document.getElementById("test-code-editor");
-    if (isCode && !testCodeCM && testCodeTa) {
-      testCodeCM = CodeMirror.fromTextArea(testCodeTa, codeMirrorConfig);
-      // Set default template for new code tasks without existing tests
-      if (!testCodeCM.getValue().trim()) {
-        testCodeCM.setValue(defaultTestCode);
-      }
-    } else if (!isCode && testCodeCM) {
-      testCodeCM.save();
-      testCodeCM.toTextArea();
-      testCodeCM = null;
     }
 
     if (isWorkspace) {
@@ -562,12 +476,6 @@ class PrivateTest(unittest.TestCase):
     }
   });
 
-  // ─── Sync CodeMirror editors to textareas ─────────────────
-  function syncEditorsToTextareas() {
-    if (codeTemplateCM) codeTemplateCM.save();
-    if (testCodeCM) testCodeCM.save();
-  }
-
   // ─── LLM Task Generation (unified) ─────────────────────────
   let aiTimerInterval = null;
 
@@ -582,7 +490,6 @@ class PrivateTest(unittest.TestCase):
 
   document.getElementById("ai-generate-btn").addEventListener("click", async () => {
     const taskType = document.getElementById("task_type_select").value;
-    const isCode = taskType === "code";
     const isWorkspace = taskType === "workspace";
     const isText = taskType === "text";
     const title = document.querySelector('input[name="title"]').value;
@@ -591,7 +498,6 @@ class PrivateTest(unittest.TestCase):
     const description = descEditor.getValue();
     const modelSolution = solEditor ? solEditor.getValue() : "";
     const maxPoints = document.querySelector('input[name="max_points"]').value || 10;
-    const codeTemplate = codeTemplateCM ? codeTemplateCM.getValue() : (document.getElementById("code-template-editor")?.value || "");
     // Text-Vorlage: nur im Text-Template vorhanden (Hook aus type_scripts)
     const textTemplate = (typeof window._textTemplateFields === "function")
       ? (window._textTemplateFields().text_template || "")
@@ -601,9 +507,7 @@ class PrivateTest(unittest.TestCase):
       title: document.getElementById("field-title").checked,
       description: document.getElementById("field-description").checked,
       solution: taskType !== "mc" && document.getElementById("field-solution").checked,
-      template: isCode && document.getElementById("field-template").checked,
       text_template: isText && document.getElementById("field-text-template").checked,
-      tests: isCode && document.getElementById("field-tests").checked,
       env: isWorkspace && document.getElementById("field-ws-env").checked,
       files: isWorkspace && document.getElementById("field-ws-files").checked,
       questions: taskType === "mc" && document.getElementById("field-mc-questions").checked,
@@ -665,7 +569,6 @@ class PrivateTest(unittest.TestCase):
           title,
           description,
           model_solution: modelSolution,
-          code_template: codeTemplate,
           text_template: textTemplate,
           generate_fields: generateFields,
           task_id: (function () {
@@ -714,15 +617,6 @@ class PrivateTest(unittest.TestCase):
         populated.push("Musterlösung");
       }
 
-      if (generateFields.template && data.code_template) {
-        if (codeTemplateCM) {
-          codeTemplateCM.setValue(data.code_template);
-        } else {
-          document.getElementById("code-template-editor").value = data.code_template;
-        }
-        populated.push("Code-Vorlage");
-      }
-
       if (generateFields.text_template && data.text_template) {
         if (typeof window._textTemplateSetValue === "function") {
           window._textTemplateSetValue(data.text_template);
@@ -731,16 +625,6 @@ class PrivateTest(unittest.TestCase):
           if (el) el.value = data.text_template;
         }
         populated.push("Text-Vorlage");
-      }
-
-      if (generateFields.tests && (data.public_tests || data.private_tests)) {
-        const combinedTests = [data.public_tests, data.private_tests].filter(Boolean).join("\n\n");
-        if (testCodeCM) {
-          testCodeCM.setValue(combinedTests);
-        } else {
-          document.getElementById("test-code-editor").value = combinedTests;
-        }
-        populated.push("Tests (Public + Private)");
       }
 
       // Workspace-Felder (Umgebung/Dateien) übernimmt das
@@ -798,8 +682,6 @@ class PrivateTest(unittest.TestCase):
   // Wird von AV.create als getPayload genutzt (synchron, ohne Toasts —
   // Pflichtfeld-Checks laufen über shouldSave + die Server-Validierung).
   function buildTaskBody() {
-    syncEditorsToTextareas();
-
     const form = document.getElementById("task-form");
     const formData = new FormData(form);
 
@@ -834,21 +716,8 @@ class PrivateTest(unittest.TestCase):
       body.deadline = null;
     }
 
-    // Code-Vorlage & Unit-Tests: CodeMirror versteckt die Textareas (display:none),
-    // daher Werte direkt aus den Textareas lesen, nicht aus der FormData.
-    // (Elemente existieren nur im Code-Template → null-sicher lesen.)
-    const taskTypeVal = formData.get("task_type");
-    const codeTemplateRaw = document.getElementById("code-template-editor")?.value ?? "";
-    const testCodeRaw = document.getElementById("test-code-editor")?.value ?? "";
-
-    // Leere Vorlage → null (Template wird geleert); Text-Aufgabe → Vorlage entfernen
-    if (taskTypeVal === "code") {
-      body.code_template = codeTemplateRaw;
-    } else {
-      body.code_template = null;
-    }
-
     // Text-Vorlage: nur bei Text-Aufgaben (Hook aus dem Text-Template);
+    const taskTypeVal = formData.get("task_type");
     // bei anderen Typen bewusst null → serverseitig wird sie geleert.
     if (taskTypeVal === "text") {
       body.text_template = (typeof window._textTemplateFields === "function")
@@ -856,12 +725,6 @@ class PrivateTest(unittest.TestCase):
         : (document.getElementById("text-template-editor")?.value ?? null);
     } else {
       body.text_template = null;
-    }
-
-    // Single test_code field (with PublicTest + PrivateTest classes)
-    if (taskTypeVal === "code") {
-      // Leerer Wert leert die Tests bewusst
-      body.test_code = testCodeRaw.trim();
     }
 
     // Workspace: Umgebungsfelder (Simple-Fields) — der Hook liefert nur
@@ -939,18 +802,6 @@ class PrivateTest(unittest.TestCase):
         await renderMarkdown(sol, solEditor.previewDiv, { preview: true, bibliography: true });
         if (!solEditor.isPreview()) solEditor.toggleBtn.click();
       })();
-    }
-
-    // Code-Vorlage & Unit-Tests (Elemente existieren nur im Code-Template)
-    const codeTa = document.getElementById("code-template-editor");
-    if (codeTa) {
-      if (codeTemplateCM) codeTemplateCM.setValue(p.code_template || "");
-      else codeTa.value = p.code_template || "";
-    }
-    const testTa = document.getElementById("test-code-editor");
-    if (testTa) {
-      if (testCodeCM) testCodeCM.setValue(p.test_code || "");
-      else testTa.value = p.test_code || "";
     }
 
     // Text-Vorlage (Hook im Text-Template)

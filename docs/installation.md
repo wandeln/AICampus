@@ -101,8 +101,8 @@ cp .env.example .env      # LLM-Endpoint, Secrets setzen
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Ohne Compute-Agent — Text- und Code-Aufgaben sind voll funktionsfähig,
-Workspace-Aufgaben degradieren sauber (s. README).
+Ohne Compute-Agent degradieren Workspace-Aufgaben sauber (s. README);
+Text- und Multiple-Choice-Aufgaben sind voll funktionsfähig.
 
 ## 3. Produktiv-Betrieb: nginx + HTTPS (vor dem Container)
 

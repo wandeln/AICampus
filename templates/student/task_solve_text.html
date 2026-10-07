@@ -153,8 +153,7 @@
 {% endblock %}
 
 {% block solve_scripts %}
-  // ─── LaTeX Image Upload ──────────────────────────────────────
-  {% if task.task_type != 'code' %}
+  // ─── LaTeX Image Upload ──────────────────────────────
   (function() {
     const togglePhoto = document.getElementById("latex-toggle-photo");
     const toggleDraw = document.getElementById("latex-toggle-draw");
@@ -747,5 +746,4 @@
       {% endif %}
     }
   })();
-  {% endif %}
 {% endblock %}

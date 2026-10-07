@@ -9,7 +9,7 @@ import io
 import json
 import logging
 import mimetypes
-import re
+
 import shutil
 import statistics
 from datetime import datetime, timezone
@@ -166,7 +166,6 @@ async def list_tasks(
             "max_points": t.max_points,
             "max_attempts": t.max_attempts,
             "deadline": t.deadline,
-            "has_tests": bool(t.test_code),
             "submission_count": len(t.submissions),
             "is_visible": t.is_visible,
             "hints_enabled": t.hints_enabled,
@@ -246,8 +245,6 @@ async def create_task(
         max_points=max_points,
         max_attempts=body.get("max_attempts"),
         deadline=body.get("deadline"),
-        code_template=body.get("code_template"),
-        test_code=body.get("test_code"),
         text_template=text_template,
         mc_data=mc_data_value,
         is_visible=body.get("is_visible", False),  # Default: für Studenten versteckt
@@ -323,9 +320,7 @@ async def get_task(
         "max_points": task.max_points,
         "max_attempts": task.max_attempts,
         "deadline": task.deadline,
-        "code_template": task.code_template if task.task_type.value == "code" else None,
         "text_template": task.text_template if task.task_type.value == "text" else None,
-        "test_code": task.test_code if is_tutor else None,
         "hints_enabled": task.hints_enabled,
     }
 
@@ -363,16 +358,7 @@ async def get_task(
     
     if is_tutor:
         result["model_solution"] = task.model_solution
-    else:
-        # Student: mask private tests (replace PrivateTest class body with *** )
-        if task.test_code:
-            result["test_code"] = re.sub(
-                r'(class PrivateTest.*?)(class PublicTest|$)',
-                r'\1***\2',
-                task.test_code,
-                flags=re.DOTALL
-            )
-    
+
     return result
 
 
@@ -422,13 +408,9 @@ async def update_task(
         task.max_attempts = None if body["max_attempts"] in (None, "") else int(body["max_attempts"])
     if "deadline" in body:
         task.deadline = None if body["deadline"] in (None, "") else body["deadline"]
-    if "code_template" in body:
-        val = body["code_template"]
-        task.code_template = None if val in (None, "") else val
     if "text_template" in body:
         val = body["text_template"]
         task.text_template = None if val in (None, "") else val
-    if "test_code" in body: task.test_code = body["test_code"]
     if "is_visible" in body: task.is_visible = body["is_visible"]
     if "hints_enabled" in body: task.hints_enabled = body["hints_enabled"]
 
@@ -618,13 +600,11 @@ async def duplicate_task(
         max_points=task.max_points,
         max_attempts=task.max_attempts,
         deadline=task.deadline,
-        code_template=task.code_template,
-        test_code=task.test_code,
         text_template=task.text_template,
         mc_data=task.mc_data,
         is_visible=task.is_visible,
         hints_enabled=task.hints_enabled,
-        # Workspace-Einstellungen (für Text/Code-Tasks irrelevant)
+        # Workspace-Einstellungen (für Text/MC-Tasks irrelevant)
         workspace_timeout=task.workspace_timeout,
         workspace_cpu=task.workspace_cpu,
         workspace_memory=task.workspace_memory,
@@ -1063,7 +1043,7 @@ async def get_course_live_mc_stats(
         sub = latest.get(m.user_id)
         if sub is None:
             continue
-        answers = parse_student_answers(sub.code_solution)
+        answers = parse_student_answers(sub.mc_answers)
         if not isinstance(answers, list):
             continue
         submitted += 1
@@ -1132,22 +1112,19 @@ async def ai_generate_task(
 
     Request:
         {
-            "task_type": "code",
+            "task_type": "text",
             "topic": "Rekursion",
             "difficulty": "mittel",
             "max_points": 10,
             "title": "...",
             "description": "...",
             "model_solution": "...",
-            "code_template": "...",
             "text_template": "...",
             "generate_fields": {
                 "title": true,
                 "description": true,
                 "solution": true,
-                "template": true,        // nur Code-Aufgaben
-                "text_template": true,   // nur Text-Aufgaben
-                "tests": true            // nur Code-Aufgaben
+                "text_template": true    // nur Text-Aufgaben
             }
         }
     """
@@ -1161,9 +1138,6 @@ async def ai_generate_task(
     # Musterlösung gilt nicht für MC — dort definieren korrekte Antworten +
     # Feedback + Punkte je Frage die Bewertung eindeutig.
     gen_solution = bool(gen.get("solution")) and task_type != "mc"
-    # Template/Tests gelten nur für Code-Aufgaben
-    gen_template = bool(gen.get("template")) and task_type == "code"
-    gen_tests = bool(gen.get("tests")) and task_type == "code"
     # Text-Vorlage (Antwort-Gerüst) gilt nur für Text-Aufgaben
     gen_text_template = bool(gen.get("text_template")) and task_type == "text"
     # Workspace-Aufgabe: Umgebung (Timeout/Limits/Internet/Artefakte)
@@ -1174,14 +1148,13 @@ async def ai_generate_task(
     # MC: Fragen inkl. Optionen + Feedback je Option
     gen_questions = bool(gen.get("questions")) and task_type == "mc"
 
-    if not (gen_title or gen_description or gen_solution or gen_template or gen_tests
+    if not (gen_title or gen_description or gen_solution
             or gen_text_template or gen_env or gen_files or gen_questions):
         raise HTTPException(400, "Keine Felder angefordert.")
 
     current_title = (body.get("title") or "").strip()
     current_description = (body.get("description") or "").strip()
     current_solution = (body.get("model_solution") or "").strip()
-    current_template = (body.get("code_template") or "").strip()
     current_text_template = (body.get("text_template") or "").strip()
 
     # EIN LLM-Call pro Aufgabe (Single-Prompt): alle angeforderten Felder
@@ -1195,10 +1168,7 @@ async def ai_generate_task(
         "title": "",
         "description": "",
         "model_solution": "",
-        "code_template": "",
         "text_template": "",
-        "public_tests": "",
-        "private_tests": "",
         "mc_data": None,
     }
     latency_ms = 0
@@ -1240,7 +1210,6 @@ async def ai_generate_task(
             current_title=current_title,
             current_description=current_description,
             current_model_solution=current_solution,
-            code_template=current_template,
             current_text_template=current_text_template,
             script_chapters=script_chapters,
             course_media=course_media,
@@ -1263,58 +1232,6 @@ async def ai_generate_task(
             response["text_template"] = (data.get("text_template") or "").strip()
         if gen_solution:
             response["model_solution"] = (data.get("model_solution") or "").strip()
-
-    elif task_type == "code":
-        # ── Code-Aufgabe: Vorlage/Tests/Lösung/Beschreibung/Titel ──
-        code_fields: list[str] = []
-        if gen_template:
-            code_fields.append("code_template")
-        if gen_tests:
-            code_fields += ["public_tests", "private_tests"]
-        if gen_solution:
-            code_fields.append("model_solution")
-        if gen_description:
-            code_fields.append("description")
-        if gen_title:
-            code_fields.append("title")
-
-        # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
-        # Session sie die gesamte Generierung; s. database/base.py). Der
-        # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
-        session.rollback()
-
-        result = await llm_service.generate_code_task_fields(
-            topic=body.get("topic", ""),
-            difficulty=body.get("difficulty", "mittel"),
-            max_points=body.get("max_points", 10),
-            generate_fields=code_fields,
-            current_title=current_title,
-            current_description=current_description,
-            current_model_solution=current_solution,
-            current_code_template=current_template,
-            script_chapters=script_chapters,
-            course_media=course_media,
-            references=references,
-            config=llm_cfg,
-        )
-
-        if not result.get("success"):
-            raise HTTPException(500, f"LLM-Fehler (Code): {result.get('error', 'Unbekannter Fehler')}")
-
-        data = result.get("data") or {}
-        latency_ms = result.get("latency_ms", 0)
-
-        if gen_template:
-            response["code_template"] = data.get("code_template", "")
-        if gen_tests:
-            response["public_tests"] = data.get("public_tests", "")
-            response["private_tests"] = data.get("private_tests", "")
-        if gen_solution:
-            response["model_solution"] = (data.get("model_solution") or "").strip()
-        if gen_description:
-            response["description"] = (data.get("description") or "").strip()
-        if gen_title:
-            response["title"] = (data.get("title") or "").strip()
 
     elif task_type == "mc":
         # ── MC-Aufgabe: Titel/Einleitung/Musterlösung/Fragen. Das LLM legt
@@ -1820,7 +1737,7 @@ async def get_student_submissions(
         submissions.append({
             "id": sub.id,
             "solution": sub.solution,
-            "code_solution": sub.code_solution,
+            "mc_answers": sub.mc_answers,
             # MC: persistiertes Grading-Ergebnis (JSON-String) — die
             # Review-Seite rendert daraus dieselbe Karte wie die
             # Student-View (bleibt stabil bei späteren Aufgaben-Edits).

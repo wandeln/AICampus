@@ -23,7 +23,6 @@
         <select id="type-filter" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
           <option value="">Alle</option>
           <option value="text">Textaufgaben</option>
-          <option value="code">Codeaufgaben</option>
           <option value="workspace">Workspace-Aufgaben</option>
           <option value="mc">Multiple-Choice-Aufgaben</option>
         </select>
@@ -211,9 +210,7 @@
       else if (pct >= 0.5) pointColor = 'text-yellow-600';
       else if (task.my_points > 0) pointColor = 'text-orange-600';
 
-      const typeBadge = task.task_type === 'code'
-        ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">💻 Code</span>'
-        : task.task_type === 'workspace'
+      const typeBadge = task.task_type === 'workspace'
         ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-700">🐳 Workspace</span>'
         : task.task_type === 'mc'
         ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700">🎯 Multiple Choice</span>'

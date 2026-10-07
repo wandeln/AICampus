@@ -5,8 +5,8 @@ Tutor gibt Thema + Schwierigkeit + zu generierende Felder (Tick-Boxen) ein →
 LLM generiert die angeforderten Felder (Titel, Aufgabenstellung, Musterlösung)
 neu bzw. ändert vorhandene Inhalte.
 
-Code- und Workspace-Aufgaben laufen je über EINEN eigenen Single-Prompt:
-- Code: prompts/code_task_prompt.py (CODE_TASK_PROMPT_TEMPLATE)
+Workspace-Aufgaben laufen über einen eigenen Single-Prompt:
+
 - Workspace: prompts/workspace_task_prompt.py (WORKSPACE_TASK_PROMPT_TEMPLATE)
 
 Ersetzt CREATION_PROMPT_TEMPLATE, MODIFY_TASK_PROMPT_TEMPLATE und
@@ -73,10 +73,6 @@ BESTEHENDE AUFGABENSTELLUNG:
 BESTEHENDE MUSTERLÖSUNG:
 {{ current_model_solution }}
 {% endif %}
-{% if code_template %}
-EXISTIERENDE CODE-VORLAGE (nur als Kontext, NICHT ändern):
-{{ code_template }}
-{% endif %}
 {% if current_text_template %}
 BESTEHENDE TEXT-VORLAGE:
 {{ current_text_template }}
@@ -91,13 +87,12 @@ Regeln:
 - Bei Text-Aufgaben: Verwende Markdown-Formatierung (**fett**, *kursiv*, Listen, $Math$, $$Display-Math$$) für bessere Lesbarkeit.
 - Bei Text-Aufgaben mit text_template: Das Gerüst ist der Startinhalt der Studierenden-Antwort (z. B. Lückentext mit markierten Lücken oder Tabelle mit leeren Zellen — Markdown-Tabellen). Die Musterlösung MUSS die vollständig ausgefüllte Vorlage zeigen. Erfinde KEIN text_template, wenn die Aufgabe keinen klaren Nutzen durch ein Gerüst hat (freie Textantwort) — dann den Schlüssel weglassen.
 - Die Aufgabenstellung muss eine Text-Vorlage, falls vorhanden, erwähnen (z. B. „Trage deine Werte in die Tabelle ein“).
-- Bei Code-Aufgaben: Beschreibe in der Aufgabenstellung was implementiert werden soll. Verwende $...$ für mathematische Notation.
 - Wenn Graphen zur Beschreibung benötigt werden: Verwende Mermaid (```mermaid ... ```) in Markdown.
 - Medien: Du DARFST Medien aus der obigen Medien-Liste in die Aufgabenstellung einbinden, wenn sie inhaltlich wirklich passen (max. 1-2) — verwende dafür exakt den angegebenen /media/-Pfad. Erfinde KEINE andere Medien-Pfade. Medien mit .html-Endung sind interaktive Applets — sie werden als interaktive Vorschau (Iframe) gerendert und im Markdown genauso eingebunden wie Bilder.
 - Querverweise: Bezug auf Abbildungen/Gleichungen/Code/Boxen (Definition, Satz, …)/Tabellen aus dem Skript per @fig:label / @eq:label / @code:label / @box:label / @tab:label — verwende NUR Labels, die in den obigen Kapitel-Zusammenfassungen vorkommen (sonst ist die Referenz kaputt). Lege in der Aufgabe selbst KEINE neuen fig/eq/code/box/tab-Labels an (Kollisionsgefahr).
   WICHTIG: @fig:label / @eq:label / @code:label / @box:label / @tab:label sind KEIN Code — schreibe sie IMMER als normalen Fließtext, NIEMALS in Backticks (`...`), Code-Blöcke (``` ... ```) oder Anführungszeichen. Nur so werden sie zu klickbaren Referenzen („Abb. N“ / „Gl. N“ / „Code N“ / „Satz N“ / „Tab. N“) aufgelöst.
   Richtig: „wie in @eq:shannon gezeigt“ — Falsch: „wie in `@eq:shannon` gezeigt“
-- Musterlösung: knapp und präzise. Bei Code: Nur den funktionalen Code (passend zur Code-Vorlage — gleiche Signaturen/Struktur). Bei Text: Die direkte Antwort/Erläuterung. Falls es mehrere korrekte Lösungen geben kann, gehe kurz darauf ein.
+- Musterlösung: knapp und präzise. Die direkte Antwort/Erläuterung. Falls es mehrere korrekte Lösungen geben kann, gehe kurz darauf ein.
 - Bitte gib in der Musterlösung auch Bewertungskriterien an um eine faire Bewertung zu ermöglichen. Es können maximal {{ max_points }} Punkte erzielt werden.
 - Die Bewertungskriterien sollten (abgesehen von standard good practice) keine Punkte enthalten, die aus der Aufgabenstellung nicht ersichtlich sind.
 """

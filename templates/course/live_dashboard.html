@@ -71,7 +71,6 @@
         <select id="type-filter" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
           <option value="">Alle</option>
           <option value="text">Textaufgaben</option>
-          <option value="code">Codeaufgaben</option>
           <option value="workspace">Workspace-Aufgaben</option>
           <option value="mc">Multiple-Choice-Aufgaben</option>
         </select>
@@ -242,7 +241,7 @@
   function renderTaskCharts(data) {
     destroyTaskCharts();
     const grid = document.getElementById('task-charts');
-    const typeBadge = { text: '📝', code: '💻', workspace: '🐳', mc: '🎯' };
+    const typeBadge = { text: '📝', workspace: '🐳', mc: '🎯' };
     if (data.tasks.length === 0) {
       grid.innerHTML = '<p class="text-gray-400">Keine Aufgaben im Filter.</p>';
       return;

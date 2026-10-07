@@ -5,7 +5,7 @@ Komponentenüberblick, Projektstruktur und Fehlersuche.
 ## Komponenten
 
 1. **AICampus-App** (FastAPI): Web-UI (Jinja2 + HTMX), REST-API,
-   Grading-Orchestrierung, LLM-Client, Sandbox, Medien/Import.
+   Grading-Orchestrierung, LLM-Client, Medien/Import.
    Ein-Prozess-Architektur (`main.py` → Router aus `api/`), SQLite/PostgreSQL.
 2. **Compute-Agent** (`compute_agent/`): FastAPI-Service auf einem
    (Compute-)Server, der über den **Docker-Daemon des Hosts** die
@@ -52,8 +52,7 @@ AICampus/
 ├── services/                # Business-Logik (ohne HTTP)
 │   ├── auth_service.py      # JWT + LDAP-Auth + RBAC (require_course_access, …)
 │   ├── llm_service.py       # OpenAI-kompatibler LLM-Client (alle Generierungs-/Grading-Calls)
-│   ├── grading_service.py   # Grading-Orchestrierung (Text/Code/Workspace)
-│   ├── sandbox_runner.py    # Sichere serverseitige Code-Ausführung (Code-Aufgaben)
+│   ├── grading_service.py   # Grading-Orchestrierung (Text/Workspace/MC)
 │   ├── compute_client.py    # HTTP-Client zum Compute-Agent (HMAC-Tokens, Health)
 │   ├── workspace_service.py # Workspace-Lebenszyklus (Start/Stop/Snapshot/Runs)
 │   ├── workspace_presets.py # Validierung des LLM-Workspace-Generierungs-Outputs
@@ -109,7 +108,6 @@ AICampus/
 ├── prompts/                 # LLM-Prompt-Templates (je Feature)
 │   ├── grading_prompt.py    # LLM-Korrektur
 │   ├── creation_prompt.py   # Aufgaben-Generierung (Text)
-│   ├── code_task_prompt.py  # Code-Aufgaben (Vorlage/Tests/Lösung)
 │   ├── workspace_task_prompt.py / image_spec_prompt.py  # Workspace + Image-Specs
 │   ├── script_prompt.py / script_question_prompt.py     # Skript-Kapitel
 │   ├── slides_prompt.py     # Slide-Decks

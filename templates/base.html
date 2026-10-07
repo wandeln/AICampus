@@ -595,15 +595,6 @@
 
   <!-- ─── Error Toast (global) ────────────────────────────────── -->
   <script>
-    // HTMX: CodeMirror-Integration — Editor-Inhalt in Requests aufnehmen
-    document.body.addEventListener("htmx:configRequest", (evt) => {
-      const editor = window._codeEditor;
-      if (editor && evt.detail.target) {
-        const name = "code_solution";
-        evt.detail.values[name] = editor.getValue();
-      }
-    });
-
     // HTMX: Error-Handling
     document.body.addEventListener("htmx:responseError", (evt) => {
       const detail = evt.detail.xhr.responseText;

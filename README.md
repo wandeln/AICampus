@@ -28,8 +28,6 @@ Kursmaterial — bleiben in Ihrem Netz.
 
 - **Sofortiges Feedback zu jeder Abgabe** — statt Wartezeit auf Sprechstunde:
   - **Textaufgaben:** LLM-Korrektur mit konstruktivem, differenziertem Feedback
-  - **Codeaufgaben:** automatische Prüfung per Unit-Tests (sichtbare +
-    versteckte Tests), serverseitige Sandbox mit CPU-/RAM-/Timeout-Limits
   - **Workspace-Aufgaben:** automatische Bewertung ganzer Code-Umgebungen —
     Studierende bekommen einen **eigenen, isolierten Container** (Mini-IDE mit
     Editor, Terminal und Web-Preview), auf Wunsch **mit GPU**
@@ -111,9 +109,9 @@ Produktiv-Betrieb: Docker + nginx (TLS) vor dem Container —
 
 > **Workspace-Aufgaben** (eigene Container pro Student, GPU) erfordern
 > zusätzlich den Compute-Agent — Installation in
-> [docs/installation.md](docs/installation.md). Ohne Agent bleiben
-> Text- und Code-Aufgaben voll funktionsfähig; Workspace-Aufgaben
-> degradieren sauber (Ausführen/Abgeben ausgegraut).
+> [docs/installation.md](docs/installation.md). Ohne Agent degradieren
+> Workspace-Aufgaben sauber (Ausführen/Abgeben ausgegraut); Text- und
+> Multiple-Choice-Aufgaben bleiben voll funktionsfähig.
 
 ## 🛠️ Tech-Stack (100 % Open-Source)
 

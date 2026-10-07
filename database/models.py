@@ -49,7 +49,6 @@ class CourseRole(str, Enum):
 
 class TaskType(str, Enum):
     TEXT = "text"
-    CODE = "code"
     WORKSPACE = "workspace"
     MC = "mc"  # Multiple Choice (mehrere Fragen, sofortiges Feedback)
 
@@ -196,8 +195,6 @@ class TaskBase(SQLModel):
     max_points: int = Field(ge=0)
     max_attempts: Optional[int] = Field(default=None)  # NULL = unlimitiert
     deadline: Optional[str] = Field(default=None)      # ISO-Format: "2025-02-15T23:59"
-    code_template: Optional[str] = Field(default=None) # Für Code-Aufgaben
-    test_code: Optional[str] = Field(default=None)     # Unit-Tests (einziger String mit PublicTest + PrivateTest)
     text_template: Optional[str] = Field(default=None) # Für Text-Aufgaben: Antwort-Gerüst (Lückentext, Tabelle, …) als Markdown
     is_visible: bool = Field(default=False)            # Für Studenten sichtbar (Default: versteckt)
     display_order: int = Field(default=0)              # Anzeigereihenfolge im Kurs
@@ -249,8 +246,6 @@ class TaskCreate(SQLModel):
     max_points: int = Field(ge=0)
     max_attempts: Optional[int] = Field(default=None)
     deadline: Optional[str] = Field(default=None)
-    code_template: Optional[str] = Field(default=None)
-    test_code: Optional[str] = Field(default=None)
     text_template: Optional[str] = Field(default=None)
     is_visible: bool = Field(default=False)
     display_order: int = Field(default=0)
@@ -284,8 +279,6 @@ class TaskUpdate(SQLModel):
     max_points: Optional[int] = None
     max_attempts: Optional[int] = None
     deadline: Optional[str] = None
-    code_template: Optional[str] = None
-    test_code: Optional[str] = None
     text_template: Optional[str] = None
     is_visible: Optional[bool] = None
     display_order: Optional[int] = None
@@ -660,7 +653,7 @@ class SubmissionBase(SQLModel):
     task_id: int = Field(foreign_key="tasks.id")
     student_id: int = Field(foreign_key="users.id")
     solution: str = Field(default="")          # Für Text-Aufgaben
-    code_solution: str = Field(default="")     # Für Code-Aufgaben
+    mc_answers: str = Field(default="")        # MC-Antworten (mc:v1:<json>-Payload)
     attempt_number: int = Field(default=1)
     solve_time_seconds: float = Field(default=0.0)  # Zeit in Sekunden bis zum Einreichen
     workspace_snapshot: Optional[str] = Field(default=None, max_length=500)  # Pfad zu workspace.tar.gz (Workspace-Aufgaben)
@@ -683,7 +676,7 @@ class Submission(SubmissionBase, table=True):
 class SubmissionCreate(SQLModel):
     task_id: int
     solution: str = Field(default="")
-    code_solution: str = Field(default="")
+    mc_answers: str = Field(default="")
     solve_time_seconds: float = Field(default=0.0)
     workspace_snapshot: Optional[str] = Field(default=None, max_length=500)
 

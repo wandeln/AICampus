@@ -59,16 +59,11 @@
     {% endif %}
 
     <div class="flex gap-2 mt-3">
-      {% set badge_class = {
-        'text': 'badge-text',
-        'code': 'badge-code'
-      } %}
       <span class="px-2 py-0.5 rounded text-xs font-medium
-        {% if task.task_type == 'code' %}bg-orange-100 text-orange-700
-        {% elif task.task_type == 'workspace' %}bg-indigo-100 text-indigo-700
+        {% if task.task_type == 'workspace' %}bg-indigo-100 text-indigo-700
         {% else %}bg-gray-100 text-gray-600
         {% endif %}" style="align-content: center;">
-        {{ '💻 Code' if task.task_type == 'code' else '🐳 Workspace' if task.task_type == 'workspace' else '📄 Text' }}
+        {{ '🐳 Workspace' if task.task_type == 'workspace' else '📄 Text' }}
       </span>
       <span class="badge px-2 py-0.5 rounded bg-gray-100 text-gray-600">
         {{ latest_points }} /  {{ task.max_points }} Punkte
@@ -124,24 +119,7 @@
       </div>
       {% endif %}
 
-      <!-- Public Tests (für Code-Aufgaben) -->
-      {% if task.task_type == 'code' and public_tests %}
-      <div class="card">
-        <details>
-          <summary class="cursor-pointer font-semibold text-blue-600 hover:text-blue-800">
-            🧪 Public Tests ({{ public_tests|length }})
-          </summary>
-          <div class="mt-3 space-y-3">
-            {% for test in public_tests %}
-            <div class="bg-gray-50 rounded p-3 text-sm">
-              <div class="font-mono text-blue-700 mb-1">{{ test.name }}</div>
-              <pre class="text-xs text-gray-600 overflow-x-auto">{{ test.code }}</pre>
-            </div>
-            {% endfor %}
-          </div>
-        </details>
-      </div>
-      {% endif %}
+
 
     </div>
 
@@ -222,7 +200,7 @@
         </div>
 
       {# Solution-Area je Aufgabentyp: %}
-      {# task_solve_text.html / task_solve_code.html / task_solve_workspace.html #}
+      {# task_solve_text.html / task_solve_workspace.html #}
       {% block solution_area %}{% endblock %}
 
       <!-- ─── Test Results ─────────────────────────────────── -->
@@ -246,11 +224,7 @@
             <!-- Solution -->
             <div class="mb-3">
               <h4 class="text-sm font-semibold text-gray-600 mb-1">Eingereichte Lösung</h4>
-              {% if task.task_type == 'code' %}
-                <div class="solution-container">
-                  <template class="markdown-solution" type="application/json">{{ (sub.code_solution or '') | tojson }}</template>
-                </div>
-              {% elif task.task_type == 'workspace' %}
+              {% if task.task_type == 'workspace' %}
                 {% if sub.workspace_snapshot %}
                 <div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3">
                   📦 Workspace-Abgabe (Snapshot des Containers: {{ (sub.solution or 'deine Dateien') }})
@@ -492,13 +466,13 @@
   }
 
   // ─── Helper: create a solution wrapper with copy button ─────
-  function createSolutionWrapper(rawText, isCode) {
+  function createSolutionWrapper(rawText) {
     const wrapper = document.createElement('div');
     wrapper.className = 'mt-1 markdown-solution markdown-solution-wrapper';
     wrapper.style.position = 'relative';
 
     const inner = document.createElement('div');
-    inner.className = 'markdown-solution-inner' + (isCode ? '' : ' p-3 bg-white border border-gray-200 rounded-xl');
+    inner.className = 'markdown-solution-inner p-3 bg-white border border-gray-200 rounded-xl';
     wrapper.appendChild(inner);
 
     const svgIcon = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>';
@@ -506,7 +480,7 @@
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
     copyBtn.className = 'markdown-copy-btn absolute top-2 right-2 text-gray-400 hover:text-gray-600 bg-white border border-gray-200 rounded-md p-1.5 text-xs transition';
-    copyBtn.title = isCode ? 'Code kopieren' : 'Markdown kopieren';
+    copyBtn.title = 'Markdown kopieren';
     copyBtn.innerHTML = svgIcon;
 
     copyBtn.addEventListener('click', () => {
@@ -551,15 +525,9 @@
     document.querySelectorAll('template.markdown-solution[type="application/json"]').forEach(el => {
       try {
         const raw = JSON.parse(el.innerHTML);
-        {% if task.task_type == 'code' %}
-        const { wrapper, inner } = createSolutionWrapper(raw, true);
-        el.replaceWith(wrapper);
-        renderMarkdown('```python\n' + raw + '\n```', inner, { bibliography: true });
-        {% else %}
-        const { wrapper, inner } = createSolutionWrapper(raw, false);
+        const { wrapper, inner } = createSolutionWrapper(raw);
         el.replaceWith(wrapper);
         renderMarkdown(raw, inner, { bibliography: true });
-        {% endif %}
       } catch(e) {
         console.warn('Failed to render solution:', e, el.innerHTML);
       }
@@ -574,8 +542,8 @@
     {% endif %}
   })();
 
-    {# Typ-spezifisches JS (Code-Editor/Run/Tests bzw. LaTeX-Upload): #}
-    {# task_solve_code.html / task_solve_text.html #}
+    {# Typ-spezifisches JS (LaTeX-Upload etc.): #}
+    {# task_solve_text.html / task_solve_workspace.html #}
     {% block solve_scripts %}{% endblock %}
 
     {% if task.task_type == 'mc' %}
@@ -823,10 +791,7 @@
 
     const body = {};
     let submittedText = "";
-    {% if task.task_type == 'code' %}
-      body.code_solution = editor.getValue();
-      submittedText = body.code_solution;
-    {% elif task.task_type == 'text' %}
+    {% if task.task_type == 'text' %}
       const textEd = window._textSolutionEditor;
       body.solution = textEd ? textEd.getValue() : document.getElementById("text-solution").value;
       submittedText = body.solution;
@@ -866,7 +831,7 @@
     {% endif %}
 
     {% if task.task_type not in ('workspace', 'mc') %}
-    if (!body.solution?.trim() && !body.code_solution?.trim()) {
+    if (!body.solution?.trim()) {
       showToast("Bitte trage zuerst eine Lösung ein.", "warning");
       return;
     }
@@ -1114,15 +1079,9 @@
           try {
             const jsonStr2 = decodeURIComponent(el.getAttribute('data-raw') || '');
             const raw2 = JSON.parse(jsonStr2);
-            {% if task.task_type == 'code' %}
-            const { wrapper, inner } = createSolutionWrapper(raw2, true);
-            el.replaceWith(wrapper);
-            renderMarkdown('```python\n' + raw2 + '\n```', inner, { bibliography: true });
-            {% else %}
-            const { wrapper, inner } = createSolutionWrapper(raw2, false);
+            const { wrapper, inner } = createSolutionWrapper(raw2);
             el.replaceWith(wrapper);
             renderMarkdown(raw2, inner, { bibliography: true });
-            {% endif %}
           } catch(e) {
             console.warn('Failed to render solution markdown:', e, el.getAttribute('data-raw'));
           }
@@ -1270,21 +1229,12 @@
 
     // Get current solution from editor/textarea
     let currentSolution = '';
-    {% if task.task_type == 'code' %}
-    if (window.codeEditor && window.codeEditor.getEditor) {
-      currentSolution = window.codeEditor.getEditor().getValue();
-    } else {
-      const ta = document.getElementById('code-editor-textarea');
-      if (ta) currentSolution = ta.value;
-    }
-    {% else %}
     const textEd = window._textSolutionEditor;
     if (textEd) currentSolution = textEd.getValue();
     else {
       const ta = document.getElementById('text-solution');
       if (ta) currentSolution = ta.value;
     }
-    {% endif %}
 
     hintInput.value = '';
     hintInput.disabled = true;

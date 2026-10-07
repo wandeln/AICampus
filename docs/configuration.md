@@ -10,7 +10,7 @@ Alle Konfigurationsoptionen und ihre Auflösung.
 4. **Defaults** (`config.py`, hardcoded Fallback)
 
 Geregelt wird damit: LLM (Endpoint, Modell, Prompt-Overrides), LDAP und
-Compute-Engines. Alles Weitere (Server, Sandbox, Import) kommt nur aus
+Compute-Engines. Alles Weitere (Server, Import) kommt nur aus
 `.env` / Defaults.
 
 > `.env.example` im Repo-Root ist die Vorlage; in Docker-Hybrid-Modus liegt
@@ -105,17 +105,6 @@ Die Admin-Konsole bietet eine vollständige LDAP-Konfiguration mit
 Verbindungstest. Bei aktiviertem LDAP werden neue User **automatisch
 angelegt**, wenn die LDAP-Auth erfolgreich ist; die Passwortänderung
 erfolgt dann über LDAP (der Name bleibt in AICampus änderbar).
-
-## Sandbox / Code-Ausführung
-
-| Variable | Standard | Beschreibung |
-|---|---|---|
-| `SANDBOX_TIMEOUT` | `15` | Wall-Clock-Timeout (Sekunden) |
-| `SANDBOX_CPU_SECONDS` | `30` | CPU-Zeit-Limit (Sekunden) |
-| `SANDBOX_MEMORY_MB` | `512` | Memory-Limit (MB) |
-
-Erlaubte Python-Module: Standardbibliothek + `matplotlib` (Liste in
-`config.py` → `SANDBOX_ALLOWED_MODULES`, bei Bedarf dort erweitern).
 
 ## Compute / Workspaces
 

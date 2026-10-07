@@ -216,10 +216,18 @@ def migrate_schema():
         # Migration: scripts/migrate_workspace_scripts.py (einmalig, gelaufen).
         # Artefakt-Sammlung entfernt (2026-09): Ergebnisdaten kommen per
         # Test-Output (test.sh/.test_private.sh echoen Metriken knapp).
-        "tasks": ["workspace_spec", "workspace_dataset", "workspace_artifacts"],
+        # Code-Aufgaben entfernt (2026-10): Vorlage/Tests durch Workspace ersetzt.
+        "tasks": ["workspace_spec", "workspace_dataset", "workspace_artifacts",
+                  "code_template", "test_code"],
         # is_public (Pfad-Konvention) abgelöst durch explizite access-Klassen;
         # Migration: scripts/migrate_workspace_access.py (einmalig).
         "task_workspace_files": ["is_public"],
+    }
+    # Spalten-Umbenennungen (idempotent): Tabelle -> {alter Name: neuer Name}
+    column_renames = {
+        # Code-Aufgaben entfernt (2026-10): Spalte speichert nur noch die
+        # MC-Antworten (mc:v1:<json>-Payload).
+        "submissions": {"code_solution": "mc_answers"},
     }
     is_sqlite = "sqlite" in DATABASE_URL
 
@@ -296,6 +304,30 @@ def migrate_schema():
                     conn.exec_driver_sql(
                         f"ALTER TABLE {table} DROP COLUMN IF EXISTS {col}"
                     )
+
+        for table, renames in column_renames.items():
+            if is_sqlite:
+                # SQLite >= 3.25: ALTER TABLE ... RENAME COLUMN
+                rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+                if not rows:
+                    continue
+                existing = {row[1] for row in rows}
+                for old_name, new_name in renames.items():
+                    if old_name in existing and new_name not in existing:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE {table} RENAME COLUMN {old_name} TO {new_name}"
+                        )
+            else:
+                for old_name, new_name in renames.items():
+                    row = conn.exec_driver_sql(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = :t AND column_name = :c",
+                        {"t": table, "c": old_name},
+                    ).fetchone()
+                    if row:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE {table} RENAME COLUMN {old_name} TO {new_name}"
+                        )
 
 
 def get_session():

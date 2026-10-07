@@ -1118,7 +1118,6 @@ async def tasks_page(
                 "max_attempts": t.max_attempts,
                 "attempts_used": len(subs),
                 "deadline": t.deadline,
-                "has_tests": bool(t.test_code),
                 "my_points": my_points,
                 "has_feedback": has_feedback,
                 "display_order": t.display_order,
@@ -1132,7 +1131,6 @@ async def tasks_page(
                 "max_points": t.max_points,
                 "max_attempts": t.max_attempts,
                 "deadline": t.deadline,
-                "has_tests": bool(t.test_code),
                 "my_points": 0,
                 "has_feedback": False,
                 "is_visible": t.is_visible,
@@ -1789,9 +1787,9 @@ async def new_task_page(
     if user.role == GlobalUserRole.ADMIN:
         course_role = "PROF"
 
-    # Typ des Templates: Default „text“, per Query-Param umschaltbar (z. B. ?task_type=code).
+    # Typ des Templates: Default „text“, per Query-Param umschaltbar (z. B. ?task_type=mc).
     # Workspace ist immer wählbar — ohne erreichbare Engine degradiert die View sauber.
-    allowed_types = ("text", "code", "workspace", "mc")
+    allowed_types = ("text", "workspace", "mc")
     tpl_type = request.query_params.get("task_type", "text")
     if tpl_type not in allowed_types:
         tpl_type = "text"
@@ -1821,7 +1819,6 @@ async def new_task_page(
             "task": None,
             "tpl_type": tpl_type,
             "is_tutor": True,
-            "is_code": False,
             "code_editor": True,  # CodeMirror (Markdown-Mode) für Aufgabenstellung/Musterlösung
             "LLM_TIMEOUT": LLM_TIMEOUT,
         },
@@ -1873,7 +1870,6 @@ async def task_page(
         session, user, request, course_id, active_tab="tasks",
     )
 
-    is_code = task.task_type.value == "code"
     is_workspace = task.task_type.value == "workspace"
 
     # Tutoren in Student-View: Zeige alle Aufgaben (auch versteckte) bei Prev/Next
@@ -1881,11 +1877,11 @@ async def task_page(
 
     # Typspezifisches Template (task_detail_{type}.html / task_solve_{type}.html)
     # mit Fallback auf die Base-Vorlage. Tutoren können per ?task_type=
-    # umschalten (z. B. Text-Aufgabe im Code-Template öffnen, um den Typ zu ändern).
+    # umschalten (z. B. Text-Aufgabe im MC-Template öffnen, um den Typ zu ändern).
     if is_tutor and not is_student_view:
         tpl_type = task.task_type.value
         override = request.query_params.get("task_type")
-        if override in ("text", "code", "workspace", "mc"):
+        if override in ("text", "workspace", "mc"):
             tpl_type = override
         template = _pick_task_template([f"tutor/task_detail_{tpl_type}.html", "tutor/task_detail_base.html"])
     else:
@@ -1942,7 +1938,7 @@ async def task_page(
             my_submissions.append({
                 "id": sub.id,
                 "solution": sub.solution,
-                "code_solution": sub.code_solution,
+                "mc_answers": sub.mc_answers,
                 "workspace_snapshot": sub.workspace_snapshot is not None,
                 "mc_result": sub.mc_result,
                 "attempt_number": sub.attempt_number,
@@ -2032,10 +2028,8 @@ async def task_page(
                 "max_points": task.max_points,
                 "max_attempts": task.max_attempts,
                 "deadline": task.deadline,
-                "code_template": task.code_template,
                 "text_template": task.text_template,
                 "model_solution": task.model_solution if is_tutor else None,
-                "test_code": task.test_code if is_tutor else None,
                 "is_visible": task.is_visible if is_tutor else None,
                 "hints_enabled": task.hints_enabled,
                 # Workspace: Main-Datei für alle (Editor-Modus),
@@ -2062,10 +2056,9 @@ async def task_page(
             },
             "is_tutor": is_tutor,
             "is_student_view": is_student_view,
-            "is_code": is_code,
             "tabs": tab_ctx["tabs"],
             "tpl_type": tpl_type,
-            "code_editor": is_code or is_tutor or is_workspace,  # Tutoren + Workspace-IDE: CodeMirror
+            "code_editor": is_tutor or is_workspace,  # Tutoren + Workspace-IDE: CodeMirror
             "my_submissions": my_submissions,
             "latest_points": latest_points,
             "total_attempts": len(my_submissions),
@@ -2289,7 +2282,7 @@ async def submission_review_page(
                 llm_points = max(llm_points, fb.points_earned)
         latest_points = human_points if override_exists else llm_points
 
-    task_type_display = {"text": "Textaufgabe", "code": "Codeaufgabe",
+    task_type_display = {"text": "Textaufgabe",
                          "workspace": "Workspace-Aufgabe",
                          "mc": "Multiple-Choice-Aufgabe"}.get(
         task.task_type.value, task.task_type.value
@@ -2326,9 +2319,9 @@ async def submission_review_page(
             "task_title": task.title,
             "task_type_display": task_type_display,
             "task_type": task.task_type.value,
-            # Code-Mirror-Shim für Code-/Workspace-Abgaben (Read-only-Editor
+            # Code-Mirror-Shim für Workspace-Abgaben (Read-only-Editor
             # in der Lösungsdarstellung, s. base.html {% if code_editor %})
-            "code_editor": task.task_type.value in ("code", "workspace"),
+            "code_editor": task.task_type.value == "workspace",
             "max_points": task.max_points,
             "student_name": student.name,
             "student_username": student.username,

@@ -2101,7 +2101,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
         `<span class="aicampus-taskbox-icon" aria-hidden="true">📝</span>` +
         `<div class="flex-1 min-w-0">` +
         `<a href="/courses/${taskCid}/tasks/${t.id}" class="aicampus-xref font-semibold">${escapeHtml(t.title)}</a>` +
-        `<div class="text-sm text-gray-500 mt-0.5">${t.maxPoints} Punkte · ${t.taskType === 'code' ? '💻 Code-Aufgabe' : '📄 Text-Aufgabe'}</div>` +
+        `<div class="text-sm text-gray-500 mt-0.5">${t.maxPoints} Punkte · ${( { text: '📄 Text-Aufgabe', workspace: '🐳 Workspace-Aufgabe', mc: '🎯 Multiple-Choice' } ) [t.taskType] || '📄 Text-Aufgabe'}</div>` +
         `</div></div>`;
     } else {
       // Student: Karte analog zur Aufgabenübersicht (Punkte, Medaille, Versuche, Deadline)
@@ -2120,16 +2120,15 @@ async function renderMarkdown(text, targetElement, options = {}) {
         const dl = new Date(t.deadline).toLocaleDateString('de-DE');
         deadlineHtml = ` · ⏰ Deadline ${dl}`;
       }
-      const typeBadge = t.taskType === 'code'
-        ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">💻 Code</span>'
-        : '<span class="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">📄 Text</span>';
+      const typeBadge = { text: '📄 Text', workspace: '🐳 Workspace', mc: '🎯 Multiple Choice' }[t.taskType] || '📄 Text';
+      const typeBadgeClass = { text: 'bg-gray-100 text-gray-600', workspace: 'bg-indigo-100 text-indigo-700', mc: 'bg-emerald-100 text-emerald-700' }[t.taskType] || 'bg-gray-100 text-gray-600';
       boxHtml =
         `<div class="aicampus-taskbox">` +
         `<span class="aicampus-taskbox-icon" aria-hidden="true">📝</span>` +
         `<div class="flex-1 min-w-0">` +
         `<a href="/courses/${taskCid}/tasks/${t.id}" class="aicampus-xref text-base font-semibold">${escapeHtml(t.title)}</a>` +
         `<div class="text-sm text-gray-500 mt-1">` +
-        `${t.attemptsUsed}${t.maxAttempts != null ? '/' + t.maxAttempts : ''} Versuche${deadlineHtml}&nbsp;${typeBadge}${medalBadge ? '&nbsp;&nbsp;&nbsp;&nbsp;' + medalBadge : ''}` +
+        `${t.attemptsUsed}${t.maxAttempts != null ? '/' + t.maxAttempts : ''} Versuche${deadlineHtml}&nbsp;<span class="px-2 py-0.5 rounded text-xs font-medium ${typeBadgeClass}">${typeBadge}</span>${medalBadge ? '&nbsp;&nbsp;&nbsp;&nbsp;' + medalBadge : ''}` +
         `</div></div>` +
         `<div class="text-right flex-shrink-0">` +
         `<div class="text-lg font-bold ${pointColor}">${t.myPoints}/${t.maxPoints}</div>` +

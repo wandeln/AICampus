@@ -89,21 +89,6 @@ LDAP_BIND_DN = os.getenv("LDAP_BIND_DN", "cn=admin,dc=uni,dc=de")
 LDAP_BIND_PW = os.getenv("LDAP_BIND_PW", "")
 LDAP_USER_SEARCH = os.getenv("LDAP_USER_SEARCH", "(uid={username})")
 
-# ─── Sandbox / Code-Ausführung ──────────────────────────────────
-SANDBOX_TIMEOUT = int(os.getenv("SANDBOX_TIMEOUT", "15"))
-SANDBOX_MEMORY_MB = int(os.getenv("SANDBOX_MEMORY_MB", "512"))
-SANDBOX_CPU_SECONDS = int(os.getenv("SANDBOX_CPU_SECONDS", "30"))
-
-# Erlaubte Python-Module in der Sandbox (Standardbibliothek)
-SANDBOX_ALLOWED_MODULES = [
-    "matplotlib", 
-    "math", "collections", "itertools", "typing", "dataclasses",
-    "array", "heapq", "bisect", "random", "string", "re",
-    "datetime", "unittest", "io", "sys", "json", "functools",
-    "operator", "copy", "enum", "abc", "numbers", "fractions",
-    "decimal", "statistics", "time", "os", "pathlib", "hashlib",
-]
-
 # ─── Compute / Workspaces ──────────────────────────────────────────
 # Anbindung an Compute-Engines für Workspace-Aufgaben (per-Student-Docker-Container
 # auf einem separaten oder lokalen Server, s. docs/installation.md).

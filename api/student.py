@@ -7,7 +7,6 @@ Rolle: Student (im Kurs)
 import asyncio
 import json
 import logging
-import re
 import shutil
 import tarfile
 import zlib
@@ -42,7 +41,6 @@ from services.import_service import spawn_job
 from services.mc_service import McValidationError, grade_mc, mc_report_summary, parse_mc_data
 from services.llm_service import LLMService
 from services.media_service import all_media_for_course
-from services.sandbox_runner import SandboxedRunner
 from services.settings_resolver import get_effective_llm_config
 from services.task_filter import multi_keyword_matches
 from services.workspace_service import (
@@ -58,37 +56,12 @@ from services.workspace_service import (
 
 router = APIRouter(prefix="/api/student", tags=["Student"])
 grading_service = GradingService()
-sandbox_runner = SandboxedRunner()
 llm_service = LLMService()
 logger = logging.getLogger(__name__)
 
 # Aktive Grading-Jobs: submission_id → asyncio-Task. Ermöglicht den Abbruch
 # eines laufenden LLM-Gradings (POST /submissions/{id}/cancel).
 _GRADING_TASKS: dict[int, asyncio.Task] = {}
-
-
-# Helper: Extrahiere PublicTest-Klasse aus test_code-String
-def extract_public_tests(test_code: str) -> str:
-    """
-    Parse PublicTest class from test_code string.
-    Returns just the PublicTest class code.
-    """
-    if not test_code:
-        return ""
-    # Find class PublicTest ... up to next class definition or end
-    match = re.search(r'class PublicTest\(unittest\.TestCase\):([\s\S]*?)(?=class PrivateTest|$)', test_code)
-    if match:
-        return 'class PublicTest(unittest.TestCase):' + match.group(1).rstrip()
-    return ""
-
-
-# Helper: Filtere nur Public-Test-Resultate
-def filter_public_test_results(test_results: list) -> list:
-    """
-    Filtert Test-Ergebnisse auf PublicTest-Klasse.
-    Ein Test ist public wenn der Name 'PublicTest' enthaelt.
-    """
-    return [t for t in test_results if 'PublicTest' in t.get('name', '')]
 
 
 # Helper: Ueberprueft Kurs-Zugriff (Student, Tutor oder PROF)
@@ -104,60 +77,6 @@ def _check_course_access(session: Session, user: User, course_id: int) -> bool:
     return membership.role_in_course in (
         CourseRole.STUDENT, CourseRole.TUTOR, CourseRole.PROF
     )
-
-
-# Helper: Formatiere Test-Ausgabe fuer Studierende
-def format_test_error(output: str) -> dict:
-    """
-    Bereitet die Fehlermeldung eines Tests auf.
-    Bewahrt Assert-Messages und den vollen Traceback auf.
-    Gibt ein Dict zurueck mit 'summary' (lesbare Kurzform) und 'full' (kompletter Traceback).
-    """
-    if not output:
-        return {"summary": "Test fehlgeschlagen. Details unbekannt.", "full": ""}
-
-    lines = output.strip().split('\n')
-
-    # Suche nach der Exception-Zeile und ggf. Assert-Message
-    error_type = ""
-    error_msg = ""
-    found_exception = False
-
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not found_exception:
-            # Suche nach Exception-Klasse (z.B. AssertionError, ValueError, ...)
-            for exc in ('AssertionError', 'ValueError', 'TypeError', 'KeyError', 'IndexError', 'NameError', 'AttributeError', 'RuntimeError', 'ZeroDivisionError'):
-                if exc in stripped and '(' in stripped:
-                    found_exception = True
-                    error_type = exc
-                    # Extrahiere die Message aus der Exception-Zeile
-                    paren_idx = stripped.index('(')
-                    msg_part = stripped[paren_idx+1:].rstrip(')').strip().strip("'\"")
-                    error_msg = msg_part
-                    break
-        else:
-            break
-
-    # Baue eine gut lesbare Zusammenfassung
-    readable_parts = []
-    if error_type:
-        readable_parts.append(f"{error_type}")
-        if error_msg:
-            readable_parts[-1] += f": {error_msg}"
-
-    # Wenn die Exception-Meldung leer war (z.B. AssertionError ohne Message),
-    # verwende die erste signifikante Zeile des Tracebacks
-    if error_type and not error_msg:
-        for l in lines:
-            stripped = l.strip()
-            if stripped and stripped != error_type:
-                readable_parts[-1] += f": {stripped[:120]}"
-                break
-
-    readable = " — ".join(readable_parts) if readable_parts else output.strip()[:300]
-
-    return {"summary": readable, "full": output.strip()}
 
 
 # =================================================================
@@ -184,8 +103,6 @@ async def get_task_detail(
     if not _check_course_access(session, user, task.course_id):
         raise HTTPException(403, "Kein Zugriff auf diese Aufgabe.")
 
-    public_test_code = extract_public_tests(task.test_code or "")
-
     return {
         "id": task.id,
         "title": task.title,
@@ -194,9 +111,7 @@ async def get_task_detail(
         "max_points": task.max_points,
         "max_attempts": task.max_attempts,
         "deadline": task.deadline,
-        "code_template": task.code_template if task.task_type.value == "code" else None,
         "text_template": task.text_template if task.task_type.value == "text" else None,
-        "public_test_code": public_test_code,
         "hints_enabled": task.hints_enabled,
     }
 
@@ -217,7 +132,7 @@ async def submit_solution(
 
     Request (je nach Typ):
         Text: { "solution": "..." }
-        Code: { "code_solution": "..." }
+        MC: { "mc_answers": [...] } (synchrones Grading, s. u.)
 
     Gibt sofort "pending" zurueck. Frontend muss per
     GET /submissions/{id}/result das Ergebnis polling-abfragen.
@@ -281,7 +196,7 @@ async def submit_solution(
             student_id=user.id,
             solution=mc_result["summary"],
             # strukturierte Auswahl (Tutor-Review markiert die Optionen)
-            code_solution="mc:v1:" + json.dumps(answers),
+            mc_answers="mc:v1:" + json.dumps(answers),
             # Ergebnis persistieren → Historie-Karte bleibt stabil, auch
             # wenn die Aufgabe später bearbeitet wird.
             mc_result=json.dumps(mc_result),
@@ -315,7 +230,6 @@ async def submit_solution(
         task_id=task.id,
         student_id=user.id,
         solution=body.get("solution", ""),
-        code_solution=body.get("code_solution", ""),
         attempt_number=len(existing_subs) + 1,
         solve_time_seconds=body.get("solve_time_seconds", 0.0),
         status=SubmissionStatus.PENDING,
@@ -846,142 +760,6 @@ async def submission_workspace_file(
 
 
 # =================================================================
-# CODE-AUSFUEHRUNG (ohne Tests, nur stdout)
-# =================================================================
-
-@router.post("/tasks/{task_id}/run-code")
-async def run_code(
-    task_id: int,
-    request: Request,
-    session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
-):
-    """
-    Code ausfuehren ohne Unit-Tests — zeigt nur die Konsolen-Ausgabe.
-    Laeuft mit Timeout (sandbox config) — blockiert den Server NICHT
-    fueher als SANDBOX_TIMEOUT Sekunden.
-    """
-    task = session.get(Task, task_id)
-    if not task:
-        raise HTTPException(404, "Aufgabe nicht gefunden.")
-
-    if task.task_type.value != "code":
-        raise HTTPException(400, "Nur bei Code-Aufgaben verfuegbar.")
-
-    membership = session.exec(
-        select(UserCourse)
-        .where(UserCourse.user_id == user.id)
-        .where(UserCourse.course_id == task.course_id)
-    ).first()
-
-    if not membership:
-        raise HTTPException(403, "Kein Zugriff.")
-
-    body = await request.json()
-    code = body.get("code_solution", "")
-
-    if not code.strip():
-        raise HTTPException(400, "Kein Code eingereicht.")
-
-    # Fuehre Code in Sandbox aus (async, mit Timeout)
-    result = await sandbox_runner.run_code_only(code=code)
-
-    stdout = result.get("stdout", "")
-    stderr = result.get("stderr", "")
-
-    # Behalte den vollen Python-Traceback anstelle ihn zu ersetzen
-    if stderr:
-        if "IndentationError" in stderr:
-            match = re.search(r'line\s+(\d+)', stderr)
-            line = match.group(1) if match else "unbekannt"
-            stderr = f"Eindeckungsfehler (Indentation) in Zeile {line}. Ueberpruefe deine Einrueckung (Tab vs. Leerzeichen).\n\nOriginal:\n{stderr}"
-
-    images = result.get("images", [])
-
-    return {
-        "stdout": stdout,
-        "stderr": stderr,
-        "error": stderr or None,
-        "timeout": bool(stderr and "Zeitlimit" in stderr),
-        "images": images,
-    }
-
-
-# =================================================================
-# PUBLIC TESTS (schnelles Feedback, kein Grading)
-# =================================================================
-
-@router.post("/tasks/{task_id}/run-tests")
-async def run_public_tests(
-    task_id: int,
-    request: Request,
-    session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
-):
-    """
-    Public Tests ausfuehren (server-seitig, sandbox).
-
-    Kein LLM-Grading — nur Test-Ergebnisse fuer schnelles Feedback.
-    Laeuft mit Timeout — blockiert den Server NICHT fueher als SANDBOX_TIMEOUT.
-    """
-    task = session.get(Task, task_id)
-    if not task:
-        raise HTTPException(404, "Aufgabe nicht gefunden.")
-
-    if task.task_type.value != "code":
-        raise HTTPException(400, "Nur bei Code-Aufgaben verfuegbar.")
-
-    membership = session.exec(
-        select(UserCourse)
-        .where(UserCourse.user_id == user.id)
-        .where(UserCourse.course_id == task.course_id)
-    ).first()
-
-    if not membership:
-        raise HTTPException(403, "Kein Zugriff.")
-
-    public_test_code = extract_public_tests(task.test_code or "")
-    if not public_test_code:
-        return {"message": "Keine Public Tests fuer diese Aufgabe.", "test_results": []}
-
-    body = await request.json()
-    code = body.get("code_solution", "")
-
-    if not code.strip():
-        raise HTTPException(400, "Kein Code eingereicht.")
-
-    result = await sandbox_runner.run(code=code, tests_code=public_test_code)
-
-    # Formatte Fehlermeldungen fuer bessere Lesbarkeit
-    formatted_results = []
-    for t in result.get("test_results", []):
-        formatted = {
-            "name": t.get("name", "Unbekannt"),
-            "passed": t.get("passed", False),
-        }
-        if not formatted["passed"]:
-            raw_output = t.get("output", "")
-            formatted_error = format_test_error(raw_output)
-            formatted["error"] = formatted_error
-        formatted_results.append(formatted)
-
-    has_timeout = result.get("timeout", False)
-    stderr_val = result.get("stderr", "")
-    if "Zeitlimit" in stderr_val:
-        has_timeout = True
-
-    return {
-        "passed": result.get("passed", False),
-        "test_results": formatted_results,
-        "tests_passed": sum(1 for t in formatted_results if t.get("passed")),
-        "tests_total": len(formatted_results),
-        "stdout": result.get("stdout", ""),
-        "stderr": stderr_val,
-        "timeout": has_timeout,
-    }
-
-
-# =================================================================
 # FEEDBACK & PUNKTE
 # =================================================================
 
@@ -1119,7 +897,6 @@ async def get_my_points(
             "max_attempts": task.max_attempts,
             "attempts_used": len(subs),
             "deadline": task.deadline,
-            "has_tests": bool(task.test_code),
             "my_points": my_points,
             "has_feedback": has_feedback,
         })
@@ -1289,7 +1066,7 @@ async def request_hint(
     if prev_submissions:
         lines = []
         for sub in prev_submissions[:5]:
-            solution_text = sub.solution if task.task_type.value == "text" else sub.code_solution
+            solution_text = sub.solution
             lines.append(f"Abgabe #{sub.attempt_number}: {solution_text[:500]}")
             for fb in sub.feedback_list:
                 lines.append(f"  Feedback: {fb.comment}")
@@ -1357,8 +1134,8 @@ async def request_hint(
     result = await llm_service.generate_socratic_hint(
         task_description=task.description,
         model_solution=task.model_solution or "(Keine Musterloesung hintergelegt)",
-        # Vorlagen-Kontext: Code-Aufgabe → Code-Template, Text-Aufgabe → Text-Vorlage
-        code_template=(task.code_template if task.task_type.value == "code" else task.text_template) or "",
+        # Vorlagen-Kontext: Text-Vorlage (falls vorhanden)
+        text_template=task.text_template or "",
         current_solution=hint_request.current_solution,
         previous_submissions=prev_submissions_text,
         hint_history=hint_history_text,

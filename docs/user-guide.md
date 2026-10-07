@@ -19,7 +19,7 @@ Das System unterscheidet **globale Rollen** (Systemebene) und **Kurs-Rollen**
 |---|---|
 | **Prof** | Kurs bearbeiten (Name, Semester, Beschreibung), Mitglieder verwalten (hinzufügen, Rollen ändern, entfernen), Einladungslinks erstellen, Aufgaben erstellen/bearbeiten/löschen, Sichtbarkeit umschalten, Aufgaben per Drag-and-Drop ordnen, Einreichungen korrigieren, Feedback überschreiben, Übersichtstabelle + Excel-Export, Skript-Kapitel verwalten (anlegen, LLM-bearbeiten, freischalten, ordnen, löschen), Slide-Decks anlegen & löschen, Applet-Studio, Quellen-Bibliothek, Medienbibliothek, Kurs-Import, Kurs-Engines verwalten |
 | **Tutor** | Aufgaben erstellen/bearbeiten (LLM-Aufgabe generieren), Einreichungen korrigieren, Feedback überschreiben, Übersichtstabelle + Excel-Export, Skript-Kapitel anlegen/LLM-bearbeiten/freischalten/ordnen, Slide-Decks anlegen & bearbeiten, Kurs-Forum moderieren |
-| **Student** | Aufgaben sehen & lösen, sofortiges LLM-Feedback + Hints erhalten, eigene Punkte einsehen, Tests ausführen (Code-Aufgaben), Workspace-Umgebung nutzen (Mini-IDE), vorherige/nächste Aufgabe navigieren, freigeschaltene Skript-Kapitel & Slides lesen, Kurs-Forum nutzen, Name & Passwort selbst ändern |
+| **Student** | Aufgaben sehen & lösen, sofortiges LLM-Feedback + Hints erhalten, eigene Punkte einsehen, Workspace-Umgebung nutzen (Mini-IDE), vorherige/nächste Aufgabe navigieren, freigeschaltene Skript-Kapitel & Slides lesen, Kurs-Forum nutzen, Name & Passwort selbst ändern |
 
 > **Hinweis:** Ein globaler Admin hat uneingeschränkten Zugriff auf alle Kurse,
 > auch ohne Kurs-Mitgliedschaft. Ein Prof kann alle Kurs-Rollen zuweisen —
@@ -42,16 +42,7 @@ Freier Text mit **Markdown & LaTeX**-Rendering. Korrektur durch das LLM mit
 konstruktivem Feedback; das Feedback kann vom Tutor/Prof überschrieben
 werden.
 
-### 3.2 Codeaufgaben
-
-Python-Code mit Unit-Tests (**Public/Private**): Public-Tests zeigen dem
-Studenten direkt die Ergebnisse, Private-Tests laufen erst bei der Abgabe
-und zählen zur Bewertung. Ausführung in einer **serverseitigen Sandbox**
-(Timeout, CPU-Limit, Memory-Limit; erlaubte Module: Standardbibliothik +
-`math`, `collections`, `matplotlib`, …). Code-Editor (CodeMirror) mit
-Syntax-Highlighting.
-
-### 3.3 Workspace-Aufgaben
+### 3.2 Workspace-Aufgaben
 
 Eigene, **isolierte Docker-Container pro Student** auf einem
 Compute-Agent-Server (lokal oder remote, GPU optional).
@@ -78,7 +69,7 @@ Compute-Agent-Server (lokal oder remote, GPU optional).
   Aufgaben sichtbar, „Ausführen/Abgeben" ist ausgegraut
   („⚠️ Compute-Server nicht erreichbar").
 
-### 3.4 Test- & Verifikations-Skripte (Workspace)
+### 3.3 Test- & Verifikations-Skripte (Workspace)
 
 Die Verifikation läuft über Shell-Skripte mit festen Namen in der **Wurzel**
 des Aufgaben-Dateibaums (Stubs werden beim Aufgaben-Save automatisch
@@ -281,9 +272,6 @@ LLM-Calls (GPU-schonend limitierbar) und Vorschau-Bildern (PDF → PNG).
 
 ## 9. Sicherheit
 
-- **Sandbox:** serverbasierte Code-Ausführung (`subprocess` + `resource`
-  Limits) — Timeout, CPU-Limit, Memory-Limit; erlaubte Python-Module
-  konfigurierbar.
 - **Workspace-Container:** read-only Root-FS, `--network=none` (Default;
   Internet opt-in je Aufgabe), CPU/RAM/PID-Limits, einziger schreibbarer
   Ort `/workspace`.
