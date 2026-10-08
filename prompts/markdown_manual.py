@@ -130,14 +130,26 @@ SCRIPT_MARKDOWN_MANUAL = MARKDOWN_MANUAL + """\
 SLIDES_MARKDOWN_MANUAL = MARKDOWN_MANUAL + """\
 - Folien werden durch eine eigene Zeile mit genau "---" getrennt (nichts anderes auf der Zeile).
 - Optional: Eine Folie kann in vertikal gestapelte UNTERFOLIEN aufgeteilt werden, die in der Präsentation nacheinander (mit ↓) erscheinen — z. B. zum schrittweisen Aufbauen einer Erklärung: trenne sie mit einer eigenen Zeile mit genau "--" (nichts anderes auf der Zeile). Jede Unterfolie ist wie eine normale Folie (eigene Direktiven, "notes" etc.). Sparsam einsetzen (max. 1–2 Folien pro Deck mit je max. 3–4 Unterfolien); "--" ist NUR innerhalb einer Folie erlaubt und NIEMALS als Ersatz für "---".
-- Am Anfang einer Folie (vor dem eigentlichen Inhalt) dürfen Direktiven stehen, JEWEILS auf eigener Zeile, jede Direktive maximal EINMAL pro Folie, nur diese Werte:
+- Direktiven stehen GANZ OBEN in der Folie — direkt nach der "---"-Trennzeile, VOR dem Titel und vor allem sonstigem Inhalt. Jede Direktive auf eigener Zeile, jede maximal EINMAL pro Folie, nur diese Werte:
   layout: center | topleft | default
   transition: fade | slide | zoom | none | autoanimate
   class: <kennung>
   notes: <Sprechernotiz, einzeilig>
   background: ![Titel](/media/…/datei.png) oder ![Titel](/media/…/datei.html) oder ![Titel](https://…)
   (optional bei .html-Applets: {zoom=X} am Ende — Applet-Inhalt um Faktor X skalieren)
-  ACHTUNG: Eine Direktive, die NICHT in den ersten Zeilen steht (z. B. nach dem Titel oder mitten im Text), wird NICHT erkannt und stattdessen als sichtbarer Folieninhalt gerendert — das ist ein Fehler.
+  ACHTUNG: Direktiven werden NUR aus den ersten Zeilen der Folie erkannt. Steht eine Direktive an anderer Stelle (z. B. nach dem Titel oder mitten im Text), wird sie NICHT als Direktive behandelt, sondern als sichtbarer Folientext gerendert — das ist ein Fehler.
+  RICHTIG (Direktiven direkt nach dem "---", VOR dem Titel):
+  ---
+  notes: Was ich als Dozent zu dieser Folie sage
+  transition: fade
+  ## Folientitel
+  ...Inhalt...
+
+  FALSCH (Direktive hinter dem Titel):
+  ---
+  ## Folientitel
+  transition: fade    ← wird als sichtbarer Text gerendert!
+  ...Inhalt...
 - "notes" ist PFLICHT für jede Inhaltsfolie (1–3 Sätze in vollem Deutsch: was du als Dozent zu der Folie sagst — etwas mehr Tiefe/Kontext als auf der Folie selbst; die Notizen sind NICHT für die Studenten sichtbar). Titelfolie und Abschnittsfolien dürfen ohne "notes".
 - ZUORDNUNG DER NOTES: Die "notes:"-Zeile gehört zur Folie, deren INHALT sie erklärt — sie steht ans ANFANG genau dieser Folie (direkt nach der "---"-Trennzeile, VOR dem "## Titel"). Schreibe NIEMALS die Notiz zur vorangegangenen Folie ans Anfang der nächsten Folie: Ist der Inhalt von Folie 3 fertig und du schreibst das "---" für Folie 4, dann muss die Notiz zu Folie 3 bereits am ANFANG von Folie 3 stehen — niemals hinter dem "---".
 - "layout:" wird bei normalen Inhaltsfolien meist WEGLASSEN → Standard-Layout "default": Titel oben links, übriger Inhalt vertikal zentriert im Folienraum. "layout: topleft" nur für Folien mit VIELEm Text (Inhalt direkt unter dem Titel, ohne Zentrierung).
