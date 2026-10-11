@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block title %} - Datenschutzerklärung{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 py-8">
+
+  <header class="mb-8">
+    <h1 class="text-3xl font-bold text-gray-800 flex items-center gap-3">
+      <img src="{{ asset('aicampus_icon.png') }}" alt="" class="h-10 w-10 rounded-lg">
+      Datenschutzerklärung
+    </h1>
+    <p class="text-gray-500 text-sm mt-2">Stand: {{ stand_datum }} &middot; AICampus &mdash; KI-Plattform für die MINT-Lehre</p>
+  </header>
+
+  <div class="bg-white border border-gray-200 rounded-xl shadow-sm divide-y divide-gray-100">
+
+    <!-- ─── 1. Verantwortlicher ─────────────────────────────────── -->
+    <section class="px-6 py-5">
+      <h2 class="text-lg font-semibold text-gray-800 mb-2">1. Verantwortliche Stelle</h2>
+      <p class="text-sm text-gray-600 leading-relaxed">
+        Verantwortlich für die Verarbeitung personenbezogener Daten auf dieser Plattform ist:
+      </p>
+      <p class="text-sm text-gray-600 leading-relaxed mt-2">
+        AICampus<br>
+        Institute of Computer Science II<br>
+        Universität Bonn<br>
+        Kontakt: <a class="text-blue-700 hover:underline" href="mailto:wandeln@cs.uni-bonn.de">wandeln@cs.uni-bonn.de</a>
+      </p>
+    </section>
+
+    <!-- ─── 2. Grundsätze ───────────────────────────────────────── -->
+    <section class="px-6 py-5">
+      <h2 class="text-lg font-semibold text-gray-800 mb-2">2. Grundsätze</h2>
+      <p class="text-sm text-gray-600 leading-relaxed">
+        AICampus verarbeitet personenbezogene Daten ausschließlich auf eigenen Servern an der
+        Universität Bonn. Es werden <strong>keine</strong> Daten an Cloud-Anbieter, Werbenetzwerke
+        oder externe Tracking-Dienste (z.&nbsp;B. Google Analytics) übertragen.
+        Alle eingesetzten Drittanbieter-Bibliotheken (u.&nbsp;a. HTMX, Tailwind, KaTeX, Chart.js,
+        Mermaid) werden self-hosted von unseren eigenen Servern ausgeliefert.
+      </p>
+    </section>
+
+    <!-- ─── 3. Registrierung & Anmeldung ────────────────────────── -->
+    <section class="px-6 py-5">
+      <h2 class="text-lg font-semibold text-gray-800 mb-2">3. Registrierung und Anmeldung</h2>
+      <p class="text-sm text-gray-600 leading-relaxed">
+        Bei der Registrierung werden folgende Daten gespeichert:
+      </p>
+      <ul class="text-sm text-gray-600 leading-relaxed list-disc list-inside mt-2 space-y-1">
+        <li>Username, Vor- und Nachname, E-Mail-Adresse</li>
+        <li>Passwort &mdash; ausschließlich als nicht umkehrbarer, gesalzener Hash (das Klartext-Passwort wird nicht gespeichert)</li>
+        <li>Rolle (User/Admin) sowie Kurs-Mitgliedschaften inkl. Kurs-Rolle</li>
+        <li>optional: Profilbild</li>
+      </ul>
+      <p class="text-sm text-gray-600 leading-relaxed mt-2">
+        Diese Daten sind für die Bereitstellung der Plattform erforderlich.
+        Rechtsgrundlage ist Art. 6 Abs. 1 lit. b DSGVO (Erfüllung des Dienstes) bzw.
+        Art. 6 Abs. 1 lit. f DSGVO (berechtigtes Interesse am Betrieb der Lehrplattform).
+      </p>
+    </section>
+
+    <!-- ─── 4. Kursbetrieb ──────────────────────────────────────── -->
+    <section class="px-6 py-5">
+      <h2 class="text-lg font-semibold text-gray-800 mb-2">4. Teilnahme an Kursen</h2>
+      <p class="text-sm text-gray-600 leading-relaxed">
+        Im Rahmen der Kursnutzung werden die für den Lehrbetrieb erforderlichen Daten verarbeitet,
+        insbesondere: eingereichte Lösungen und zugehörige Bewertungen, Feedback zwischen
+        Lehrenden und Studierenden, Forum-Beiträge, genutzte Hint-Optionen sowie hochgeladene
+        Kursmaterialien und Dateien. Diese Daten dienen der Durchführung des Kurses
+        (Korrektur, Feedback, Kommunikation) &mdash; Rechtsgrundlage: Art. 6 Abs. 1 lit. b und
+        f DSGVO. Zugriff haben ausschließlich die Lehrenden des jeweiligen Kurses und
+        Plattform-Admins.
+      </p>
+    </section>
+
+    <!-- ─── 5. Nutzungstracking ─────────────────────────────────── -->
+    <section class="px-6 py-5">
+      <h2 class="text-lg font-semibold text-gray-800 mb-2">5. Nutzungsanalyse (Page-View-Logging)</h2>
+      <p class="text-sm text-gray-600 leading-relaxed">
+        Die Plattform protokolliert serverseitig, welche Seiten von welchem Konto geöffnet werden,
+        um den Betrieb planen und die Nutzung auswerten zu können. Erfasst werden dabei:
+      </p>
+      <ul class="text-sm text-gray-600 leading-relaxed list-disc list-inside mt-2 space-y-1">
+        <li>Ihre Nutzer-ID (keine IP-Adresse, kein Browser, kein Gerät)</li>
+        <li>die aufgerufene Seite bzw. das offene Kursmodul</li>
+        <li>ein Zeitstempel</li>
+      </ul>
+      <p class="text-sm text-gray-600 leading-relaxed mt-2">
+        Aus den Daten werden für Lehrende und Admins aggregate Kennzahlen (z.&nbsp;B. aktive
+        Nutzer:innen, beliebte Seiten) in der Admin-Konsole ausgegeben.
+        <strong>Zugriff haben ausschließlich Plattform-Admins.</strong>
+      </p>
+      <p class="text-sm text-gray-600 leading-relaxed mt-2">
+        Rechtsgrundlage: Art. 6 Abs. 1 lit. f DSGVO (berechtigtes Interesse an einem effizienten
+        und nachvollziehbaren Plattformbetrieb).
+      </p>
+    </section>
+
+    <!-- ─── 6. Benachrichtigungen ───────────────────────────────── -->
+    <section class="px-6 py-5">
+      <h2 class="text-lg font-semibold text-gray-800 mb-2">6. Benachrichtigungen</h2>
+      <p class="text-sm text-gray-600 leading-relaxed">
+        In-App-Benachrichtigungen (z.&nbsp;B. neue Forum-Beiträge oder Feedback) werden bis zu
+        ihrer Lesebestätigung gespeichert; der Lesezeitpunkt wird mit dem jeweiligen Konto
+        verknüpft und nicht automatisch gelöscht. Rechtsgrundlage: Art. 6 Abs. 1 lit. b und
+        f DSGVO.
+      </p>
+    </section>
+
+    <!-- ─── 7. KI-Funktionen (LLM) ──────────────────────────────── -->
+    <section class="px-6 py-5">
+      <h2 class="text-lg font-semibold text-gray-800 mb-2">7. KI-Funktionen (LLM)</h2>
+      <p class="text-sm text-gray-600 leading-relaxed">
+        Die KI-Funktionen der Plattform (automatische Korrektur, Skript-Fragen, Generierung von
+        Lernmaterialien) werden über OpenAI-kompatible Endpoints bereitgestellt, die auf Servern
+        der Universität Bonn betrieben werden. Es findet <strong>keine Übermittlung an externe
+        KI-Anbieter</strong> statt.
+      </p>
+      <p class="text-sm text-gray-600 leading-relaxed mt-2">
+        Je nach Funktion werden an den Endpoint übermittelt: Aufgabenstellungen sowie, bei
+        Korrekturen und Feedback-Funktionen, Ihre eingereichten Lösungen; bei
+        Bild-Konvertierungen die hochgeladenen Bilddaten. Technischer Verlauf der Aufrufe wird
+        auf unseren Servern protokolliert und ist nur Plattform-Admins einsehbar.
+      </p>
+    </section>
+
+    <!-- ─── 8. Session & Browser-Speicher ───────────────────────── -->
+    <section class="px-6 py-5">
+      <h2 class="text-lg font-semibold text-gray-800 mb-2">8. Session und Browser-Speicher</h2>
+      <p class="text-sm text-gray-600 leading-relaxed">
+        Zur Anmeldung setzt die Plattform ein eigenes Session-Cookie (<code class="text-xs bg-gray-100 rounded px-1">access_token</code>,
+        gültig 8&nbsp;Stunden, HttpOnly, Secure, SameSite=Lax). Es ist technisch erforderlich,
+        um Ihre Anmeldung über mehrere Seiten hinweg aufrechtzuerhalten, und unterliegt
+        daher keiner Einwilligungspflicht.
+      </p>
+      <p class="text-sm text-gray-600 leading-relaxed mt-2">
+        Zusätzlich werden rein funktionale Anzeige-Präferenzen lokal in Ihrem Browser
+        gespeichert (localStorage/sessionStorage), z.&nbsp;B.: Datei-Anordnung im
+        Aufgaben-Workspace, Panel-Größen, Tab-Wahl im Skript-Fragenbereich sowie
+        Whiteboard-Inhalte während einer Präsentation. Diese Daten dienen ausschließlich
+        der Darstellung der Plattform, verbleiben in Ihrem Browser und werden
+        nicht für Tracking oder Werbung verwendet.
+      </p>
+      <p class="text-sm text-gray-600 leading-relaxed mt-2">
+        Es werden <strong>keine Cookies oder Speichermechanismen von Dritt-Anbietern</strong>
+        verwendet; ein Cookie-Banner ist daher nicht erforderlich.
+      </p>
+    </section>
+
+    <!-- ─── 9. Server-Logs ──────────────────────────────────────── -->
+    <section class="px-6 py-5">
+      <h2 class="text-lg font-semibold text-gray-800 mb-2">9. Server-Protokolle (technisch)</h2>
+      <p class="text-sm text-gray-600 leading-relaxed">
+        Zu Betriebs- und Sicherheitszwecken (Fehlerbehebung, Missbrauchsvermeidung) werden
+        technische Server-Protokolle geführt (u.&nbsp;a. IP-Adresse, Zeitstempel, angeforderte
+        Seite). Diese werden für einen begrenzten Zeitraum aufbewahrt und anschließend
+        verworfen.
+      </p>
+    </section>
+
+    <!-- ─── 10. Ihre Rechte ─────────────────────────────────────── -->
+    <section class="px-6 py-5">
+      <h2 class="text-lg font-semibold text-gray-800 mb-2">10. Ihre Rechte</h2>
+      <p class="text-sm text-gray-600 leading-relaxed">
+        Sie haben gegenüber der verantwortlichen Stelle folgende Rechte:
+      </p>
+      <ul class="text-sm text-gray-600 leading-relaxed list-disc list-inside mt-2 space-y-1">
+        <li>Recht auf Auskunft über die Sie betreffenden personenbezogenen Daten (Art. 15 DSGVO)</li>
+        <li>Recht auf Berichtigung unrichtiger Daten (Art. 16 DSGVO)</li>
+        <li>Recht auf Löschung (Art. 17 DSGVO)</li>
+        <li>Recht auf Einschränkung der Verarbeitung (Art. 18 DSGVO)</li>
+        <li>Recht auf Datenübertragbarkeit (Art. 20 DSGVO)</li>
+        <li>Recht auf Widerspruch gegen die Verarbeitung (Art. 21 DSGVO)</li>
+      </ul>
+      <p class="text-sm text-gray-600 leading-relaxed mt-2">
+        Zur Ausübung Ihrer Rechte genügt eine formlose Nachricht an
+        <a class="text-blue-700 hover:underline" href="mailto:wandeln@cs.uni-bonn.de">wandeln@cs.uni-bonn.de</a>.
+      </p>
+      <p class="text-sm text-gray-600 leading-relaxed mt-2">
+        Ihnen steht zudem das Recht zu, sich bei der zuständigen Aufsichtsbehörde zu
+        beschweren (Art. 77 DSGVO):<br>
+        Landesbeauftragte für Datenschutz und Informationsfreiheit Nordrhein-Westfalen,<br>
+        Kavalleriestraße 2&ndash;4, 40213 Düsseldorf &mdash;
+        <a class="text-blue-700 hover:underline" href="https://www.ldi.nrw">www.ldi.nrw</a>
+      </p>
+    </section>
+
+    <!-- ─── 11. Datensicherheit ─────────────────────────────────── -->
+    <section class="px-6 py-5">
+      <h2 class="text-lg font-semibold text-gray-800 mb-2">11. Datensicherheit</h2>
+      <ul class="text-sm text-gray-600 leading-relaxed list-disc list-inside mt-2 space-y-1">
+        <li>Übertragung verschlüsselt über TLS (HTTPS)</li>
+        <li>Passwörter nur als nicht umkehrbare, gesalzene Hashes gespeichert</li>
+        <li>Rollenbasierter Zugriff: Lehrende sehen nur Daten ihres Kurses, Admins haben erweiterte Rechte</li>
+        <li>Ausführliche Datenverarbeitung ausschließlich auf eigenen Servern (kein externer Datenabfluss)</li>
+      </ul>
+    </section>
+
+    <!-- ─── 12. Änderungen ──────────────────────────────────────── -->
+    <section class="px-6 py-5">
+      <h2 class="text-lg font-semibold text-gray-800 mb-2">12. Änderungen dieser Erklärung</h2>
+      <p class="text-sm text-gray-600 leading-relaxed">
+        Diese Datenschutzerklärung kann bei Änderungen der Plattform oder der Rechtslage
+        aktualisiert werden. Maßgeblich ist stets die hier veröffentlichte Fassung.
+      </p>
+    </section>
+
+  </div>
+</div>
+{% endblock %}

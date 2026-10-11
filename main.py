@@ -776,6 +776,33 @@ async def about_page(request: Request, session: Session = Depends(get_session)):
     return templates.TemplateResponse("about.html", ctx)
 
 
+@app.get("/datenschutz")
+async def datenschutz_page(request: Request, session: Session = Depends(get_session)):
+    """Öffentliche Datenschutzerklärung."""
+    ctx: dict[str, Any] = {
+        "request": request,
+        "page_title": "Datenschutzerklärung – AICampus",
+        "page_description": (
+            "Welche Daten AICampus warum verarbeitet, wie die Nutzung protokolliert wird "
+            "und welche Datenschutz-Rechte Ihnen zustehen."
+        ),
+        "stand_datum": datetime.now().strftime("%d.%m.%Y"),
+    }
+    try:
+        user = await get_current_user(request, session)
+    except HTTPException:
+        user = None
+    if user:
+        display_role = "Admin" if user.role == GlobalUserRole.ADMIN else "User"
+        ctx.update({
+            "current_user": _user_ctx(user, display_role),
+            "courses": _get_user_courses(user, session),
+            "selected_course_id": None,
+            "is_admin": user.role == GlobalUserRole.ADMIN,
+        })
+    return templates.TemplateResponse("datenschutz.html", ctx)
+
+
 @app.get("/robots.txt", include_in_schema=False)
 async def robots_txt(request: Request):
     """Crawler-Steuerung: nur die öffentliche Landing-Seite indexieren.
