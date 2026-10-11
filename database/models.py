@@ -1242,3 +1242,27 @@ class PushSubscription(SQLModel, table=True):
     auth: str = Field(max_length=255)
     user_agent: str = Field(default="", max_length=300)
     created_at: datetime = Field(default_factory=datetime.now)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ANALYTICS: PAGE-VIEW-TRACKING (in-house, s. services/analytics.py)
+# ═══════════════════════════════════════════════════════════════════
+
+class PageView(SQLModel, table=True):
+    """Nutzungs-Tracking (in-house Analytics): wer hat wann welche Seite geöffnet.
+
+    Wird vom Tracking-Middleware (main.py) bei jedem Aufruf einer HTML-Seite
+    eines eingeloggten Users gefüllt und ausschließlich vom Analytics-
+    Dashboard in der Admin-Konsole (api/analytics.py) gelesen. Bewusst ohne
+    IP / User-Agent / Referrer: nur User-ID, Seite, Kurs und Zeitstempel.
+    Alte Einträge werden beim App-Start bereinigt (RETENTION_DAYS).
+    """
+
+    __tablename__ = "page_views"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    path: str = Field(max_length=500)              # maskierter Pfad (z. B. /join/<token>)
+    page_key: str = Field(max_length=50, index=True)  # normalisierte Seitenart (s. analytics.classify_path)
+    course_id: Optional[int] = Field(default=None, foreign_key="courses.id", index=True)
+    created_at: datetime = Field(default_factory=datetime.now, index=True)

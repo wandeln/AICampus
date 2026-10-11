@@ -1,0 +1,322 @@
+"""
+In-house Nutzungs-Analytics: Page-View-Tracking + Aggregationen für das
+Analytics-Dashboard in der Admin-Konsole.
+
+Keine externen Dienste: Die Einträge landen in der lokalen Datenbank
+(Tabelle page_views), alle Aggregationen laufen per SQL auf dem selben
+Server. Die Daten verlassen die Plattform nicht.
+
+Privacy: Es werden nur User-ID + Seite (path) + Seitenart (page_key) +
+Kurs-ID + Zeitstempel gespeichert — bewusst keine IP-Adressen, User-Agents
+oder Referrer.
+
+Tracking-Pipeline:
+1. main.py: HTTP-Middleware `_page_view_tracking` → maybe_track_page_view()
+2. maybe_track_page_view(): Filter (GET/200/HTML/logged-in/kein HTMX)
+   + User-ID aus dem JWT (kein DB-Lauf für den Filter)
+3. record_page_view(): Seiten-Klassifikation + Kurzzeit-Dedupe + DB-Insert
+
+Nur bekannte HTML-Seiten (Allowlist in _PAGE_RULES) werden gezählt —
+API-Endpunkte, Dateien, HTMX-Partials, Redirects und Gäste-Zugriffe bleiben
+außen vor. Neue Seiten müssen in _PAGE_RULES ergänzt werden, um gezählt
+zu werden.
+"""
+
+import logging
+import re
+import time
+from datetime import datetime, timedelta
+from typing import Any, Optional
+
+from sqlmodel import Session, text
+
+from database.base import engine
+from database.models import PageView
+from services.auth_service import decode_access_token
+
+logger = logging.getLogger(__name__)
+
+# Einträge älter als das werden beim App-Start gelöscht (RETENTION).
+RETENTION_DAYS = 365
+
+# Dieselbe Seite desselben Users innerhalb des Zeitfensters zählt nur
+# einmal (schützt gegen F5-Flut).
+DEDUP_SECONDS = 30
+
+# ─── Seiten-Klassifikation (Allowlist) ──────────────────────────
+# (Regex, page_key, Gruppe der Kurs-ID oder None)
+_PAGE_RULES: list[tuple[re.Pattern, str, Optional[int]]] = [
+    (re.compile(r"^/$"), "home", None),
+    (re.compile(r"^/courses/(\d+)$"), "course", 1),
+    (re.compile(r"^/courses/(\d+)/tasks$"), "tasks", 1),
+    (re.compile(r"^/courses/(\d+)/tasks/new$"), "task_new", 1),
+    (re.compile(r"^/courses/(\d+)/tasks/(\d+)$"), "task", 1),
+    (re.compile(r"^/courses/(\d+)/tasks/(\d+)/students/(\d+)/review$"), "review", 1),
+    (re.compile(r"^/courses/(\d+)/script$"), "script", 1),
+    (re.compile(r"^/courses/(\d+)/slides$"), "slides", 1),
+    (re.compile(r"^/courses/(\d+)/slides/(\d+)$"), "slides", 1),
+    (re.compile(r"^/courses/(\d+)/slides/(\d+)/present$"), "slides", 1),
+    (re.compile(r"^/courses/(\d+)/media$"), "media", 1),
+    (re.compile(r"^/courses/(\d+)/references$"), "references", 1),
+    (re.compile(r"^/courses/(\d+)/applets/new$"), "applet", 1),
+    (re.compile(r"^/courses/(\d+)/applets/(\d+)$"), "applet", 1),
+    (re.compile(r"^/courses/(\d+)/forum$"), "forum", 1),
+    (re.compile(r"^/courses/(\d+)/members$"), "members", 1),
+    (re.compile(r"^/courses/(\d+)/settings$"), "course_settings", 1),
+    (re.compile(r"^/courses/(\d+)/overview$"), "overview", 1),
+    (re.compile(r"^/courses/(\d+)/live$"), "live", 1),
+    (re.compile(r"^/courses/(\d+)/live/mc$"), "live", 1),
+    (re.compile(r"^/settings$"), "user_settings", None),
+    (re.compile(r"^/notifications/archive$"), "notifications", None),
+    (re.compile(r"^/admin$"), "admin", None),
+]
+_JOIN_RE = re.compile(r"^/join/[A-Za-z0-9_\-]+$")
+
+# Pfade, die nie getrackt werden (Dateien, API, Docs, …).
+_EXCLUDED_PREFIXES = (
+    "/static/", "/api/", "/media/", "/avatars/", "/preview/",
+    "/docs", "/redoc", "/openapi.json", "/sw.js",
+    "/robots.txt", "/sitemap.xml",
+)
+
+
+def classify_path(path: str) -> Optional[tuple[str, Optional[int], str]]:
+    """Liefert (page_key, course_id, stored_path) für eine trackbare Seite.
+
+    None, wenn der Pfad nicht auf der Allowlist steht. Der Einladungs-Token
+    in /join/… wird maskiert, damit er nicht in der DB landet.
+    """
+    for rx, page_key, group in _PAGE_RULES:
+        m = rx.match(path)
+        if m:
+            course_id = int(m.group(group)) if group else None
+            return page_key, course_id, path
+    if _JOIN_RE.match(path):
+        return "join", None, "/join/<token>"
+    return None
+
+
+# ─── Middleware-Hook ─────────────────────────────────────────────
+
+def maybe_track_page_view(request, response) -> None:
+    """Ruft das Tracking an (wird vom Middleware in main.py aufgerufen).
+
+    Geht nie in die Knie: Fehler hier dürfen den Request nicht stören.
+    """
+    if request.method != "GET" or response.status_code != 200:
+        return
+    path = request.url.path
+    if any(path == p or path.startswith(p) for p in _EXCLUDED_PREFIXES):
+        return
+    if "text/html" not in response.headers.get("content-type", ""):
+        return
+    if "HX-Request" in request.headers:  # HTMX-Partials zählen nicht als Seitenaufruf
+        return
+    token = request.cookies.get("access_token")
+    if not token:
+        return  # Gäste (Login/About) werden nicht getrackt
+    payload = decode_access_token(token)
+    if not payload:
+        return
+    user_id = payload.get("sub")
+    if not isinstance(user_id, int):
+        return
+    record_page_view(user_id, path)
+
+
+# ─── Aufzeichnung (mit Kurzzeit-Dedupe) ─────────────────────────
+_last_view: dict[int, tuple[str, float]] = {}
+
+
+def record_page_view(user_id: int, path: str) -> None:
+    classified = classify_path(path)
+    if not classified:
+        return
+    page_key, course_id, stored_path = classified
+
+    now = time.monotonic()
+    last = _last_view.get(user_id)
+    if last and last[0] == stored_path and now - last[1] < DEDUP_SECONDS:
+        return
+    _last_view[user_id] = (stored_path, now)
+
+    try:
+        with Session(engine) as session:
+            session.add(PageView(
+                user_id=user_id,
+                path=stored_path,
+                page_key=page_key,
+                course_id=course_id,
+                created_at=datetime.now(),
+            ))
+            session.commit()
+    except Exception:
+        logger.exception("Analytics: Page-View konnte nicht gespeichert werden")
+
+
+def prune_old(days: int = RETENTION_DAYS) -> None:
+    """Beim App-Start: Einträge außerhalb des Retention-Fensters löschen."""
+    cutoff = datetime.now() - timedelta(days=days)
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("DELETE FROM page_views WHERE created_at < :cutoff"),
+                {"cutoff": cutoff},
+            )
+            deleted = result.rowcount or 0
+        if deleted:
+            logger.info(f"Analytics: {deleted} Page-Views älter als {days} Tage gelöscht.")
+    except Exception:
+        logger.exception("Analytics: Bereinigung alter Einträge fehlgeschlagen")
+
+
+# ─── Aggregationen (Admin-Dashboard) ─────────────────────────────
+# Die Queries nutzen nur SQL, das in SQLite UND PostgreSQL läuft
+# (date(created_at), COUNT(DISTINCT …), JOINs).
+
+def _since(days: int) -> datetime:
+    return datetime.now() - timedelta(days=days)
+
+
+def daily_active_users(days: int) -> list[dict[str, Any]]:
+    """Aktive User pro Tag im Fenster (Lücken mit 0 aufgefüllt)."""
+    with Session(engine) as session:
+        rows = session.execute(
+            text(
+                "SELECT date(created_at) AS d, COUNT(DISTINCT user_id) AS n "
+                "FROM page_views WHERE created_at >= :since GROUP BY d"
+            ),
+            {"since": _since(days)},
+        ).all()
+    counts = {str(r[0]): r[1] for r in rows}
+    out = []
+    today = datetime.now().date()
+    for i in range(days - 1, -1, -1):
+        d = today - timedelta(days=i)
+        out.append({"date": d.isoformat(), "count": counts.get(d.isoformat(), 0)})
+    return out
+
+
+def count_active_users(days: int) -> int:
+    """Distinct Users mit ≥1 Page-View im Fenster (Basis für MAU)."""
+    with Session(engine) as session:
+        row = session.execute(
+            text(
+                "SELECT COUNT(DISTINCT user_id) FROM page_views "
+                "WHERE created_at >= :since"
+            ),
+            {"since": _since(days)},
+        ).first()
+    return row[0] if row else 0
+
+
+def count_views(days: int) -> int:
+    """Anzahl Page-Views im Fenster."""
+    with Session(engine) as session:
+        row = session.execute(
+            text("SELECT COUNT(*) FROM page_views WHERE created_at >= :since"),
+            {"since": _since(days)},
+        ).first()
+    return row[0] if row else 0
+
+
+def top_pages(days: int, course_id: Optional[int] = None, limit: int = 20) -> list[dict[str, Any]]:
+    """Beliebteste Seitenarten (page_key), optional auf einen Kurs begrenzt."""
+    sql = (
+        "SELECT pv.page_key, COUNT(*) AS views, COUNT(DISTINCT pv.user_id) AS users "
+        "FROM page_views pv "
+        "WHERE pv.created_at >= :since"
+    )
+    params: dict[str, Any] = {"since": _since(days), "limit": limit}
+    if course_id is not None:
+        sql += " AND pv.course_id = :course_id"
+        params["course_id"] = course_id
+    sql += " GROUP BY pv.page_key ORDER BY views DESC LIMIT :limit"
+    with Session(engine) as session:
+        rows = session.execute(text(sql), params).all()
+    return [
+        {"page_key": r[0], "views": r[1], "users": r[2]} for r in rows
+    ]
+
+
+def top_courses(days: int, limit: int = 15) -> list[dict[str, Any]]:
+    """Beliebteste Kurse (Views + distinct User) im Fenster."""
+    sql = (
+        "SELECT pv.course_id, c.name, c.semester, COUNT(*) AS views, "
+        "COUNT(DISTINCT pv.user_id) AS users "
+        "FROM page_views pv "
+        "JOIN courses c ON c.id = pv.course_id "
+        "WHERE pv.created_at >= :since AND pv.course_id IS NOT NULL "
+        "GROUP BY pv.course_id, c.name, c.semester "
+        "ORDER BY views DESC LIMIT :limit"
+    )
+    with Session(engine) as session:
+        rows = session.execute(text(sql), {"since": _since(days), "limit": limit}).all()
+    return [
+        {
+            "course_id": r[0],
+            "name": r[1],
+            "semester": r[2],
+            "views": r[3],
+            "users": r[4],
+        }
+        for r in rows
+    ]
+
+
+def top_users(days: int, limit: int = 15) -> list[dict[str, Any]]:
+    """Aktivste User im Fenster (Views + Anzahl verschiedener Seiten)."""
+    sql = (
+        "SELECT pv.user_id, u.username, u.name, COUNT(*) AS views, "
+        "COUNT(DISTINCT pv.path) AS pages "
+        "FROM page_views pv "
+        "JOIN users u ON u.id = pv.user_id "
+        "WHERE pv.created_at >= :since "
+        "GROUP BY pv.user_id, u.username, u.name "
+        "ORDER BY views DESC LIMIT :limit"
+    )
+    with Session(engine) as session:
+        rows = session.execute(text(sql), {"since": _since(days), "limit": limit}).all()
+    return [
+        {
+            "user_id": r[0],
+            "username": r[1],
+            "name": r[2],
+            "views": r[3],
+            "pages": r[4],
+        }
+        for r in rows
+    ]
+
+
+def recent_views(limit: int = 100, user_id: Optional[int] = None) -> list[dict[str, Any]]:
+    """Neueste Page-Views (optional: nur für einen User), inkl. User-/Kursname."""
+    sql = (
+        "SELECT pv.created_at, pv.user_id, u.username, u.name, pv.page_key, "
+        "pv.path, pv.course_id, c.name AS course_name "
+        "FROM page_views pv "
+        "LEFT JOIN users u ON u.id = pv.user_id "
+        "LEFT JOIN courses c ON c.id = pv.course_id"
+    )
+    params: dict[str, Any] = {"limit": limit}
+    if user_id is not None:
+        sql += " WHERE pv.user_id = :user_id"
+        params["user_id"] = user_id
+    sql += " ORDER BY pv.created_at DESC LIMIT :limit"
+    with Session(engine) as session:
+        rows = session.execute(text(sql), params).all()
+    out = []
+    for r in rows:
+        ts = r[0]
+        # Rohe SQL-Query: created_at kommt je DB als datetime ODER String zurück.
+        out.append({
+            "created_at": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+            "user_id": r[1],
+            "username": r[2],
+            "name": r[3],
+            "page_key": r[4],
+            "path": r[5],
+            "course_id": r[6],
+            "course_name": r[7],
+        })
+    return out

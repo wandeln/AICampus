@@ -12,6 +12,9 @@
       <button onclick="showSection('courses')" class="admin-nav w-full text-left px-4 py-3 rounded-lg bg-blue-50 text-blue-700 font-medium hover:bg-blue-100 transition" data-section="courses">
         📋 Kurse verwalten
       </button>
+      <button onclick="showSection('analytics')" class="admin-nav w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-section="analytics">
+        📊 Analytics
+      </button>
       <button onclick="showSection('users')" class="admin-nav w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-section="users">
         👥 User verwalten
       </button>
@@ -132,6 +135,95 @@
             </tbody>
           </table>
         </div>
+      </div>
+
+      <!-- ═══ ANALYTICS ═══ -->
+      <div id="section-analytics" class="admin-section hidden">
+        <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+          <h2 class="text-xl font-semibold text-gray-800">Nutzungs-Analytics</h2>
+          <select id="analytics-days" onchange="loadAnalytics()" class="border rounded px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="7">Letzte 7 Tage</option>
+            <option value="14" selected>Letzte 14 Tage</option>
+            <option value="30">Letzte 30 Tage</option>
+            <option value="90">Letzte 90 Tage</option>
+          </select>
+        </div>
+
+        <div class="flex items-start gap-2 text-xs text-gray-500 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 mb-4">
+          🔒 In-house-Tracking: Alle Daten bleiben in der lokalen Datenbank (keine externen Dienste).
+          Gespeichert werden nur User-ID, Seite, Kurs und Zeitstempel — keine IP-Adressen oder User-Agents.
+        </div>
+
+        <!-- KPIs -->
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+          <div class="card p-4 text-center">
+            <div id="kpi-dau-today" class="text-2xl font-bold text-gray-900">–</div>
+            <div class="text-xs text-gray-500 mt-1">Aktive heute (DAU)</div>
+          </div>
+          <div class="card p-4 text-center">
+            <div id="kpi-dau-avg" class="text-2xl font-bold text-gray-900">–</div>
+            <div class="text-xs text-gray-500 mt-1">Ø DAU (Fenster)</div>
+          </div>
+          <div class="card p-4 text-center">
+            <div id="kpi-mau" class="text-2xl font-bold text-gray-900">–</div>
+            <div class="text-xs text-gray-500 mt-1">MAU (30 Tage)</div>
+          </div>
+          <div class="card p-4 text-center">
+            <div id="kpi-active-7" class="text-2xl font-bold text-gray-900">–</div>
+            <div class="text-xs text-gray-500 mt-1">Aktive (7 Tage)</div>
+          </div>
+          <div class="card p-4 text-center">
+            <div id="kpi-views" class="text-2xl font-bold text-gray-900">–</div>
+            <div class="text-xs text-gray-500 mt-1">Seitenaufrufe (Fenster)</div>
+          </div>
+        </div>
+
+        <!-- DAU-Chart -->
+        <div class="card p-4 mb-4">
+          <h3 class="font-semibold text-gray-800 mb-3">Aktive User pro Tag (DAU)</h3>
+          <div class="h-64 relative">
+            <canvas id="dau-chart"></canvas>
+          </div>
+        </div>
+
+        <!-- Top-Seiten -->
+        <div class="card p-4 mb-4">
+          <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h3 class="font-semibold text-gray-800">Top-Seiten</h3>
+            <select id="analytics-course" onchange="loadAnalytics()" class="border rounded px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">Alle Kurse</option>
+              {% for course in courses %}
+              <option value="{{ course.id }}">{{ course.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div id="top-pages-table"></div>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
+          <!-- Top-Kurse -->
+          <div class="card p-4">
+            <h3 class="font-semibold text-gray-800 mb-3">Top-Kurse</h3>
+            <div id="top-courses-table"></div>
+          </div>
+          <!-- Top-User -->
+          <div class="card p-4">
+            <h3 class="font-semibold text-gray-800 mb-3">Aktivste User</h3>
+            <div id="top-users-table"></div>
+          </div>
+        </div>
+
+        <!-- Letzte Aktivität -->
+        <div class="card p-4">
+          <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
+            <h3 class="font-semibold text-gray-800">Letzte Aktivität <span id="analytics-user-filter-label" class="text-sm font-normal text-gray-400"></span></h3>
+            <button id="analytics-show-all" onclick="selectAnalyticsUser(null, '')" class="hidden text-xs text-blue-600 hover:text-blue-800">→ alle User anzeigen</button>
+          </div>
+          <div id="recent-activity-table"></div>
+        </div>
+
+        <!-- Chart.js (MIT) — lokal gespiegelt -->
+        <script src="{{ asset('vendor/chart.umd.js') }}"></script>
       </div>
 
       <!-- ═══ LLM CONFIG ═══ -->
@@ -495,6 +587,8 @@
     if (section === 'compute') refreshEngineStatus();
     // Beim Aufruf des LLM-Debug-Logs: Log vom Server laden
     if (section === 'llm-debug') loadLlmDebugLog();
+    // Beim Aufruf des Analytics-Dashboards: Daten vom Server laden
+    if (section === 'analytics') loadAnalytics();
 
     // Hash synchron halten (z. B. Deep-Link /admin#compute)
     history.replaceState(null, '', '#' + section);
@@ -1662,6 +1756,170 @@
       onSpecSaved: () => { globalSpecsCache = null; },
     });
   })();
+
+  // ─── Analytics (in-house Nutzungs-Tracking) ──────────────────
+  const ANALYTICS_PAGE_LABELS = {
+    home: 'Dashboard',
+    course: 'Kurs-Start',
+    tasks: 'Aufgabenliste',
+    task: 'Aufgabe',
+    task_new: 'Aufgabe anlegen',
+    review: 'Bewertung',
+    script: 'Skript',
+    slides: 'Folien',
+    media: 'Medien',
+    references: 'Quellen',
+    applet: 'Applet-Studio',
+    forum: 'Forum',
+    members: 'Mitglieder',
+    course_settings: 'Kurseinstellungen',
+    overview: 'Punkte-Übersicht',
+    live: 'Live-Dashboard',
+    join: 'Kurs-Beitritt',
+    user_settings: 'Benutzer-Einstellungen',
+    notifications: 'Nachrichten-Archiv',
+    admin: 'Admin-Konsole',
+  };
+  let analyticsDauChart = null;
+  let analyticsSelectedUser = null;
+
+  function analyticsPageLabel(key) {
+    return ANALYTICS_PAGE_LABELS[key] || key;
+  }
+
+  async function loadAnalytics() {
+    const days = document.getElementById('analytics-days').value || '30';
+    const courseId = document.getElementById('analytics-course').value;
+    const [ov, pages, courses, users] = await Promise.all([
+      fetch(`/api/admin/analytics/overview?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
+      fetch(`/api/admin/analytics/top-pages?days=${days}${courseId ? `&course_id=${courseId}` : ''}`, { credentials: 'same-origin' }).then(r => r.json()),
+      fetch(`/api/admin/analytics/top-courses?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
+      fetch(`/api/admin/analytics/top-users?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
+    ]);
+
+    // KPIs
+    document.getElementById('kpi-dau-today').textContent = ov.dau_today ?? 0;
+    document.getElementById('kpi-dau-avg').textContent = ov.dau_avg ?? 0;
+    document.getElementById('kpi-mau').textContent = ov.mau_30 ?? 0;
+    document.getElementById('kpi-active-7').textContent = ov.active_last7 ?? 0;
+    document.getElementById('kpi-views').textContent = ov.total_views ?? 0;
+
+    // DAU-Chart
+    const canvas = document.getElementById('dau-chart');
+    if (analyticsDauChart) analyticsDauChart.destroy();
+    analyticsDauChart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: ov.dau.map(d => d.date.slice(5).replace('-', '.')),
+        datasets: [{
+          label: 'Aktive User',
+          data: ov.dau.map(d => d.count),
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59, 130, 246, 0.12)',
+          fill: true,
+          tension: 0.25,
+          pointRadius: 2,
+          pointHoverRadius: 4,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, ticks: { stepSize: 1 } },
+          x: { grid: { display: false } },
+        },
+      },
+    });
+
+    renderAnalyticsTable('top-pages-table', pages, (r, total) =>
+      `<tr class="hover:bg-gray-50 border-t">
+        <td class="py-2 px-3 text-sm font-medium">${escHtml(analyticsPageLabel(r.page_key))}</td>
+        <td class="py-2 px-3 text-sm text-center">${r.views} <span class="text-gray-400 text-xs">(${total ? Math.round(r.views / total * 100) : 0}%)</span></td>
+        <td class="py-2 px-3 text-sm text-center">${r.users}</td>
+      </tr>`);
+    renderAnalyticsTable('top-courses-table', courses, (r, total) =>
+      `<tr class="hover:bg-gray-50 border-t">
+        <td class="py-2 px-3 text-sm">
+          <span class="font-medium">${escHtml(r.name || '(gelöschter Kurs)')}</span>
+          <div class="text-xs text-gray-400">${escHtml(r.semester || '')}</div>
+        </td>
+        <td class="py-2 px-3 text-sm text-center">${r.views} <span class="text-gray-400 text-xs">(${total ? Math.round(r.views / total * 100) : 0}%)</span></td>
+        <td class="py-2 px-3 text-sm text-center">${r.users}</td>
+      </tr>`);
+    renderAnalyticsTable('top-users-table', users, (r, total) =>
+      `<tr class="hover:bg-gray-50 border-t cursor-pointer" onclick="selectAnalyticsUser(${r.user_id}, '${escHtml(r.username).replace(/'/g, "\\'")}')">
+        <td class="py-2 px-3 text-sm">
+          <span class="font-medium">${escHtml(r.name || r.username)}</span>
+          <div class="text-xs text-gray-400 font-mono">${escHtml(r.username)}</div>
+        </td>
+        <td class="py-2 px-3 text-sm text-center">${r.views}</td>
+        <td class="py-2 px-3 text-sm text-center" title="Anzahl verschiedener Seiten">${r.pages}</td>
+      </tr>`);
+
+    await loadAnalyticsRecent();
+  }
+
+  async function loadAnalyticsRecent() {
+    const url = analyticsSelectedUser
+      ? `/api/admin/analytics/users/${analyticsSelectedUser}/views?limit=100`
+      : '/api/admin/analytics/recent?limit=100';
+    const recent = await fetch(url, { credentials: 'same-origin' }).then(r => r.json());
+    document.getElementById('recent-activity-table').innerHTML = renderRecentRows(recent);
+  }
+
+  function renderRecentRows(recent) {
+    if (!recent.length) {
+      return '<div class="text-center py-6 text-gray-400 text-sm">Noch keine Page-Views aufgezeichnet.</div>';
+    }
+    const rows = recent.map(v => {
+      const when = v.created_at
+        ? new Date(v.created_at.slice(0, 19).replace(' ', 'T')).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+        : '';
+      const who = (v.username !== undefined && v.username !== null)
+        ? `<span class="font-medium">${escHtml(v.name || v.username)}</span> <span class="text-gray-400 font-mono text-xs">${escHtml(v.username)}</span>`
+        : '<span class="text-gray-400">(gelöschter User)</span>';
+      const page = `${escHtml(analyticsPageLabel(v.page_key))} <span class="text-gray-400 font-mono text-xs">${escHtml(v.path || '')}</span>`;
+      return `<tr class="hover:bg-gray-50 border-t">
+        <td class="py-2 px-3 text-sm whitespace-nowrap">${when}</td>
+        <td class="py-2 px-3 text-sm">${who}</td>
+        <td class="py-2 px-3 text-sm">${page}</td>
+        <td class="py-2 px-3 text-sm text-gray-500">${v.course_name ? escHtml(v.course_name) : '—'}</td>
+      </tr>`;
+    }).join('');
+    const header = '<tr class="bg-gray-100"><th class="text-left py-2 px-3 text-sm font-semibold">Zeit</th><th class="text-left py-2 px-3 text-sm font-semibold">User</th><th class="text-left py-2 px-3 text-sm font-semibold">Seite</th><th class="text-left py-2 px-3 text-sm font-semibold">Kurs</th></tr>';
+    return `<table class="w-full border-collapse">${header}${rows}</table>`;
+  }
+
+  function renderAnalyticsTable(elId, rows, rowFn) {
+    const el = document.getElementById(elId);
+    if (!rows || !rows.length) {
+      el.innerHTML = '<div class="text-center py-6 text-gray-400 text-sm">Keine Daten im gewählten Zeitraum.</div>';
+      return;
+    }
+    const total = rows.reduce((sum, r) => sum + (r.views || 0), 0);
+    const head = rows[0].page_key !== undefined
+      ? ['Seitentyp', 'Aufrufe', 'User']
+      : (rows[0].course_id !== undefined ? ['Kurs', 'Aufrufe', 'User'] : ['User', 'Aufrufe', 'Seiten']);
+    el.innerHTML = `<table class="w-full border-collapse">
+      <tr class="bg-gray-100">${head.map(h => `<th class="text-left py-2 px-3 text-sm font-semibold">${h}</th>`).join('')}</tr>
+      ${rows.map(r => rowFn(r, total)).join('')}
+    </table>`;
+  }
+
+  function selectAnalyticsUser(userId, username) {
+    analyticsSelectedUser = userId;
+    const label = document.getElementById('analytics-user-filter-label');
+    const showAll = document.getElementById('analytics-show-all');
+    if (userId) {
+      label.textContent = `— nur: ${username}`;
+      showAll.classList.remove('hidden');
+    } else {
+      label.textContent = '';
+      showAll.classList.add('hidden');
+    }
+    loadAnalyticsRecent();
+  }
 
   // Section aus URL-Hash öffnen (z. B. /admin#compute — Deep-Link aus Kurs/Task-UI)
   (function () {

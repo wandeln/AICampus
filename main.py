@@ -57,7 +57,7 @@ from database.models import (
     Submission,
 )
 from services.auth_service import get_current_user, hash_password, require_course_access
-from services import media_service, import_service, preview_proxy
+from services import analytics, media_service, import_service, preview_proxy
 from services.mc_service import (
     McValidationError,
     parse_mc_data,
@@ -74,7 +74,7 @@ from services.slides_service import (
     slide_count,
 )
 
-from api import admin, auth, forum, importer, image_specs, media as media_api, materials as materials_api, notifications as notifications_api, push as push_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
+from api import admin, analytics as analytics_api, auth, forum, importer, image_specs, media as media_api, materials as materials_api, notifications as notifications_api, push as push_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
 
 
 def _calculate_percentile(my_score: float, other_scores: list[float]) -> int:
@@ -114,6 +114,7 @@ async def lifespan(app: FastAPI):
     migrate_script_sections()
     migrate_forum_channels()
     import_service.mark_interrupted_on_startup()  # aktive Import-Jobs → 'interrupted'
+    analytics.prune_old()  # Page-Views außerhalb des Retention-Fensters löschen
 
     # Admin-User anlegen, wenn DB leer
     with Session(engine) as session:
@@ -341,6 +342,23 @@ async def _cors_for_static_fonts(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def _page_view_tracking(request: Request, call_next):
+    """Nutzungs-Tracking (in-house): wer hat wann welche Seite geöffnet.
+
+    Füllt die page_views-Tabelle für HTML-Seiten eingeloggter User
+    (Filter/Klassifikation: services/analytics.py). MUSS vor dem
+    PreviewSubdomainMiddleware registriert werden, damit das Preview-Proxy
+    äußerste Schicht bleibt (s. services/preview_proxy.py).
+    """
+    response = await call_next(request)
+    try:
+        analytics.maybe_track_page_view(request, response)
+    except Exception:
+        logger.exception("Analytics-Tracking fehlgeschlagen")
+    return response
+
+
 # Preview-Subdomains (rohes ASGI-Middleware für HTTP + WebSocket) —
 # MUSS nach den @app.middleware("http")-Aufrufen hinzukommen, damit es
 # äußerste (zuerst laufende) Schicht ist (s. services/preview_proxy.py).
@@ -351,6 +369,7 @@ app.add_middleware(preview_proxy.PreviewSubdomainMiddleware)
 app.include_router(auth.router)
 app.include_router(user_settings.router)
 app.include_router(admin.router)
+app.include_router(analytics_api.router)
 app.include_router(image_specs.router)
 app.include_router(tutor.router)
 app.include_router(course_members.router)
