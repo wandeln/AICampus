@@ -681,6 +681,25 @@ Wandle den kompletten Inhalt der Seite in Markdown um:
 - Unleserliche/unsichere Stellen (Handschrift!): bestmöglich transkribieren,
   unsichere Fragmente mit ⟨…⟩ markieren.
 - Ist die Seite leer: "markdown": "".
+- Seiten-Struktur mit unserer Markdown-Syntax abbilden, wenn der Inhalt
+  wirklich PARALLEL/nebeneinander angeordnet ist (z.B. Folie: Text links,
+  Abbildung/Listen rechts; Gegenüberstellungen):
+  * Spalten (2–4 Spalten, Marker JEWEILS auf eigener Zeile, Zahl nach ":" =
+    Breitenanteil, z.B. @startcolumn:2 für 2:1):
+    @startcolumn:2
+    ...Inhalt der 1. Spalte...
+    @nextcolumn:1
+    ...Inhalt der 2. Spalte...
+    @endcolumn
+    (genau EIN @endcolumn ganz am ENDE — die Spalten werden NICHT einzeln
+    geschlossen). NUR für parallel unabhängigen Inhalt — durchlaufender
+    Zweispalten-Fließtext bleibt eine normale Textfolge in Lesereihenfolge
+    (KEINE Spalten).
+  * Subfiguren: mehrere zusammengehörige Abbildungen nebeneinander (z.B.
+    a)/b)-Teile einer Figur) in EINE Abbildung mit gemeinsamer Caption fassen:
+    ![Gemeinsame Caption]([[IMG:1]] [[IMG:2]]) — NUR die Tokens (sie werden
+    serverseitig zu den Bildern aufgelöst), NICHT selbst ![…](…) schreiben;
+    für gescannte Figuren entsprechend [[FIG:n]]-Tokens.
 
 AUFGABE 2 — SEITENTYP (layout):
 Wirkt die Seite wie eine FOLIE (kürzer Titel + Stichpunkte, kein Fließtext) →

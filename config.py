@@ -151,7 +151,6 @@ IMPORT_PNG_MAX_DIM = int(os.getenv("IMPORT_PNG_MAX_DIM", "4096"))          # Dim
 IMPORT_EMBED_MIN_PX = int(os.getenv("IMPORT_EMBED_MIN_PX", "150"))         # PDF-eingebettetes Bild: max. Kante < → Rauschen (M2)
 IMPORT_MEDIA_TRIAGE_MAX_IMAGES = int(os.getenv("IMPORT_MEDIA_TRIAGE_MAX_IMAGES", "300"))  # M3b: max. LLM-Triage-Calls pro Import (Rest bleibt „unbekannt“)
 IMPORT_SCAN_PNG_DPI = int(os.getenv("IMPORT_SCAN_PNG_DPI", "150"))             # M3: Seiten-PNG-DPI (Vision-Input)
-IMPORT_TRANSCRIBE_AUTO_MAX_PAGES = int(os.getenv("IMPORT_TRANSCRIBE_AUTO_MAX_PAGES", "50"))  # M3: Checkbox Default-an, wenn PDF ≤ N Seiten
 IMPORT_PAGE_CONCURRENCY = int(os.getenv("IMPORT_PAGE_CONCURRENCY", "2"))       # M3: parallele Seiten-Transkriptionen
 IMPORT_SLIDE_DECK_MAX_SLIDES_1TO1 = int(os.getenv("IMPORT_SLIDE_DECK_MAX_SLIDES_1TO1", "150"))  # Sicherheits-Cap Quell-Folien (1:1-Modus)
 # Feature-Timeouts in Sekunden (lokale Modelle können langsam sein)

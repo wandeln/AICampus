@@ -64,7 +64,6 @@ from config import (
     IMPORT_EMBED_MIN_PX,
     IMPORT_MEDIA_TRIAGE_MAX_IMAGES,
     IMPORT_SCAN_PNG_DPI,
-    IMPORT_TRANSCRIBE_AUTO_MAX_PAGES,
     IMPORT_PAGE_CONCURRENCY,
     IMPORT_SLIDE_DECK_MAX_SLIDES_1TO1,
     IMPORT_TIMEOUT_ANALYSIS,
@@ -1498,28 +1497,6 @@ def _reapply_page_manifests_from_states(
     _mutate(import_id, fn)
 
 
-def _ensure_transcribe_option(import_id: int, manifest: list[dict]) -> None:
-    """M3: Transcribe-Report-Flag sicherstellen (merge-safe: nur schreiben,
-    wenn noch nicht gesetzt — die Nutzerauswahl bleibt sonst erhalten)."""
-    total = 0
-    for m in manifest:
-        if m.get("type") == "pdf_doc" and m.get("read_path"):
-            total += int(m.get("pages") or 0)
-    if total <= 0:
-        return
-
-    def fn(imp: CourseImport):
-        r = dict(imp.report or {})
-        if not r.get("transcribe"):
-            r["transcribe"] = {
-                "enabled": total <= IMPORT_TRANSCRIBE_AUTO_MAX_PAGES,
-                "total_pages": total,
-            }
-            imp.report = r
-
-    _mutate(import_id, fn)
-
-
 async def _transcribe_pdf_pages(
     import_id: int, staging: Path, pdf_entries: list[dict], llm_cfg: dict
 ) -> None:
@@ -1532,24 +1509,11 @@ async def _transcribe_pdf_pages(
     Seite neu zusammengeführt. Nach 3 aufeinanderfolgenden Fehlern wird
     abgebrochen — die restlichen Seiten bleiben auf Textschicht-Fallback.
     """
-    with Session(engine) as s:
-        imp = s.get(CourseImport, import_id)
-        trans_opt = dict((imp.report or {}).get("transcribe") or {}) if imp else {}
-
     page_count_by_path = {m["path"]: int(m.get("pages") or 0) for m in pdf_entries}
     img_pages_by_path = {m["path"]: (m.get("pdf_images") or []) for m in pdf_entries}
     total_pages = sum(page_count_by_path.values())
     if total_pages <= 0:
         return
-    # Explizite Auswahl aus dem Report; sonst Default (wie _ensure_transcribe_option)
-    enabled = (
-        bool(trans_opt.get("enabled")) if trans_opt
-        else total_pages <= IMPORT_TRANSCRIBE_AUTO_MAX_PAGES
-    )
-    if not enabled:
-        append_report(import_id, log=[
-            f"PDF-Transkription ist deaktiviert ({total_pages} Seiten) — Textschicht-Fallback."
-        ])
 
     units = [
         {"path": path, "page": pno}
@@ -1620,8 +1584,6 @@ async def _transcribe_pdf_pages(
                 staging / "sidecars" / f"{path}.pages" / f"page-{pno:02d}.png",
             )
             return
-        if not enabled:
-            return  # Transkription aus — hier ist nichts zu tun
         if not await gate(import_id, "filemap"):
             return
         try:
@@ -2540,7 +2502,6 @@ async def run_filemap_job(course_id: int, import_id: int) -> None:
         llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_ANALYSIS)
         pdf_entries = [m for m in manifest if m.get("type") == "pdf_doc" and m.get("read_path")]
         if pdf_entries:
-            _ensure_transcribe_option(import_id, manifest)
             await _transcribe_pdf_pages(import_id, staging, pdf_entries, llm_cfg)
             if not await gate(import_id, "filemap"):
                 return

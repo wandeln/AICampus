@@ -11,7 +11,6 @@ Diese Module stellt nur die REST-Endpunkte bereit:
   POST   /api/courses/{course_id}/import                     (Zip-Upload, 202; erneut = Merge)
   POST   /api/courses/{course_id}/import/files                (Einzeldatei-Upload, 202; erneut = Merge)
   GET    /api/courses/{course_id}/import                      (State/Polling)
-  POST   /api/courses/{course_id}/import/transcribe           (PDF-Transkription an/aus, M3)
   POST   /api/courses/{course_id}/import/media                (auswählen/skip)
   POST   /api/courses/{course_id}/import/media/triage         (M3b: Titel/Beschreibung/Empfehlung editieren)
   POST   /api/courses/{course_id}/import/media/triage/reset   (M3b: Triage zurücksetzen + neu ausführen)
@@ -76,10 +75,6 @@ class MediaTriageBody(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     recommendation: Optional[str] = None  # import|applet|ignore
-
-
-class TranscribeBody(BaseModel):
-    enabled: bool
 
 
 class ReferencesStartBody(BaseModel):
@@ -390,50 +385,6 @@ async def get_import(
             session.commit()
             session.refresh(imp)
     return {"import": import_service.serialize_import(imp) if imp else None}
-
-
-@router.post("/courses/{course_id}/import/transcribe", status_code=202)
-async def set_transcribe(
-    body: TranscribeBody,
-    session: Session = Depends(get_session),
-    auth: tuple = Depends(require_prof_or_admin()),
-):
-    """M3: PDF-Seiten-Transkription an/aus (optional startet die idempotente
-    filemap-Stage neu, um vorhandene PDFs zu transkribieren)."""
-    _, course_id, _ = auth
-    imp = _require_import(session, course_id)
-
-    if _status(imp, "filemap") in ("running", "paused"):
-        raise HTTPException(
-            409,
-            "Die Dateianalyse läuft noch — die Einstellung wird beim nächsten Lauf übernommen.")
-
-    total = 0
-    for m in imp.manifest or []:
-        if m.get("type") == "pdf_doc" and m.get("read_path"):
-            total += int(m.get("pages") or 0)
-    if total <= 0:
-        raise HTTPException(400, "Keine PDF-Dokumente in diesem Import.")
-
-    report = dict(imp.report or {})
-    report["transcribe"] = {"enabled": body.enabled, "total_pages": total}
-    imp.report = report
-    imp.updated_at = datetime.now()
-    session.add(imp)
-    session.commit()
-
-    if body.enabled and imp.filemap_status in ("done", "error", "interrupted"):
-        for stage in import_service.IMPORT_STAGES:
-            if stage != "filemap" and _status(imp, stage) in ("running", "paused"):
-                raise HTTPException(409, f"Stufe „{stage}“ läuft noch — bitte warten oder pausieren.")
-        # Idempoter filemap-Neulauf (resume-safe: fertige Seiten/Digests
-        # werden übersprungen) — transkribiert jetzt die PDF-Seiten.
-        import_service.set_stage_status(imp.id, "filemap", "running")
-        import_service.spawn_job(import_service.run_filemap_job(course_id, imp.id))
-        return {"started": True,
-                "message": f"PDF-Seiten werden transkribiert ({total} S.)."}
-    return {"started": False,
-            "message": "PDF-Transkription " + ("aktiviert." if body.enabled else "deaktiviert.")}
 
 
 # ─── Stufe 2: Medien ──────────────────────────────────────────────
