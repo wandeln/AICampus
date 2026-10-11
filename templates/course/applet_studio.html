@@ -12,7 +12,9 @@
 
    API:
    POST /api/courses/{id}/media/applet-llm   → LLM (HTML+Titel+Beschreibung, speichert NICHT)
-         Body: {prompt, existing_html?, media_id? ODER image_data_url?}
+         Body: {prompt, existing_html?, current_title?, current_description?,
+                generate_fields? {title, description, html} (Default: alle),
+                media_id? ODER image_data_url?}
    POST /api/courses/{id}/media/applet       → neues Applet-Medium anlegen (Autosave, neu)
    PUT  /api/courses/{id}/media/{mid}/applet → HTML (+Titel/Beschreibung) ersetzen
    GET  /api/courses/{id}/media/{mid}/applet → Quelle laden (Edit-Modus)
@@ -41,6 +43,20 @@
     <div data-llm-box class="bg-purple-50 border-2 border-purple-300 rounded-xl p-6">
       <h2 class="font-semibold text-gray-800 mb-4">🤖 Mit LLM erzeugen</h2>
       <div class="space-y-3">
+        {# Bearbeitbare Felder: das LLM generiert nur die aktivierten,
+           nicht aktivierte bleiben unverändert (analog Skript/Folien/Aufgaben,
+           dort ebenfalls über dem Eingabefeld) #}
+        <div class="flex flex-wrap gap-x-4 gap-y-2">
+          <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer">
+            <input type="checkbox" id="applet-gen-title" checked class="rounded text-purple-600">Titel
+          </label>
+          <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer">
+            <input type="checkbox" id="applet-gen-desc" checked class="rounded text-purple-600">Beschreibung
+          </label>
+          <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer">
+            <input type="checkbox" id="applet-gen-html" checked class="rounded text-purple-600">Code
+          </label>
+        </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">
             {{ "Änderungswunsch" if media else "Was soll das Applet zeigen?" }}
@@ -158,8 +174,11 @@
         </div>
         <p class="text-xs text-gray-400">
           {{ "Der aktuelle HTML-Code wird als Kontext übergeben. " if media }}
-          Das Ergebnis landet in Titel, Beschreibung und HTML-Code — bitte prüfen
-          (wird automatisch gespeichert). Chart.js, Three.js, Plotly &amp; KaTeX (lokal) stehen dem LLM zur
+          Die Checkboxen wählen aus, welche Felder (Titel, Beschreibung, Code) das
+          LLM ändern darf — standardmäßig alle; nicht angehakten Felder bleiben
+          unverändert (das LLM muss auch bei angehakten Feldern nicht zwingend
+          Änderungen liefern). Bitte das Ergebnis prüfen (wird automatisch gespeichert).
+          Chart.js, Three.js, Plotly &amp; KaTeX (lokal) stehen dem LLM zur
           Verfügung. Als Referenz: ein Medium aus der Bibliothek oder ein Foto/Zeichnung —
           auf Wunsch erzeugt das LLM auch eine einfache, nicht-interaktive Skizze (z. B. SVG).
           Tipp: Strg+Enter startet die Generierung.
@@ -241,6 +260,9 @@
   const generateBtn = document.getElementById("applet-generate");
   const statusBox = document.getElementById("applet-llm-status");
   const statusText = document.getElementById("applet-llm-status-text");
+  const genTitleCb = document.getElementById("applet-gen-title");
+  const genDescCb = document.getElementById("applet-gen-desc");
+  const genHtmlCb = document.getElementById("applet-gen-html");
 
   // CodeMirror (htmlmixed) — Editor-Inhalt in den (versteckten) Textarea schreiben
   const codeCM = CodeMirror.fromTextArea(document.getElementById("applet-html"), {
@@ -788,9 +810,24 @@
       showToast("Bitte beschreibe, was das Applet zeigen soll.", "error");
       return;
     }
+    const generateFields = {
+      title: genTitleCb.checked,
+      description: genDescCb.checked,
+      html: genHtmlCb.checked,
+    };
+    if (!generateFields.title && !generateFields.description && !generateFields.html) {
+      showToast("Wähle mindestens ein Feld aus.", "error");
+      return;
+    }
     setBusy(true, "Applet wird generiert — das kann bis zu 2 Minuten dauern …");
     try {
-      const genBody = { prompt: prompt, existing_html: codeCM.getValue() };
+      const genBody = {
+        prompt: prompt,
+        existing_html: codeCM.getValue(),
+        current_title: titleInput.value,
+        current_description: descInput.value,
+        generate_fields: generateFields,
+      };
       if (appletImage) {
         if (appletImage.source === "media") genBody.media_id = appletImage.mediaId;
         else genBody.image_data_url = appletImage.dataUrl;
@@ -804,15 +841,33 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "LLM-Fehler.");
-      codeCM.setValue(data.html);
-      if (data.title) { titleInput.value = data.title; syncAppletTitle(); }
-      if (data.description) descInput.value = data.description;
-      updatePreview();
-      // Titel/Beschreibung wurden programmatisch gesetzt (keine input-Events)
-      // → Auto-Save explizit anstoßen.
-      av.onChange();
+      // Nicht aktivierte Felder kommen gar nicht im Response → bleiben unverändert.
+      // Leere Felder im Response = LLM hat das Feld nicht geändert.
+      const changed = [], unchanged = [];
+      if (generateFields.title) {
+        if (data.title) { titleInput.value = data.title; syncAppletTitle(); changed.push("Titel"); }
+        else unchanged.push("Titel");
+      }
+      if (generateFields.description) {
+        if (data.description) { descInput.value = data.description; changed.push("Beschreibung"); }
+        else unchanged.push("Beschreibung");
+      }
+      if (generateFields.html) {
+        if (data.html) {
+          codeCM.setValue(data.html);
+          updatePreview();
+          changed.push("Code");
+        } else unchanged.push("Code");
+      }
+      if (changed.length) {
+        // Felder wurden programmatisch gesetzt (keine input-Events)
+        // → Auto-Save explizit anstoßen.
+        av.onChange();
+      }
       const editsMsg = data.edits_applied > 0 ? ` (${data.edits_applied} stellenweise Edits angewendet)` : "";
-      showToast("Applet generiert" + editsMsg + " — bitte prüfen (wird automatisch gespeichert).", "success");
+      let msg = "Applet generiert" + editsMsg;
+      if (mediaId !== null && unchanged.length) msg += ` — ${unchanged.join(" & ")} unverändert gelassen`;
+      showToast(msg + " — bitte prüfen (wird automatisch gespeichert).", "success");
     } catch (err) {
       showToast(err.message, "error");
     } finally {

@@ -807,7 +807,10 @@ class LLMService:
     async def generate_applet(
         self,
         prompt: str,
+        generate_fields: Optional[list[str]] = None,
         existing_html: str = "",
+        current_title: str = "",
+        current_description: str = "",
         image_data_url: Optional[str] = None,
         console_errors: Optional[list[str]] = None,
         config: Optional[dict] = None,
@@ -815,21 +818,36 @@ class LLMService:
         """Generiert/überarbeitet ein HTML-Applet via LLM.
 
         prompt: Was das Applet zeigen/ermöglichen soll (bzw. Änderungswunsch
-        bei existing_html). existing_html: aktueller HTML-Code (Refinement).
+        bei existing_html).
+        generate_fields: Untermenge von ["title", "description", "html"],
+        die das LLM in seiner JSON-Antwort liefern darf (Default: alle) —
+        nicht angeforderte Felder bleiben unverändert. Das LLM MUSS sie aber
+        nicht alle ändern, wenn die Anweisung sie nicht betrifft (Schlüssel
+        weglassen = unverändert).
+        existing_html: aktueller HTML-Code (Refinement).
+        current_title/current_description: vorhandene Metadaten (Kontext für
+        das LLM, z. B. für „nur Titel ändern“).
         image_data_url: optionales Referenzbild (Data-URL, z. B. Medium aus
         der Bibliothek oder hochgeladen/gezeichnet) — wird multimodal
         angehängt; das LLM nutzt es als Basis (Umwandlung/Skizze).
         console_errors: optionale Web-Konsole-Fehler aus der Applet-Preview
         (Fehlermeldung + Stack) — dienen dem LLM als Diagnose-Hinweis.
-        Das LLM liefert JSON: {"html", "title", "description"} — wird hier
+        Das LLM liefert JSON mit einer Untermenge der angeforderten Schlüssel
+        ({"html" ODER "html_edits", "title", "description"}) — wird hier
         NICHT gespeichert (Preview-first im Applet-Studio).
 
         Applets enthalten keine Studentendaten — nutzt den Public Endpoint,
         falls konfiguriert.
         """
+        generate_list = ", ".join(
+            f'"{f}"' for f in (generate_fields or ["title", "description", "html"])
+        )
         tpl = Template(APPLET_PROMPT_TEMPLATE).render(
             prompt=prompt,
+            generate_list=generate_list,
             existing_html=existing_html,
+            current_title=current_title,
+            current_description=current_description,
             has_image=bool(image_data_url),
             console_errors=console_errors or [],
         )

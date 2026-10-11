@@ -243,6 +243,11 @@ async def generate_applet_llm(
     """LLM erzeugt/ändert Applet-HTML + Titel + Beschreibung (speichert NICHT).
 
     Body: {"prompt": str, "existing_html": str (optional, für Refinement),
+           "current_title": str (optional — vorhandener Titel, Kontext für das LLM),
+           "current_description": str (optional — vorhandene Beschreibung, Kontext für das LLM),
+           "generate_fields": {"title": true, "description": true, "html": true}
+           (optional — Default: alle; das LLM darf nur die aktivierten
+           Felder ändern, nicht aktivierte bleiben unverändert),
            "media_id": int (optional — Bild-Medium aus der Bibliothek als Referenz),
            "image_data_url": str (optional — hochgeladenes/gezeichnetes Bild),
            "console_errors": list[str] (optional — Konsole-Fehler aus der Preview)}
@@ -252,7 +257,13 @@ async def generate_applet_llm(
     prompt = (body.get("prompt") or "").strip()
     if not prompt:
         raise HTTPException(400, "Bitte gib an, was das Applet zeigen soll.")
+    gen = body.get("generate_fields", {}) or {}
+    generate_fields = [f for f in ("title", "description", "html") if gen.get(f)]
+    if not generate_fields:
+        raise HTTPException(400, "Keine Felder angefordert.")
     existing_html = (body.get("existing_html") or "").strip()
+    current_title = (body.get("current_title") or "").strip()
+    current_description = (body.get("current_description") or "").strip()
     raw_media_id = body.get("media_id")
     image_data_url = (body.get("image_data_url") or "").strip()
 
@@ -297,7 +308,10 @@ async def generate_applet_llm(
 
     result = await llm_service.generate_applet(
         prompt=prompt,
+        generate_fields=generate_fields,
         existing_html=existing_html,
+        current_title=current_title,
+        current_description=current_description,
         image_data_url=image_url,
         console_errors=console_errors,
         config=llm_cfg,
@@ -306,27 +320,30 @@ async def generate_applet_llm(
         raise HTTPException(502, f"LLM-Fehler: {result.get('error', 'Unbekannter Fehler')}")
 
     data = result.get("data", {})
-    html = (data.get("html") or "").strip()
-    html_edits = data.get("html_edits")
-    edits_applied = 0
-    if not html and html_edits:
-        if not existing_html:
-            raise HTTPException(400, "LLM lieferte stellenweise Edits („html_edits“), aber es existiert noch kein Applet zum Editieren. Bitte erneut versuchen.")
-        html = _apply_html_edits(existing_html, html_edits)
-        edits_applied = len(html_edits)
-    if not html:
-        raise HTTPException(502, "Das LLM hat weder „html“ noch „html_edits“ geliefert.")
-    try:
-        media_service.validate_applet_html(html)
-    except HTTPException as e:
-        raise HTTPException(502, f"Das LLM hat kein gültiges Applet-HTML geliefert: {e.detail}")
-
-    return {
-        "html": html,
-        "title": (data.get("title") or "").strip(),
-        "description": (data.get("description") or "").strip(),
-        "edits_applied": edits_applied,
-    }
+    response: dict = {"edits_applied": 0}
+    if "title" in generate_fields:
+        response["title"] = (data.get("title") or "").strip()
+    if "description" in generate_fields:
+        response["description"] = (data.get("description") or "").strip()
+    if "html" in generate_fields:
+        html = (data.get("html") or "").strip()
+        html_edits = data.get("html_edits")
+        if not html and html_edits:
+            if not existing_html:
+                raise HTTPException(400, "LLM lieferte stellenweise Edits („html_edits“), aber es existiert noch kein Applet zum Editieren. Bitte erneut versuchen.")
+            html = _apply_html_edits(existing_html, html_edits)
+            response["edits_applied"] = len(html_edits)
+        if html:
+            try:
+                media_service.validate_applet_html(html)
+            except HTTPException as e:
+                raise HTTPException(502, f"Das LLM hat kein gültiges Applet-HTML geliefert: {e.detail}")
+            response["html"] = html
+        elif not existing_html:
+            # Neues Applet: ohne HTML wäre nichts da — Code ist Pflicht.
+            raise HTTPException(502, "Das LLM hat weder „html“ noch „html_edits“ geliefert.")
+        # sonst: LLM hat den Code-Schlüssel weggelassen → Code bleibt unverändert
+    return response
 
 
 @router.post("/courses/{course_id}/media/applet")

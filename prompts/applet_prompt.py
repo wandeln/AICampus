@@ -5,10 +5,11 @@ oder einfacher, nicht-interaktiver Skizzen/Figuren (z. B. statisches SVG).
 
 Das LLM erstellt eine self-contained HTML-Datei (Vanilla JS + Canvas/SVG,
 optional die lokal gespiegelten Libs Chart.js / Plotly / Three.js / KaTeX)
-und antwortet als
-JSON: {"html" ODER "html_edits", "title": "...", "description": "..."}.
-(„html_edits“ = stellenweise replace_span-Edits am bestehenden HTML,
-serverseitig angewendet — analog zu „content_edits“ im Skript.)
+und antwortet als JSON-Objekt mit einer Untermenge der angeforderten
+Schlüssel („html“ ODER „html_edits“, „title“, „description“) — weggelassene
+Schlüssel = das Feld bleibt unverändert. („html_edits“ = stellenweise
+replace_span-Edits am bestehenden HTML, serverseitig angewendet — analog
+zu „content_edits“ im Skript.)
 
 Optional wird ein Referenzbild (Medium aus der Kurs-Medienbibliothek oder
 hochgeladen/gezeichnet) als multimodale Anhängung übergeben — das LLM nutzt
@@ -27,6 +28,13 @@ nicht-interaktive Skizze/FIGUR (siehe „Art des Applets“).
 
 ANFRAGE:
 {{ prompt }}
+
+ZULÄSSIGE FELDER — gib als Antwort ein gültiges JSON-Objekt. Erlaubt sind NUR diese Schlüssel — jeder andere Schlüssel wird vom System IGNORIERT:
+{{ generate_list }}
+Jeder Schlüssel der Liste ist OPTIONAL: Wenn die Anweisung ein Feld inhaltlich NICHT betrifft und das Feld bereits einen Inhalt hat, lass den Schlüssel einfach WEG — der vorhandene Wert bleibt dann unverändert. Wenn das Feld geändert werden soll, liefere den aktualisierten Wert. Für Felder OHNE vorhandenen Inhalt ist der Schlüssel PFLICHT.
+{% if existing_html and '"html"' in generate_list %}
+Außerdem: Bei rein lokalen Änderungen am vorhandenen Code darf der Schlüssel "html" durch "html_edits" ersetzt werden (Format siehe unten).
+{% endif %}
 {% if existing_html %}
 
 BESTEHENDES APPLET — überarbeite es gemäß der Anfrage (funktionierende Teile
@@ -52,6 +60,16 @@ Beim Laden/Laufen des Applets wurden in der Web-Konsole folgende Fehler gemeldet
 {{ loop.index }}. {{ err }}
 {% endfor %}
 Nutze diese Fehler als Diagnose-Hinweis: Falls die Anfrage sie betrifft (oder das Applet offensichtlich fehlerhaft ist), analysiere die Ursache und behebe den Code. Stelle sicher, dass die neuen/geänderten Code-Pfade diese Fehlerursachen nicht wieder aufweisen — lasse funktionierende, nicht betroffene Bereiche unverändert.
+{% endif %}
+{% if current_title %}
+
+BESTEHENDER TITEL:
+{{ current_title }}
+{% endif %}
+{% if current_description %}
+
+BESTEHENDE BESCHREIBUNG:
+{{ current_description }}
 {% endif %}
 Art des Applets (je nach Anfrage):
 - Standard: INTERAKTIVES Applet mit Steuerungen (Slider, Buttons, Steps, Animation, Hover-Tooltips …).
@@ -91,11 +109,11 @@ Design:
 - Bei Plotly: Plotly.newPlot(el, traces, layout, { responsive: true }) und ein Container mit fester Pixelhöhe (300–450 px).
 
 Antwort:
-Antworte NUR mit einem gültigen JSON-Objekt (keine Code-Blöcke, kein zusätzlicher Text) mit diesen Schlüsseln:
-- "title": Kurzer, aussagekräftiger Titel für das Applet (max. 8 Wörter).
-- "description": Kurze Beschreibung (2-4 Sätze), was das Applet zeigt/ermöglicht und für welchen Lehrinhalt es passt.
-- "html" ODER "html_edits" (genau eines davon):
+Antworte NUR mit einem gültigen JSON-Objekt (keine Code-Blöcke, kein zusätzlicher Text). Erlaubt sind NUR die in „ZULÄSSIGE FELDER“ aufgeführten Schlüssel — jeder andere Schlüssel wird vom System IGNORIERT:
+{% if '"title"' in generate_list %}- "title": Kurzer, aussagekräftiger Titel für das Applet (max. 8 Wörter).
+{% endif %}{% if '"description"' in generate_list %}- "description": Kurze Beschreibung (2-4 Sätze), was das Applet zeigt/ermöglicht und für welchen Lehrinhalt es passt.
+{% endif %}{% if '"html"' in generate_list %}- "html" ODER "html_edits" (genau eines davon):
   - "html": Die komplette HTML-Datei des Applets als String (inkl. <!DOCTYPE html>). Verwende diesen Schlüssel für NEUE Applets und bei größeren Überarbeitungen.
   - "html_edits": Nur bei BESTEHENDEN Applets und KLEINEN, lokalen Änderungen — eine Liste von Edit-Objekten der Form {"op": "replace_span", "old": "<exakter Text, der EXAKT EINMAL im bestehenden HTML vorkommt>", "new": "<Ersetzung>"}. Nimm für "old" möglichst kurze, eindeutige Snippets (einzelne Zeile oder ein kurzes Fragment, niemals das ganze Dokument).
 Achte in "html" bzw. den Edit-Strings auf korrektes JSON-Escaping (insbesondere Backslashes und Anführungszeichen).
-"""
+{% endif %}"""
