@@ -132,7 +132,7 @@ IMPORT_DIR = BASE_DIR / "data" / "imports"
 IMPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 IMPORT_MAX_ZIP_BYTES = int(os.getenv("IMPORT_MAX_ZIP_BYTES", str(500 * 1024 * 1024)))            # 500 MB
-IMPORT_MAX_SINGLE_FILE_BYTES = int(os.getenv("IMPORT_MAX_SINGLE_FILE_BYTES", str(100 * 1024 * 1024)))  # 100 MB
+IMPORT_MAX_SINGLE_FILE_BYTES = int(os.getenv("IMPORT_MAX_SINGLE_FILE_BYTES", str(200 * 1024 * 1024)))  # 200 MB
 IMPORT_MAX_ENTRIES = int(os.getenv("IMPORT_MAX_ENTRIES", "10000"))
 IMPORT_MAX_EXTRACTED_BYTES = int(os.getenv("IMPORT_MAX_EXTRACTED_BYTES", str(1024 * 1024 * 1024)))  # 1 GB
 IMPORT_MIN_FREE_DISK_FACTOR = float(os.getenv("IMPORT_MIN_FREE_DISK_FACTOR", "3.0"))  # freier Platz ≥ Faktor × Zip-Größe
@@ -149,6 +149,10 @@ IMPORT_GATHER_MAX_ITERATIONS = int(os.getenv("IMPORT_GATHER_MAX_ITERATIONS", "8"
 IMPORT_PNG_DPI = int(os.getenv("IMPORT_PNG_DPI", "300"))                   # PDF-Figur → PNG
 IMPORT_PNG_MAX_DIM = int(os.getenv("IMPORT_PNG_MAX_DIM", "4096"))          # Dimensions-Cap (PNG-Dateigröße)
 IMPORT_EMBED_MIN_PX = int(os.getenv("IMPORT_EMBED_MIN_PX", "150"))         # PDF-eingebettetes Bild: max. Kante < → Rauschen (M2)
+IMPORT_MEDIA_TRIAGE_MAX_IMAGES = int(os.getenv("IMPORT_MEDIA_TRIAGE_MAX_IMAGES", "300"))  # M3b: max. LLM-Triage-Calls pro Import (Rest bleibt „unbekannt“)
+IMPORT_SCAN_PNG_DPI = int(os.getenv("IMPORT_SCAN_PNG_DPI", "150"))             # M3: Seiten-PNG-DPI (Vision-Input)
+IMPORT_TRANSCRIBE_AUTO_MAX_PAGES = int(os.getenv("IMPORT_TRANSCRIBE_AUTO_MAX_PAGES", "50"))  # M3: Checkbox Default-an, wenn PDF ≤ N Seiten
+IMPORT_PAGE_CONCURRENCY = int(os.getenv("IMPORT_PAGE_CONCURRENCY", "2"))       # M3: parallele Seiten-Transkriptionen
 IMPORT_SLIDE_DECK_MAX_SLIDES_1TO1 = int(os.getenv("IMPORT_SLIDE_DECK_MAX_SLIDES_1TO1", "150"))  # Sicherheits-Cap Quell-Folien (1:1-Modus)
 # Feature-Timeouts in Sekunden (lokale Modelle können langsam sein)
 IMPORT_TIMEOUT_ANALYSIS = int(os.getenv("IMPORT_TIMEOUT_ANALYSIS", "180"))

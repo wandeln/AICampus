@@ -62,6 +62,10 @@ from config import (
     IMPORT_PNG_DPI,
     IMPORT_PNG_MAX_DIM,
     IMPORT_EMBED_MIN_PX,
+    IMPORT_MEDIA_TRIAGE_MAX_IMAGES,
+    IMPORT_SCAN_PNG_DPI,
+    IMPORT_TRANSCRIBE_AUTO_MAX_PAGES,
+    IMPORT_PAGE_CONCURRENCY,
     IMPORT_SLIDE_DECK_MAX_SLIDES_1TO1,
     IMPORT_TIMEOUT_ANALYSIS,
     IMPORT_TIMEOUT_MEDIA,
@@ -141,6 +145,25 @@ IMAGE_MIME = {
     ".webp": "image/webp",
     ".gif": "image/gif",
 }
+
+# M3b: Triage-Empfehlungen — Legacy-Werte (M3: keep/latex/noise, Doc-Entwurf:
+# text) + neue Werte werden überall auf import|applet|ignore|unbekannt
+# normalisiert.
+_REC_NORM = {
+    "keep": "import", "import": "import",
+    "applet": "applet",
+    "latex": "ignore", "noise": "ignore", "text": "ignore", "ignore": "ignore",
+}
+
+
+def normalize_triage(v: Any) -> str:
+    """M3b: Triage-Wert → import|applet|ignore (sonst „unbekannt“)."""
+    key = str(v or "").strip().lower()
+    if key in _REC_NORM:
+        return _REC_NORM[key]
+    return "unbekannt"
+
+
 TEXT_TYPES = ("tex", "markdown", "docx", "pptx", "pdf_doc")
 MAX_MEDIA_PAGES = 5  # figure_pdf: max. Seiten, die als eigene Medien importiert werden
 
@@ -326,6 +349,49 @@ def set_filemap_chunk(import_id: int, path: str, idx: int, chunk: dict) -> None:
         chunks[idx] = chunk
         entry["chunks"] = chunks
         fm[path] = entry
+        imp.file_map = fm
+
+    _mutate(import_id, fn)
+
+
+def set_filemap_page(import_id: int, path: str, idx: int, page: dict) -> None:
+    """M3: Status einer transkribierten PDF-Seite speichern (pages-Liste im
+    file_map-Eintrag, notfalls mit Platzhaltern bis idx erweitern)."""
+    def fn(imp: CourseImport):
+        fm = dict(imp.file_map or {})
+        entry = dict(fm.get(path) or {"status": "running"})
+        pages = [dict(p) for p in (entry.get("pages") or [])]
+        while len(pages) <= idx:
+            pages.append({})
+        pages[idx] = page
+        entry["pages"] = pages
+        fm[path] = entry
+        imp.file_map = fm
+
+    _mutate(import_id, fn)
+
+
+def set_filemap_image(import_id: int, doc: str, media_path: str, patch: dict) -> None:
+    """M3b: Triage-State einer eingebetteten Grafik speichern.
+
+    States liegen pro Dokument in file_map[doc]["images"] (Eintrag pro
+    Medien-Pfad) — merge-sicher (Patch über bestehendem Eintrag, notfalls neu
+    angelegt). doc = Eltern-Dokument (Office-Datei oder PDF, = Vor dem
+    letzten „.media/“ im Medien-Pfad; für lose Medien der Pfad selbst).
+    """
+    def fn(imp: CourseImport):
+        fm = dict(imp.file_map or {})
+        entry = dict(fm.get(doc) or {"status": "running"})
+        images = [dict(i) for i in (entry.get("images") or [])]
+        for i, im in enumerate(images):
+            if im.get("path") == media_path:
+                im.update(patch)
+                images[i] = im
+                break
+        else:
+            images.append({"path": media_path, **patch})
+        entry["images"] = images
+        fm[doc] = entry
         imp.file_map = fm
 
     _mutate(import_id, fn)
@@ -621,7 +687,7 @@ def store_loose_files(
                         raise ValueError(
                             f"Datei zu groß (max. {IMPORT_MAX_SINGLE_FILE_BYTES // (1024 * 1024)} MB): {name}"
                         )
-                    total += size
+                    total += len(block)  # Block-Größe (nicht kumulative size!)
                     if total > IMPORT_MAX_ZIP_BYTES:
                         raise ValueError(
                             f"Upload insgesamt zu groß (max. {IMPORT_MAX_ZIP_BYTES // (1024 * 1024)} MB)."
@@ -897,6 +963,8 @@ def build_manifest(staging: Path, entries: list[dict]) -> tuple[list[dict], list
                     "path": mp,
                     "size": int((extracted / mp).stat().st_size) if (extracted / mp).is_file() else 0,
                     "type": "image" if mp_ext in IMAGE_EXTS else ("svg" if mp_ext == ".svg" else ("eps" if mp_ext == ".eps" else "other")),
+                    # wird von der M3b-Triage (import/applet/ignore) aktualisiert
+                    "triage": "unbekannt",
                 })
         else:
             m["type"] = "other"
@@ -939,15 +1007,54 @@ def _normalize_pdf_image(data: bytes, ext: str, dest: Path) -> Optional[Path]:
     import io
     from PIL import Image
 
-    ext = ext.lower()
+    # Extension ohne Punkt normalisieren (Caller übergeben "png"/"jpeg").
+    # Ohne diese Normalisierung würde der Fast-Path nie greifen und jedes
+    # Bild — auch RGBA-PNGs mit SMask-Alpha — via convert("RGB") den
+    # Alpha-Kanal verlieren (→ schwarzer Hintergrund).
+    ext = ext.lower().lstrip(".")
     try:
         im = Image.open(io.BytesIO(data))
-        if ext in (".png", ".jpg", ".jpeg", ".webp", ".gif") and im.mode in ("RGB", "RGBA", "L", "LA", "P"):
+        if ext in ("png", "jpg", "jpeg", "webp", "gif") and im.mode in ("RGB", "RGBA", "L", "LA", "P"):
             dest.write_bytes(data)
             return dest
         dest = dest.with_suffix(".png")
         im.convert("RGB").save(dest, format="PNG")
         return dest
+    except Exception:
+        return None
+
+
+def _merge_pdf_smask(doc, xref: int, base: bytes, ext: str) -> Optional[bytes]:
+    """SMask (getrennte Alpha-Kanal-Referenz im PDF) in das Basis-Image
+    mergen und als RGBA-PNG zurückgeben.
+
+    `extract_image` liefert bei SMask-Bildern nur den Basis-RGB-Stream —
+    transparente Bereiche zeigen dann die Roh-RGB-Werte (meist schwarz).
+    Die SMask-Semantik (0 = transparent, 255 = opak) entspricht direkt
+    PIL-Alpha, daher ohne Invertierung via putalpha überlagerbar.
+
+    Returns: PNG-Bytes oder None (kein SMask / Fehler → Caller behält Raw).
+    """
+    try:
+        key = doc.xref_get_key(xref, "SMask")
+        if key[0] != "xref":
+            return None
+        smask_xref = int(key[1].split()[0])
+        sm = doc.extract_image(smask_xref)
+        if not sm.get("image"):
+            return None
+        import io as _io
+        from PIL import Image
+
+        bim = Image.open(_io.BytesIO(base)).convert("RGB")
+        sim = Image.open(_io.BytesIO(sm["image"]))
+        sim = sim.convert("L")
+        if sim.size != bim.size:
+            sim = sim.resize(bim.size)
+        bim.putalpha(sim)
+        buf = _io.BytesIO()
+        bim.save(buf, format="PNG")
+        return buf.getvalue()
     except Exception:
         return None
 
@@ -987,15 +1094,21 @@ def _extract_pdf_media(
                 data = info.get("image") or b""
                 if not data:
                     continue
+                # Transparente PDF-Bilder: SMask-Alpha-Kanal mergen
+                # (extract_image liefert sonst nur den RGB-Basis-Stream).
+                ext = (info.get("ext") or "").lower()
+                merged = _merge_pdf_smask(doc, im["xref"], data, ext)
+                if merged is not None:
+                    data, ext = merged, "png"
                 h = hashlib.sha256(data).hexdigest()
                 fname = seen_hash.get(h)
                 if fname is None:
                     media_dir.mkdir(parents=True, exist_ok=True)
-                    cand = media_dir / f"img-{pg['no']}-{im['xref']}.{info.get('ext') or 'bin'}"
+                    cand = media_dir / f"img-{pg['no']}-{im['xref']}.{ext or 'bin'}"
                     if cand.is_file():
                         fname = cand.name
                     else:
-                        saved = _normalize_pdf_image(data, info.get("ext") or "", cand)
+                        saved = _normalize_pdf_image(data, ext, cand)
                         if saved is None:
                             continue
                         fname = saved.name
@@ -1029,6 +1142,1012 @@ def _pdf_sidecar_md(analysis: dict, page_markers: dict[int, list[str]]) -> str:
         out.append(f"%% Seite {pg['no']} %%")
         out.append(body)
     return "\n\n".join(out)
+
+
+# ─── M3: Vision-Transkription der PDF-Seiten ─────────────────────────────
+
+def _triage_idx(item) -> int:
+    """idx eines Triage-/Figures-Eintrags als int (0 = ungültig)."""
+    try:
+        return int(item.get("idx") or 0)
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
+def _items_by_idx(items) -> dict[int, dict]:
+    """{idx: Eintrag} aus einer Dict-Liste (ungültige/fehlende idx ignoriert)."""
+    out: dict[int, dict] = {}
+    for it in items or []:
+        if isinstance(it, dict):
+            i = _triage_idx(it)
+            if i > 0 and i not in out:
+                out[i] = it
+    return out
+
+
+def _pdf_media_page_images(img_pages: list[dict], pno: int) -> list[dict]:
+    """M2-Bildliste einer PDF-Seite (aus [{seite, images: [{idx, xref, …}]}])."""
+    for pg in img_pages or []:
+        if pg.get("seite") == pno:
+            return list(pg.get("images") or [])
+    return []
+
+
+def _read_pdf_page_texts(src: Path, page_nos: list[int]) -> dict[int, str]:
+    """Textschicht der angegebenen PDF-Seiten (1-basiert) → {seite: text}."""
+    import fitz  # pymupdf
+
+    out: dict[int, str] = {}
+    doc = fitz.open(str(src))
+    try:
+        for n in page_nos:
+            if 1 <= n <= len(doc):
+                out[n] = doc[n - 1].get_text().strip()
+    finally:
+        doc.close()
+    return out
+
+
+def _render_pdf_page_png(src: Path, pno: int, out_dir: Path) -> Optional[Path]:
+    """Seite als Weißgrund-PNG (M3-Vision-Input); idempotent.
+
+    Ausgabe: out_dir/page-<NN>.png (NN = 2-stellige Seitennummer).
+    Returns: Pfad oder None (Seite existiert nicht).
+    """
+    import fitz  # pymupdf
+
+    out = out_dir / f"page-{pno:02d}.png"
+    if out.is_file():
+        return out
+    doc = fitz.open(str(src))
+    try:
+        if pno < 1 or pno > len(doc):
+            return None
+        page = doc[pno - 1]
+        zoom = IMPORT_SCAN_PNG_DPI / 72.0
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=True)
+        if max(pix.width, pix.height) > IMPORT_PNG_MAX_DIM:
+            scale = IMPORT_PNG_MAX_DIM / max(pix.width, pix.height)
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom * scale, zoom * scale), alpha=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(_pixmap_to_white_png(pix))
+        return out
+    finally:
+        doc.close()
+
+
+def _is_suspect(text_layer: str, markdown: str) -> bool:
+    """Sanity-Check (D1): nennenswerte Textschicht wird zu verdächtig wenig
+    Markdown transkribiert → mögliche LLM-Auslassung (in der UI markiert)."""
+    core = len(re.sub(r"\s+", "", text_layer or ""))
+    if core < 50:
+        return False
+    return len(re.sub(r"\s+", "", markdown or "")) < core // 2
+
+
+def _crop_fig_png(page_png: Path, bbox, out: Path) -> None:
+    """Scan-Figur aus dem Seiten-PNG croppen (M3 scan_figure).
+
+    bbox = LLM-Koordinaten [x0, y0, x1, y1] in relativen Einheiten 0-1000
+    (0,0 = oben links; 1000,1000 = unten rechts), mit 5%-Padding und
+    Klemmen an die Seitengröße. Fallback bei fehlender/ungültiger/
+    degenerierter bbox: komplette Seite kopieren (Inhalt bleibt erhalten —
+    der User kann es in der Medien-Stage verwerfen/als Applet neu zeichnen).
+    """
+    from PIL import Image
+
+    im = Image.open(page_png)
+    W, H = im.size
+    box = None
+    try:
+        x0, y0, x1, y1 = (float(v) for v in list(bbox)[:4])
+        if 0 <= x0 < x1 <= 1000 and 0 <= y0 < y1 <= 1000:
+            box = (int(x0 / 1000 * W), int(y0 / 1000 * H),
+                   int(x1 / 1000 * W), int(y1 / 1000 * H))
+    except (TypeError, ValueError):
+        box = None
+    if box:
+        pw = max(1, int((box[2] - box[0]) * 0.05))
+        ph = max(1, int((box[3] - box[1]) * 0.05))
+        box = (max(0, box[0] - pw), max(0, box[1] - ph),
+               min(W, box[2] + pw), min(H, box[3] + ph))
+    if not box or box[2] - box[0] < 20 or box[3] - box[1] < 20:
+        im.save(out, format="PNG")
+        return
+    im.crop(box).save(out, format="PNG")
+
+
+async def _ensure_scan_figures(
+    import_id: int, staging: Path, path: str, pno: int,
+    figures: list[dict], page_png: Optional[Path],
+) -> None:
+    """M3b: Scan-Figuren (zeichnerische Abbildungen) einer Seite als Dateien
+    + Image-States sicherstellen (idempotent — Neu-Transkription UND Resume).
+
+    Ohne gültige LLM-bbox fällt die Datei auf die komplette Seite zurück.
+    Default-Empfehlung „import“: das LLM hat die Figur explizit per [[FIG:n]]
+    als Abbildung markiert — der User kann in der Medien-Stage neu einstufen.
+    """
+    for fig in figures or []:
+        if not isinstance(fig, dict):
+            continue
+        fp = fig.get("path")
+        if not fp:
+            continue
+        out = staging / fp
+        if not out.is_file() and page_png is not None and page_png.is_file():
+            try:
+                await asyncio.to_thread(_crop_fig_png, page_png, fig.get("bbox"), out)
+            except Exception:
+                pass
+        cur = next(
+            (i for i in (get_filemap_entry(import_id, path) or {}).get("images") or []
+             if i.get("path") == fp), {})
+        if normalize_triage(cur.get("recommendation")) in ("import", "applet", "ignore"):
+            continue
+        caption = str(fig.get("caption") or "").strip()
+        patch = {
+            "status": "done",
+            "type": "scan_figure",
+            "recommendation": "import",
+            "title": caption[:200] or f"Abbildung (Seite {pno})",
+            "caption": caption[:200],
+            "description": caption[:1000],
+            "reason": "Zeichnerische Abbildung im Seitenbild (Transkription) — Default: import.",
+            "refs": [pno],
+        }
+        if out.is_file():
+            try:
+                patch["hash"] = await asyncio.to_thread(_sha256_file, out)
+            except OSError:
+                pass
+        set_filemap_image(import_id, path, fp, patch)
+
+
+_IMG_TOKEN_RE = re.compile(r"\[\[IMG:(\d+)\]\]")
+_FIG_TOKEN_RE = re.compile(r"\[\[FIG:(\d+)\]\]")
+
+
+def _resolve_page_tokens(
+    markdown: str,
+    pdf_path: str,
+    pno: int,
+    figures: list,
+    triage_by_idx: dict[int, dict],
+    page_imgs: list[dict],
+    out_warnings: list[str],
+) -> tuple[str, list[dict]]:
+    """LLM-Tokens einer Seite auflösen (serverseitig, deterministische Pfade).
+
+    [[IMG:idx]] → Markdown-Bildmarker mit M2-Pfad (nur bei Triage „keep“,
+    sonst entfernen + Warnung). [[FIG:n]] → Marker auf
+    sidecars/<pdf>.pages/fig-<NN>-<NN>.png + scan_figure-Manifest-Element.
+    Figures ohne Token: Marker ans Seitenende + Warnung.
+    Returns: (aufgelöstes Markdown, scan_figure-Elemente).
+    """
+    pages_dir = f"sidecars/{pdf_path}.pages"
+    fig_by_idx = _items_by_idx(figures)
+    used_figs = set(int(m.group(1)) for m in _FIG_TOKEN_RE.finditer(markdown))
+    img_by_idx = {
+        im["idx"]: im for im in (page_imgs or []) if isinstance(im.get("idx"), int)
+    }
+
+    def sub_img(m):
+        idx = int(m.group(1))
+        tri = triage_by_idx.get(idx)
+        im = img_by_idx.get(idx)
+        rec = normalize_triage(tri.get("recommendation") or tri.get("action")) if tri else ""
+        if rec in ("import", "applet") and im:
+            caption = str(tri.get("caption") or tri.get("title") or "").strip() or "Abbildung"
+            return f"![{caption}]({im['pfad']})"
+        why = ("ohne Triage-Eintrag" if tri is None
+               else f"mit Empfehlung „{tri.get('recommendation') or tri.get('action')}“")
+        out_warnings.append(f"Seite {pno} ({pdf_path}): [[IMG:{idx}]] {why} — Token entfernt.")
+        return ""
+
+    def sub_fig(m):
+        n = int(m.group(1))
+        if n not in fig_by_idx:
+            out_warnings.append(f"Seite {pno} ({pdf_path}): [[FIG:{n}]] ohne figures-Eintrag — Token entfernt.")
+            return ""
+        caption = str(fig_by_idx[n].get("caption") or "").strip() or f"Abbildung {n}"
+        return f"![{caption}]({pages_dir}/fig-{pno:02d}-{n:02d}.png)"
+
+    out = _IMG_TOKEN_RE.sub(sub_img, markdown)
+    out = _FIG_TOKEN_RE.sub(sub_fig, out)
+
+    scan_figures: list[dict] = []
+    for n in sorted(fig_by_idx):
+        fig = fig_by_idx[n]
+        caption = str(fig.get("caption") or "").strip() or f"Abbildung {n}"
+        # Jede gescannte Figur bekommt ein Manifest-Element (M4b-Input) —
+        # auch wenn das Token gefehlt hat (Marker liegt dann am Seitenende).
+        scan_figures.append({
+            "path": f"{pages_dir}/fig-{pno:02d}-{n:02d}.png",
+            "size": 0,
+            "type": "scan_figure",
+            "seite": pno,
+            "caption": caption,
+            "position": str(fig.get("position") or ""),
+            "bbox": fig.get("bbox"),
+            "page_png": f"{pages_dir}/page-{pno:02d}.png",
+        })
+        if n not in used_figs:
+            out = out.rstrip() + f"\n\n![{caption}]({pages_dir}/fig-{pno:02d}-{n:02d}.png)"
+            out_warnings.append(f"Seite {pno} ({pdf_path}): Figure {n} ohne Token — Marker ans Seitenende gesetzt.")
+    return out, scan_figures
+
+
+def _rebuild_pdf_sidecar(
+    staging: Path,
+    pdf_path: str,
+    page_states: list[dict],
+    img_pages: list[dict],
+    texts: dict[int, str],
+    page_count: int,
+) -> None:
+    """PDF-Sidecar aus den Seiten-States neu schreiben (M3).
+
+    Done-Seiten: transkribiertes Markdown mit passendem Header
+    („%% Folie N %%“ bei layout=slides, sonst „%% Seite N %%“); übrige
+    Seiten: Textschicht-Fallback mit mechanischen Bild-Markern.
+    """
+    sp = staging / "sidecars" / f"{pdf_path}.md"
+    states_by_no = {
+        st.get("no"): st for st in (page_states or []) if isinstance(st.get("no"), int)
+    }
+    texts = texts or {}
+    out: list[str] = []
+    for n in range(1, page_count + 1):
+        st = states_by_no.get(n)
+        if st and st.get("status") == "done":
+            md = (st.get("markdown") or "").strip()
+            header = "Folie" if (st.get("layout") or "text") == "slides" else "Seite"
+            out.append(f"%% {header} {n} %%" + (f"\n{md}" if md else ""))
+        else:
+            body = texts.get(n, "")
+            imgs = _pdf_media_page_images(img_pages, n)
+            if imgs:
+                markers = "\n".join(f"![Bild]({im['pfad']})" for im in imgs)
+                body = f"{body}\n\n{markers}" if body else markers
+            out.append(f"%% Seite {n} %%" + (f"\n{body}" if body else ""))
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    sp.write_text("\n\n".join(out), encoding="utf-8")
+
+
+def _reapply_page_manifests_from_states(
+    import_id: int, path: str, states: list[dict], img_pages: list[dict]
+) -> None:
+    """Ergebnisse der done-M3-Seiten in das (frisch gebaute) Manifest
+    zurückschreiben: scan_figure-Elemente (dedupliziert nach Pfad) +
+    Medien-Triage-Felder. Notwendig bei JEDEM filemap-Lauf, weil
+    build_manifest() das Manifest neu aufbaut."""
+    # (seite, idx) → M2-Bild (idx ist pro Seite gezählt)
+    by_page_idx: dict[int, dict[int, dict]] = {}
+    for pg in img_pages or []:
+        d = by_page_idx.setdefault(pg.get("seite") or 0, {})
+        for im in pg.get("images") or []:
+            if isinstance(im.get("idx"), int) and im.get("pfad"):
+                d[im["idx"]] = im
+
+    def fn(imp: CourseImport):
+        man = [dict(m) for m in (imp.manifest or [])]
+        existing = {m.get("path") for m in man}
+        # M3b: Image-States (user-edited, file_map[doc]["images"]) haben
+        # Vorrang vor dem rohen LLM-Ergebnis der Seite.
+        images_by_path: dict[str, dict] = {}
+        for entry in (imp.file_map or {}).values():
+            for im in (entry or {}).get("images") or []:
+                if isinstance(im, dict) and im.get("path"):
+                    images_by_path[im["path"]] = im
+        triage_updates: dict[str, dict] = {}
+        for st in states or []:
+            if st.get("status") != "done":
+                continue
+            for fig in st.get("figures") or []:
+                if not isinstance(fig, dict):
+                    continue
+                fp = fig.get("path")
+                if fp and fp not in existing:
+                    man.append(dict(fig))
+                    existing.add(fp)
+            pno = st.get("no")
+            for t in st.get("triage") or []:
+                if not isinstance(t, dict):
+                    continue
+                im = (by_page_idx.get(pno or 0) or {}).get(_triage_idx(t))
+                if not im:
+                    continue
+                st_img = images_by_path.get(im["pfad"])
+                if st_img and normalize_triage(st_img.get("recommendation")) in ("import", "applet", "ignore"):
+                    triage_updates[im["pfad"]] = {
+                        "triage": normalize_triage(st_img.get("recommendation")),
+                        "triage_caption": str(st_img.get("title") or "").strip(),
+                        "triage_alt_text": str(st_img.get("caption") or "").strip(),
+                        "triage_description": str(st_img.get("description") or "").strip(),
+                        "triage_content": str(st_img.get("content") or "").strip(),
+                        "triage_reason": str(st_img.get("reason") or "").strip(),
+                        "hash": str(st_img.get("hash") or ""),
+                    }
+                    continue
+                triage_updates[im["pfad"]] = {
+                    "triage": normalize_triage(t.get("recommendation") or t.get("action")),
+                    "triage_caption": str(t.get("title") or "").strip(),
+                    "triage_alt_text": str(t.get("caption") or "").strip(),
+                    "triage_description": str(t.get("description") or "").strip(),
+                    "triage_content": str(t.get("content") or "").strip(),
+                    "triage_reason": str(t.get("reason") or "").strip(),
+                }
+        for m in man:
+            upd = triage_updates.get(m.get("path") or "")
+            if upd:
+                m.update(upd)
+        # Scan-Figuren: echte Dateigröße synchronisieren (die fig-Dateien
+        # werden erst beim Croppen angelegt; Manifest-Default ist size 0).
+        staging_root = staging_dir(imp.course_id, imp.job_id)
+        for m in man:
+            if m.get("type") == "scan_figure" and m.get("path"):
+                try:
+                    fp_abs = staging_root / m["path"]
+                    if fp_abs.is_file():
+                        m["size"] = fp_abs.stat().st_size
+                except OSError:
+                    pass
+        imp.manifest = man
+
+    _mutate(import_id, fn)
+
+
+def _ensure_transcribe_option(import_id: int, manifest: list[dict]) -> None:
+    """M3: Transcribe-Report-Flag sicherstellen (merge-safe: nur schreiben,
+    wenn noch nicht gesetzt — die Nutzerauswahl bleibt sonst erhalten)."""
+    total = 0
+    for m in manifest:
+        if m.get("type") == "pdf_doc" and m.get("read_path"):
+            total += int(m.get("pages") or 0)
+    if total <= 0:
+        return
+
+    def fn(imp: CourseImport):
+        r = dict(imp.report or {})
+        if not r.get("transcribe"):
+            r["transcribe"] = {
+                "enabled": total <= IMPORT_TRANSCRIBE_AUTO_MAX_PAGES,
+                "total_pages": total,
+            }
+            imp.report = r
+
+    _mutate(import_id, fn)
+
+
+async def _transcribe_pdf_pages(
+    import_id: int, staging: Path, pdf_entries: list[dict], llm_cfg: dict
+) -> None:
+    """M3: Vision-Transkription der PDF-Seiten (1 LLM-Call pro Seite).
+
+    Pro Seite: Seiten-PNG + Textschicht + M2-Bildliste → wortgetreues
+    Markdown + Bild-Triage (keep/latex/noise) im selben Call. Die
+    Ergebnisse liegen pro Seite im file_map (resume-safe); Sidecar +
+    Manifest (scan_figure-Einträge, Medien-Triage) werden nach jeder
+    Seite neu zusammengeführt. Nach 3 aufeinanderfolgenden Fehlern wird
+    abgebrochen — die restlichen Seiten bleiben auf Textschicht-Fallback.
+    """
+    with Session(engine) as s:
+        imp = s.get(CourseImport, import_id)
+        trans_opt = dict((imp.report or {}).get("transcribe") or {}) if imp else {}
+
+    page_count_by_path = {m["path"]: int(m.get("pages") or 0) for m in pdf_entries}
+    img_pages_by_path = {m["path"]: (m.get("pdf_images") or []) for m in pdf_entries}
+    total_pages = sum(page_count_by_path.values())
+    if total_pages <= 0:
+        return
+    # Explizite Auswahl aus dem Report; sonst Default (wie _ensure_transcribe_option)
+    enabled = (
+        bool(trans_opt.get("enabled")) if trans_opt
+        else total_pages <= IMPORT_TRANSCRIBE_AUTO_MAX_PAGES
+    )
+    if not enabled:
+        append_report(import_id, log=[
+            f"PDF-Transkription ist deaktiviert ({total_pages} Seiten) — Textschicht-Fallback."
+        ])
+
+    units = [
+        {"path": path, "page": pno}
+        for path, pc in page_count_by_path.items()
+        for pno in range(1, pc + 1)
+    ]
+    if not units:
+        return
+
+    llm_sem = asyncio.Semaphore(IMPORT_LLM_CONCURRENCY)
+    locks: dict[str, asyncio.Lock] = {}
+    texts_cache: dict[str, dict[int, str]] = {}
+    consecutive = {"n": 0, "aborted": False}
+    unit_progress: dict[str, int] = {}
+
+    def _lock(path: str) -> asyncio.Lock:
+        if path not in locks:
+            locks[path] = asyncio.Lock()
+        return locks[path]
+
+    async def _texts(path: str) -> dict[int, str]:
+        if path not in texts_cache:
+            try:
+                texts_cache[path] = await asyncio.to_thread(
+                    _read_pdf_page_texts, staging / "extracted" / path,
+                    list(range(1, page_count_by_path.get(path, 0) + 1)),
+                )
+            except Exception as exc:
+                logger.warning("Import %s: Textschicht konnte nicht geladen werden (%s): %s", import_id, path, exc)
+                texts_cache[path] = {}
+        return texts_cache[path]
+
+    async def _reapply(path: str, pno: int) -> None:
+        """Frische Seiten-States in Sidecar + Manifest zusammenführen
+        (per-PDF-Lock, damit parallele Seiten sich nicht überlagern)."""
+        pc = page_count_by_path.get(path, 0)
+        async with _lock(path):
+            states = (get_filemap_entry(import_id, path) or {}).get("pages") or []
+            texts = await _texts(path)
+            await asyncio.to_thread(
+                _rebuild_pdf_sidecar, staging, path, states,
+                img_pages_by_path.get(path) or [], texts, pc,
+            )
+            _reapply_page_manifests_from_states(
+                import_id, path, states, img_pages_by_path.get(path) or []
+            )
+        consecutive["n"] = 0
+        unit_progress[path] = unit_progress.get(path, 0) + 1
+        set_progress(import_id, unit_key=f"filemap:scan:{path}",
+                     unit_total=pc, unit_done=unit_progress[path],
+                     current=f"PDF transkribieren: {path} (Seite {pno} von {pc})")
+
+    async def process(u: dict) -> None:
+        path, pno = u["path"], u["page"]
+        if consecutive["aborted"]:
+            return
+        cur = (get_filemap_entry(import_id, path) or {}).get("pages") or []
+        cur = cur[pno - 1] if 0 <= pno - 1 < len(cur) else {}
+        if cur.get("status") == "done":
+            # Resume: Seite fertig → LLM überspringen, State bleibt erhalten
+            # (der Re-Apply stellt die Manifest-Einträge wieder her).
+            await _reapply(path, pno)
+            # M3b: Scan-Figuren idempotent nachrüsten (Datei croppen +
+            # Image-State) — auch für Seiten, die vor der Scan-Figuren-
+            # Pipeline transkribiert wurden (Fallback: komplette Seite).
+            await _ensure_scan_figures(
+                import_id, staging, path, pno, cur.get("figures") or [],
+                staging / "sidecars" / f"{path}.pages" / f"page-{pno:02d}.png",
+            )
+            return
+        if not enabled:
+            return  # Transkription aus — hier ist nichts zu tun
+        if not await gate(import_id, "filemap"):
+            return
+        try:
+            texts = await _texts(path)
+            text_layer = texts.get(pno, "")
+            png = await asyncio.to_thread(
+                _render_pdf_page_png, staging / "extracted" / path,
+                pno, staging / "sidecars" / f"{path}.pages",
+            )
+            if png is None:
+                raise RuntimeError(f"Seite {pno} existiert im PDF nicht")
+            b64 = await asyncio.to_thread(lambda: base64.b64encode(png.read_bytes()).decode())
+            page_imgs = _pdf_media_page_images(img_pages_by_path.get(path) or [], pno)
+            pc = page_count_by_path.get(path, 0)
+
+            def _call():
+                return llm_service.import_transcribe_page_image(
+                    image_base64=b64, mime_type="image/png", text_layer=text_layer,
+                    page_no=pno, page_count=pc, pdf_images=page_imgs, config=llm_cfg,
+                )
+
+            async with llm_sem:
+                if not await gate(import_id, "filemap"):
+                    return
+                res = await _call()
+            data = res.get("data") if res.get("success") else None
+            if not isinstance(data, dict) or not isinstance(data.get("markdown"), str):
+                # Ein Retry (JSON-Abschnitt, transiente Fehler)
+                async with llm_sem:
+                    if not await gate(import_id, "filemap"):
+                        return
+                    res = await _call()
+                data = res.get("data") if res.get("success") else None
+            if not isinstance(data, dict) or not isinstance(data.get("markdown"), str):
+                err = str(res.get("error") or "LLM lieferte keine gültige Transkription")[:300]
+                set_filemap_page(import_id, path, pno - 1,
+                                 {"no": pno, "status": "error", "error": err})
+                raise RuntimeError(err)
+            figs_raw = data.get("figures")
+            images_raw = data.get("images")
+            figures = figs_raw if isinstance(figs_raw, list) else []
+            triage = images_raw if isinstance(images_raw, list) else []
+            page_warnings: list[str] = []
+            tri_by_idx = _items_by_idx(triage)
+            markdown, scan_figures = _resolve_page_tokens(
+                data["markdown"], path, pno, figures, tri_by_idx, page_imgs, page_warnings,
+            )
+            for w in page_warnings:
+                append_report(import_id, warnings=[w])
+            set_filemap_page(import_id, path, pno - 1, {
+                "no": pno,
+                "status": "done",
+                "layout": data.get("layout") if data.get("layout") in ("text", "slides") else "text",
+                "markdown": markdown,
+                "triage": triage,
+                "figures": scan_figures,
+                "suspect": _is_suspect(text_layer, markdown),
+            })
+            # M3b: Triage in die unified Image-States spiegeln
+            # (file_map[doc]["images"]) — Basis für Medien-Stage (Hash-
+            # Gruppierung, Edit) + Reapply. Bestehende Empfehlungen (User-
+            # Edits, frühere Läufe) bleiben erhalten.
+            for im in page_imgs:
+                t = tri_by_idx.get(im["idx"])
+                if not t:
+                    continue
+                mp = im["pfad"]
+                cur = next(
+                    (i for i in (get_filemap_entry(import_id, path) or {}).get("images") or []
+                     if i.get("path") == mp), {})
+                if normalize_triage(cur.get("recommendation")) in ("import", "applet", "ignore"):
+                    continue
+                patch = {
+                    "status": "done",
+                    "recommendation": normalize_triage(t.get("recommendation") or t.get("action")),
+                    "title": str(t.get("title") or "").strip()[:200],
+                    "caption": str(t.get("caption") or "").strip()[:200],
+                    "description": str(t.get("description") or "").strip()[:1000],
+                    "reason": str(t.get("reason") or "").strip()[:300],
+                    "refs": [pno],
+                }
+                try:
+                    patch["hash"] = await asyncio.to_thread(
+                        _sha256_file, staging / "extracted" / mp)
+                except OSError:
+                    pass
+                set_filemap_image(import_id, path, mp, patch)
+            # M3b: Scan-Figuren der Seite als Dateien (Cropp aus dem
+            # Seiten-PNG) + Image-States sicherstellen (Medien-Stage-Basis).
+            await _ensure_scan_figures(import_id, staging, path, pno, scan_figures, png)
+        except Exception as exc:
+            set_filemap_page(import_id, path, pno - 1,
+                             {"no": pno, "status": "error", "error": str(exc)[:300]})
+            consecutive["n"] += 1
+            if consecutive["n"] >= 3 and not consecutive["aborted"]:
+                consecutive["aborted"] = True
+                append_report(import_id, warnings=[
+                    "PDF-Transkription nach 3 aufeinanderfolgenden Fehlern abgebrochen — die restlichen Seiten bleiben auf Textschicht-Fallback."
+                ])
+            return
+        await _reapply(path, pno)
+
+    await run_units(import_id, "filemap", units, process,
+                    concurrency=IMPORT_PAGE_CONCURRENCY,
+                    label=lambda u: f"{u['path']} (Seite {u['page']})")
+
+
+# ─── M3b: Triage eingebetteter Medien (Office + PDF) ──────────────────────
+
+_M3B_HEADING_RE = re.compile(r"^%%\s*(?:Folie|Seite)\s*(\d+)\s*%%")
+
+
+def _image_context_from_sidecar(sp: Path, media_path: str) -> tuple[str, list[int]]:
+    """M3b: Text-Umfeld + Folien-/Seiten-Nummern aller Marker-Vorkommen eines
+    Medien-Pfads in einem Sidecar (Kontext für den Triage-Call). Returns:
+    (Kontext-Text ~600 Zeichen, Nummern)."""
+    if not sp.is_file():
+        return "", []
+    try:
+        lines = sp.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return "", []
+    marker = f"]({media_path})"
+    refs: list[int] = []
+    contexts: list[str] = []
+    cur_no: Optional[int] = None
+    buf: list[str] = []
+    for line in lines:
+        hm = _M3B_HEADING_RE.match(line)
+        if hm:
+            cur_no = int(hm.group(1))
+            buf = []
+            continue
+        if line.lstrip().startswith("#"):
+            buf = []
+            continue
+        if line.lstrip().startswith("![") and marker in line:
+            if cur_no is not None and cur_no not in refs:
+                refs.append(cur_no)
+            ctx = " ".join(buf)
+            if len(ctx) > 400:
+                ctx = "…" + ctx[-400:]
+            if ctx:
+                contexts.append(f"Folie {cur_no}: {ctx}" if cur_no is not None else ctx)
+        elif line.strip():
+            buf.append(line.strip())
+            if len(buf) > 40:
+                buf.pop(0)
+    return (" · ".join(contexts[:3])[:600], refs)
+
+
+def _reapply_office_media_from_states(import_id: int) -> None:
+    """M3b: Triage-States (file_map[doc]["images"]) in das (frisch gebaute)
+    Manifest zurückschreiben — bei JEDEM filemap-Lauf nötig (build_manifest
+    baut neu). Deckt Office- UND PDF-Medien ab (Pfad-basiert)."""
+    def fn(imp: CourseImport):
+        updates: dict[str, dict] = {}
+        for entry in (imp.file_map or {}).values():
+            for im in (entry or {}).get("images") or []:
+                if not isinstance(im, dict) or not im.get("path"):
+                    continue
+                upd: dict[str, Any] = {}
+                if im.get("hash"):
+                    upd["hash"] = str(im["hash"])
+                rec = normalize_triage(im.get("recommendation"))
+                if rec in ("import", "applet", "ignore"):
+                    upd["triage"] = rec
+                    upd["triage_caption"] = str(im.get("title") or "").strip()
+                    upd["triage_alt_text"] = str(im.get("caption") or "").strip()
+                    upd["triage_description"] = str(im.get("description") or "").strip()
+                    upd["triage_content"] = str(im.get("content") or "").strip()
+                    upd["triage_reason"] = str(im.get("reason") or "").strip()
+                if upd:
+                    updates[im["path"]] = upd
+        if not updates:
+            return
+        man = [dict(m) for m in (imp.manifest or [])]
+        for m in man:
+            upd = updates.get(m.get("path") or "")
+            if upd:
+                m.update(upd)
+        imp.manifest = man
+
+    _mutate(import_id, fn)
+
+
+def edit_media_triage(import_id: int, group_paths: list[str], patch: dict) -> None:
+    """M3b: Triage-Felder für alle Pfade einer Hash-Gruppe setzen (UI-Edit):
+    Image-States + Manifest-Reapply."""
+    for mp in group_paths:
+        doc = mp.rsplit(".media/", 1)[0] if ".media/" in mp else mp
+        set_filemap_image(import_id, doc, mp, dict(patch))
+    _reapply_office_media_from_states(import_id)
+
+
+def reset_media_triage(import_id: int) -> int:
+    """M3b: Triage für alle NOCH NICHT importierten eingebetteten Medien
+    zurücksetzen (Empfehlung/Titel/Beschreibung/Content), damit ein
+    filemap-Neulauf die Bilder mit dem aktuellen Prompt neu triagt.
+    Bereits importierte Medien (media_map) bleiben unangetastet.
+    Returns: Anzahl zurückgesetzter Einträge."""
+    n = 0
+    with Session(engine) as s:
+        imp0 = s.get(CourseImport, import_id)
+        if imp0:
+            mm = set((imp0.media_map or {}).keys())
+            for entry in (imp0.file_map or {}).values():
+                for im in (entry or {}).get("images") or []:
+                    if (isinstance(im, dict) and im.get("path") not in mm
+                            and normalize_triage(im.get("recommendation"))
+                            in ("import", "applet", "ignore")):
+                        n += 1
+
+    def fn(imp: CourseImport):
+        mm = set((imp.media_map or {}).keys())
+        reset_paths: set[str] = set()
+        fm = dict(imp.file_map or {})
+        for doc, entry in fm.items():
+            images = (entry or {}).get("images") if isinstance(entry, dict) else None
+            if not images:
+                continue
+            new_images = []
+            for im in images:
+                if (isinstance(im, dict) and im.get("path") not in mm
+                        and normalize_triage(im.get("recommendation"))
+                        in ("import", "applet", "ignore")):
+                    reset_paths.add(im["path"])
+                    new_images.append({"path": im["path"],
+                                       "hash": im.get("hash") or "",
+                                       "status": "pending"})
+                else:
+                    new_images.append(im)
+            e = dict(entry)
+            e["images"] = new_images
+            fm[doc] = e
+        imp.file_map = fm
+        man = []
+        for m in (imp.manifest or []):
+            if m.get("path") in reset_paths:
+                m = dict(m)
+                for k in ("triage", "triage_caption", "triage_alt_text",
+                          "triage_description", "triage_content", "triage_reason"):
+                    m.pop(k, None)
+            man.append(m)
+        imp.manifest = man
+
+    _mutate(import_id, fn)
+    _reapply_office_media_from_states(import_id)
+    return n
+
+
+def _vision_encode(path: Path, max_px: int = 2048) -> tuple[str, str]:
+    """M3b: Rastergrafik für den Vision-Call kodieren → (base64, mime).
+
+    Große Bilder werden vorher verkleinert (Maxkante max_px), damit die
+    Request-Payload stabil bleibt — sehr große PNGs/JPEGs aus Scans oder
+    Exports würden sonst Timeouts/413er auslösen. Alpha-Kanäle werden auf
+    Weiß komposited (JPEG).
+    """
+    data = path.read_bytes()
+    try:
+        import io as _io
+        from PIL import Image as _PILImage
+        with _PILImage.open(_io.BytesIO(data)) as im:
+            if max(im.size) <= max_px:
+                return base64.b64encode(data).decode(), IMAGE_MIME.get(
+                    path.suffix.lower(), "image/png")
+            im.thumbnail((max_px, max_px))
+            if im.mode in ("RGBA", "LA", "P"):
+                im = im.convert("RGBA")
+                bg = _PILImage.new("RGB", im.size, (255, 255, 255))
+                bg.paste(im, mask=im.getchannel("A"))
+                im = bg
+            elif im.mode != "RGB":
+                im = im.convert("RGB")
+            buf = _io.BytesIO()
+            im.save(buf, format="JPEG", quality=85)
+            return base64.b64encode(buf.getvalue()).decode(), "image/jpeg"
+    except Exception:
+        return base64.b64encode(data).decode(), IMAGE_MIME.get(
+            path.suffix.lower(), "image/png")
+
+
+def _svg_preview(src: Path, out_dir: Path) -> Optional[Path]:
+    """M3b: SVG → PNG-Vorschau für die Vision-Triage (cairosvg).
+
+    Returns den Vorschau-Pfad oder None (cairosvg fehlt / Rendering
+    fehlgeschlagen) — das SVG bleibt dann „unbekannt“ (empfohlen).
+    """
+    try:
+        import cairosvg  # nur im Container verfügbar (libcairo2)
+    except ImportError:
+        return None
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / (src.stem + ".png")
+        cairosvg.svg2png(url=str(src), write_to=str(out),
+                         output_width=1600, background_color="white")
+        return out
+    except Exception:
+        return None
+
+
+async def _triage_office_media(
+    import_id: int, staging: Path, manifest: list[dict], llm_cfg: dict
+) -> None:
+    """M3b: LLM-Triage der eingebetteten Medien (Office + PDF, 1 Vision-Call
+    pro unikatem Bild — SHA256-Dedup über den ganzen Import).
+
+    Kandidaten: Manifest-Medien mit .media/-Pfad + Raster-Extension (oder
+    SVG, das per cairosvg als Vorschau gerastert wird), die noch keine
+    Triage-Empfehlung haben (PDF-Bilder werden von der Seiten-Transkription
+    mitgetriage; hier landen Office-Bilder, nicht transkribierte PDFs und
+    LLM-Auslassungen). Pre-Filter ohne LLM: max. Kante < IMPORT_EMBED_MIN_PX
+    → deterministisch „ignore“; eps & Co. bleiben „unbekannt“ (empfohlen).
+    States: file_map[doc]["images"]; Manifest via
+    _reapply_office_media_from_states. Nach 3 aufeinanderfolgenden Fehlern
+    Abbruch (Rest bleibt „unbekannt“), Cap: IMPORT_MEDIA_TRIAGE_MAX_IMAGES.
+    """
+    extracted = staging / "extracted"
+
+    def _has_rec(doc: str, mp: str) -> bool:
+        st = next(
+            (i for i in (get_filemap_entry(import_id, doc) or {}).get("images") or []
+             if i.get("path") == mp), {})
+        return normalize_triage(st.get("recommendation")) in ("import", "applet", "ignore")
+
+    # Lage-Hinweise für PDF-Bilder (Seite + Position aus dem M2-Index)
+    pdf_img_meta: dict[str, tuple[int, str]] = {}
+    for m in manifest:
+        for pg in m.get("pdf_images") or []:
+            for im in pg.get("images") or []:
+                if im.get("pfad"):
+                    pdf_img_meta[im["pfad"]] = (int(pg.get("seite") or 0), str(im.get("position") or ""))
+
+    candidates: list[dict] = []
+    for m in manifest:
+        # Office-Extraktion erzeugt für Vektoren type="svg" — beide Typen
+        # triagieren (eps & Co. als "other" bleiben ohne Call).
+        if m.get("type") not in ("image", "svg"):
+            continue
+        mp = m.get("path") or ""
+        if ".media/" not in mp:
+            continue
+        ext = Path(mp).suffix.lower()
+        if ext not in IMAGE_MIME and ext != ".svg":
+            continue  # eps & Co.: kein Vision-Call (bleibt ohne Empfehlung);
+        doc = mp.rsplit(".media/", 1)[0]
+        if not (extracted / mp).is_file() or _has_rec(doc, mp):
+            continue
+        candidates.append({"doc": doc, "path": mp, "ext": ext, "hash": None})
+    if not candidates:
+        return
+
+    # Hash-Cache aus bestehenden States (Resume/Merge) vorbefüllen
+    hash_cache: dict[str, dict] = {}
+    with Session(engine) as s:
+        imp = s.get(CourseImport, import_id)
+        for entry in (imp.file_map or {}).values() if imp else []:
+            for im in (entry or {}).get("images") or []:
+                h = im.get("hash")
+                if h and normalize_triage(im.get("recommendation")) in ("import", "applet", "ignore"):
+                    hash_cache.setdefault(str(h), im)
+
+    def _prep() -> None:
+        """SHA256 + Pre-Filter (sehr kleine Grafiken → deterministisch ignore)."""
+        from PIL import Image as _PILImage
+        for c in candidates:
+            try:
+                c["hash"] = _sha256_file(extracted / c["path"])
+            except OSError:
+                c["hash"] = None
+            try:
+                with _PILImage.open(extracted / c["path"]) as pim:
+                    w, h = pim.size
+                if max(w, h) < IMPORT_EMBED_MIN_PX:
+                    set_filemap_image(import_id, c["doc"], c["path"], {
+                        "status": "done", "recommendation": "ignore",
+                        "title": Path(c["path"]).name,
+                        "description": "",
+                        "reason": f"Sehr kleine Grafik ({w}×{h} px) — automatisch als Icon/Styling ignoriert.",
+                    })
+            except Exception:
+                pass  # undekodierbar (z.B. SVG) → LLM-Call versuchen
+            # SVG: Vorschau für den Vision-Call rasterisieren
+            if c["ext"] == ".svg":
+                c["preview"] = str(_svg_preview(extracted / c["path"], staging / "triage_preview") or "")
+
+    await asyncio.to_thread(_prep)
+
+    doc_totals: dict[str, int] = {}
+    for c in candidates:
+        doc_totals[c["doc"]] = doc_totals.get(c["doc"], 0) + 1
+
+    llm_sem = asyncio.Semaphore(IMPORT_LLM_CONCURRENCY)
+    consecutive = {"n": 0, "aborted": False}
+    cap_reported = {"v": False}
+    counts = {"llm": 0, "dedup": 0, "resume": 0, "failed": 0}
+    doc_done: dict[str, int] = {}
+
+    def _doc_progress(c: dict) -> None:
+        d = c["doc"]
+        doc_done[d] = doc_done.get(d, 0) + 1
+        set_progress(import_id, unit_key=f"filemap:img:{d}",
+                     unit_total=doc_totals.get(d, 0), unit_done=doc_done[d],
+                     current=f"Bilder triagieren: {d} ({doc_done[d]}/{doc_totals.get(d, 0)})")
+
+    async def process(c: dict) -> None:
+        mp = c["path"]
+        # Resume/Pre-Filter: fertig (eigener State) → überspringen
+        cur = next(
+            (i for i in (get_filemap_entry(import_id, c["doc"]) or {}).get("images") or []
+             if i.get("path") == mp), {})
+        if normalize_triage(cur.get("recommendation")) in ("import", "applet", "ignore"):
+            if cur.get("hash"):
+                hash_cache.setdefault(str(cur["hash"]), cur)
+            counts["resume"] += 1
+            _doc_progress(c)
+            return
+        # Dedup: gleicher Hash bereits triagt (dieser oder früherer Lauf)
+        if c.get("hash") and c["hash"] in hash_cache:
+            src = hash_cache[c["hash"]]
+            set_filemap_image(import_id, c["doc"], mp, {
+                "hash": c["hash"], "status": "done",
+                "recommendation": src.get("recommendation"),
+                "title": src.get("title", ""), "caption": src.get("caption", ""),
+                "description": src.get("description", ""),
+                "content": src.get("content", ""), "reason": src.get("reason", ""),
+            })
+            counts["dedup"] += 1
+            _doc_progress(c)
+            return
+        # SVG ohne Vorschau (cairosvg fehlt/Rendering fehlgeschlagen)
+        if c["ext"] == ".svg" and not (c.get("preview") and Path(c["preview"]).is_file()):
+            _doc_progress(c)
+            return
+        if consecutive["aborted"]:
+            _doc_progress(c)
+            return
+        if counts["llm"] >= IMPORT_MEDIA_TRIAGE_MAX_IMAGES:
+            if not cap_reported["v"]:
+                cap_reported["v"] = True
+                append_report(import_id, log=[
+                    f"Bild-Triage: Cap von {IMPORT_MEDIA_TRIAGE_MAX_IMAGES} LLM-Calls erreicht — die restlichen Bilder bleiben „unbekannt“ (empfohlen)."])
+            consecutive["aborted"] = True  # Rest ohne Calls durchlaufen (Progress)
+            _doc_progress(c)
+            return
+        if not await gate(import_id, "filemap"):
+            return
+        try:
+            src = Path(c["preview"]) if c.get("preview") else (extracted / mp)
+            b64, mime = await asyncio.to_thread(_vision_encode, src)
+        except OSError as exc:
+            set_filemap_image(import_id, c["doc"], mp,
+                              {"status": "error", "error": f"Datei nicht lesbar: {exc}"})
+            counts["failed"] += 1
+            _doc_progress(c)
+            return
+        ctx, refs = await asyncio.to_thread(
+            _image_context_from_sidecar, staging / "sidecars" / f"{c['doc']}.md", mp)
+        side = pdf_img_meta.get(mp)
+        if side and side[0]:
+            extra = f"Seite {side[0]} des PDFs" + (f", Lage: {side[1]}" if side[1] else "")
+            ctx = f"{ctx} · {extra}" if ctx else extra
+        counts["llm"] += 1
+
+        def _call():
+            return llm_service.import_triage_image(
+                image_base64=b64, mime_type=mime,
+                file_name=Path(c["doc"]).name,
+                context=ctx or f"(kein Kontext — eingebettete Grafik aus „{Path(c['doc']).name}“)",
+                config=llm_cfg)
+
+        async with llm_sem:
+            if not await gate(import_id, "filemap"):
+                return
+            res = await _call()
+        data = res.get("data") if res.get("success") else None
+        rec0 = str((data or {}).get("recommendation") or "").strip().lower()
+        if rec0 not in ("import", "applet", "ignore"):
+            # 1 Retry (JSON-Fehler, transiente LLM-Probleme)
+            async with llm_sem:
+                if not await gate(import_id, "filemap"):
+                    return
+                res = await _call()
+            data = res.get("data") if res.get("success") else None
+            rec0 = str((data or {}).get("recommendation") or "").strip().lower()
+        if rec0 not in ("import", "applet", "ignore"):
+            err = str(res.get("error") or "LLM lieferte keine gültige Triage")[:300]
+            set_filemap_image(import_id, c["doc"], mp, {"status": "error", "error": err})
+            counts["failed"] += 1
+            consecutive["n"] += 1
+            if consecutive["n"] >= 3 and not consecutive["aborted"]:
+                consecutive["aborted"] = True
+                append_report(import_id, warnings=[
+                    "Bild-Triage nach 3 aufeinanderfolgenden Fehlern abgebrochen — die restlichen Bilder bleiben „unbekannt“ (empfohlen)."])
+            _doc_progress(c)
+            return
+        consecutive["n"] = 0
+        patch = {
+            "hash": c.get("hash") or "",
+            "status": "done",
+            "recommendation": rec0,
+            "title": str(data.get("title") or "").strip()[:200],
+            # M3b+: LLM-Caption = Alt-Text für ![Caption](URL) im
+            # generierten Skript/in den Folien (siehe Bild-Mapping).
+            "caption": str(data.get("caption") or "").strip()[:200],
+            # Runde 3: bei „ignore“ mit übernehmbarem Inhalt steckt der
+            # komplette Bildinhalt (LaTeX/Markdown/Mermaid) in der
+            # Beschreibung → großzügiger Cap.
+            "description": str(data.get("description") or "").strip()[:4000],
+            "reason": str(data.get("reason") or "").strip()[:300],
+            "refs": refs,
+        }
+        set_filemap_image(import_id, c["doc"], mp, patch)
+        if c.get("hash"):
+            hash_cache[c["hash"]] = {**patch, "path": mp}
+        _doc_progress(c)
+        # Live-Anzeige in der UI: Manifest aktuell halten
+        _reapply_office_media_from_states(import_id)
+
+    await run_units(import_id, "filemap", candidates, process,
+                    concurrency=IMPORT_FILE_CONCURRENCY, label=lambda u: u["path"])
+    _reapply_office_media_from_states(import_id)
+    append_report(import_id, log=[
+        f"Bild-Triage: {len(candidates)} eingebettete Medien — {counts['llm']} per LLM ({counts['dedup']} Duplikate übernommen, {counts['resume']} aus Vorlauf/Pre-Filter, {counts['failed']} Fehler)."])
 
 
 def _docx_para_images(para: "Paragraph", doc: "Document") -> list[str]:
@@ -1416,9 +2535,46 @@ async def run_filemap_job(course_id: int, import_id: int) -> None:
         if not await gate(import_id, "filemap"):
             return
 
-        # 3) LLM-Digests der Text-Dateien
-        text_entries = [m for m in manifest if m.get("read_path")]
+        # 3) M3: Vision-Transkription der PDF-Seiten (vor den Digests —
+        #    das transkribierte Sidecar ist der Digest-Input)
         llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_ANALYSIS)
+        pdf_entries = [m for m in manifest if m.get("type") == "pdf_doc" and m.get("read_path")]
+        if pdf_entries:
+            _ensure_transcribe_option(import_id, manifest)
+            await _transcribe_pdf_pages(import_id, staging, pdf_entries, llm_cfg)
+            if not await gate(import_id, "filemap"):
+                return
+            # Transkription verändert die Sidecars → line_count synchronisieren
+            # (nur via _mutate auf dem DB-Manifest: die lokale manifest-Liste
+            # hier neu zu speichern, würde die neuen scan_figure-/Triage-
+            # Einträge wieder wischen!)
+            def _sync_line_counts():
+                def fn(imp: CourseImport):
+                    man = [dict(m) for m in (imp.manifest or [])]
+                    for m in man:
+                        if m.get("type") == "pdf_doc" and m.get("read_path"):
+                            rp = staging / m["read_path"]
+                            try:
+                                m["line_count"] = len(
+                                    rp.read_text(encoding="utf-8", errors="replace").splitlines()
+                                )
+                            except OSError:
+                                continue
+                    imp.manifest = man
+
+                _mutate(import_id, fn)
+
+            _sync_line_counts()
+
+        # 3b) M3b: LLM-Triage der eingebetteten Medien (1 Call pro unikatem
+        #     Bild, SHA256-Dedup) + Triage-Felder ins Manifest spiegeln
+        await _triage_office_media(import_id, staging, manifest, llm_cfg)
+        _reapply_office_media_from_states(import_id)
+        if not await gate(import_id, "filemap"):
+            return
+
+        # 4) LLM-Digests der Text-Dateien
+        text_entries = [m for m in manifest if m.get("read_path")]
         if text_entries:
             await _digest_files(import_id, staging, text_entries, llm_cfg)
             if not await gate(import_id, "filemap"):
@@ -1460,7 +2616,10 @@ async def _digest_files(
             try:
                 text = await asyncio.to_thread(_read_text, p)
             except OSError as exc:
-                set_filemap_entry(import_id, path, {"status": "error", "chunks": [], "error": str(exc)})
+                # Merge statt Entry-Ersatz: M3-`pages`-States (Transkription) bleiben erhalten
+                cur = get_filemap_entry(import_id, path)
+                kept = {k: v for k, v in cur.items() if k not in ("status", "chunks", "error")}
+                set_filemap_entry(import_id, path, {**kept, "status": "error", "chunks": [], "error": str(exc)})
                 set_progress(import_id, stage="filemap", stage_failed_delta=1)
                 return
             lines = text.splitlines()
@@ -1503,10 +2662,14 @@ async def _digest_files(
                 set_progress(import_id, unit_key=unit_key, unit_done=done)
 
             # Datei-Fazit (fertig = mind. ein Chunk mit Summary)
+            # Merge statt Entry-Ersatz: M3-`pages`-States (Transkription) bleiben
+            # erhalten — sonst würde jedes Resume die LLM-Transkription wiederholen.
             cur = get_filemap_entry(import_id, path)
             cur_chunks = cur.get("chunks") or []
             ok = any(c.get("summary") and not c.get("error") for c in cur_chunks)
+            kept = {k: v for k, v in cur.items() if k not in ("status", "chunks", "error")}
             set_filemap_entry(import_id, path, {
+                **kept,
                 "status": "done" if ok else "error",
                 "chunks": cur_chunks,
                 **({"error": "Alle Chunks fehlgeschlagen"} if not ok else {}),
@@ -1540,9 +2703,14 @@ def remove_staged_files(course_id: int, import_id: int, paths: list[str]) -> int
     def fn(imp2: CourseImport):
         nonlocal removed
         man = [dict(m) for m in (imp2.manifest or [])]
+        # M3: ein gelöschtes PDF-Dokument verwaist auch seine gescannten
+        # Figuren (scan_figure-Einträge zeigen auf sidecars/<path>.pages/)
+        dead_prefixes = tuple(f"sidecars/{pth}.pages/" for pth in wanted)
         kept = []
         for m in man:
             if m["path"] in wanted:
+                removed.append(m["path"])
+            elif m.get("type") == "scan_figure" and dead_prefixes and m["path"].startswith(dead_prefixes):
                 removed.append(m["path"])
             else:
                 kept.append(m)
@@ -1584,6 +2752,11 @@ def remove_staged_files(course_id: int, import_id: int, paths: list[str]) -> int
                     cand.unlink()
             except OSError:
                 pass
+        # M3: die gescannten Seiten-PNGs verschwinden mit dem PDF-Dokument
+        if (by_path.get(pth) or {}).get("type") == "pdf_doc":
+            pages_dir = staging / "sidecars" / f"{pth}.pages"
+            if pages_dir.is_dir():
+                shutil.rmtree(pages_dir, ignore_errors=True)
     return len(removed)
 
 
@@ -1731,6 +2904,20 @@ def _backfill_course_media_hashes(course_id: int) -> None:
                 s.commit()
 
 
+def _media_title(entry: dict, src: Path) -> str:
+    """M3b: Triage-Titel (LLM) bevorzugt, sonst Dateiname."""
+    t = str(entry.get("triage_caption") or "").strip()
+    return (t or src.stem)[:300]
+
+
+def _staging_media_src(staging: Path, rel: str) -> Path:
+    """Absoluter Staging-Pfad einer Medien-Datei: Scan-Figuren (sidecars/…)
+    liegen direkt unter dem Staging-Root, alles andere unter extracted/."""
+    if rel.startswith("sidecars/"):
+        return staging / rel
+    return staging / "extracted" / rel
+
+
 def _import_one_media(staging: Path, course_id: int, entry: dict, created_by: int) -> dict:
     """Eine Mediendatei (image/figure_pdf/svg/eps) in die Kurs-Medienbibliothek schreiben.
 
@@ -1739,7 +2926,7 @@ def _import_one_media(staging: Path, course_id: int, entry: dict, created_by: in
     Dedup: SHA256 der Quelldatei — bei bereits vorhandenem Medium werden die
     bestehenden CourseMedia-Rows zurückgegeben (duplicate=True, kein neuer Eintrag).
     """
-    src = staging / "extracted" / entry["path"]
+    src = _staging_media_src(staging, entry["path"])
     if not src.is_file():
         return {"error": "Datei nicht gefunden"}
     try:
@@ -1762,6 +2949,9 @@ def _import_one_media(staging: Path, course_id: int, entry: dict, created_by: in
     # Altes Manifest (vor SVG/EPS-Support) hat diese als "other" klassifiziert
     if etype == "other" and ext in (".svg", ".eps"):
         etype = ext.lstrip(".")
+    # M3b: Scan-Figuren (aus dem Seiten-PNG gecropte PNGs) importieren wie Bilder
+    if etype == "scan_figure":
+        etype = "image"
     # .eps-Dateien sind häufig in Wirklichkeit Rastergrafiken (z.B. JPEG) — importieren wie Bild
     if etype == "eps":
         sniffed = _sniff_image_magic(src)
@@ -1777,7 +2967,7 @@ def _import_one_media(staging: Path, course_id: int, entry: dict, created_by: in
             (MEDIA_DIR / rel).write_bytes(data)
             with Session(engine) as s:
                 media = CourseMedia(
-                    course_id=course_id, title=src.stem[:300], file_path=rel,
+                    course_id=course_id, title=_media_title(entry, src), file_path=rel,
                     media_type="image", mime_type=IMAGE_MIME[ext],
                     file_size=len(data), content_hash=src_hash, created_by=created_by,
                 )
@@ -1799,7 +2989,7 @@ def _import_one_media(staging: Path, course_id: int, entry: dict, created_by: in
             (MEDIA_DIR / rel).write_bytes(data)
             with Session(engine) as s:
                 media = CourseMedia(
-                    course_id=course_id, title=src.stem[:300], file_path=rel,
+                    course_id=course_id, title=_media_title(entry, src), file_path=rel,
                     media_type="image", mime_type="image/svg+xml",
                     file_size=len(data), content_hash=src_hash, created_by=created_by,
                 )
@@ -1850,7 +3040,7 @@ def _import_one_media(staging: Path, course_id: int, entry: dict, created_by: in
             (MEDIA_DIR / rel).write_bytes(png)
             with Session(engine) as s:
                 media = CourseMedia(
-                    course_id=course_id, title=src.stem[:300], file_path=rel,
+                    course_id=course_id, title=_media_title(entry, src), file_path=rel,
                     media_type="image", mime_type="image/png",
                     file_size=len(png), content_hash=src_hash, created_by=created_by,
                 )
@@ -1883,7 +3073,7 @@ def _import_one_media(staging: Path, course_id: int, entry: dict, created_by: in
             (MEDIA_DIR / rel).parent.mkdir(parents=True, exist_ok=True)
             (MEDIA_DIR / rel).write_bytes(png)
             with Session(engine) as s:
-                title = src.stem + (f" ({pno + 1}/{n_pages})" if n_pages > 1 else "")
+                title = _media_title(entry, src) + (f" ({pno + 1}/{n_pages})" if n_pages > 1 else "")
                 media = CourseMedia(
                     course_id=course_id, title=title[:300], file_path=rel,
                     media_type="image", mime_type="image/png",
@@ -1903,6 +3093,78 @@ def _import_one_media(staging: Path, course_id: int, entry: dict, created_by: in
         }
     except Exception as exc:
         return {"error": str(exc)}
+
+
+async def _convert_media_to_applet(
+    staging: Path, course_id: int, entry: dict, created_by: int, llm_cfg: dict
+) -> dict:
+    """M3b: eingebettetes Bild → HTML-Applet (analog Applet-Studio, aber
+    direkt aus der Staging-Datei; kein Zwischen-Import).
+
+    Das Bild selbst ist das Referenzbild; Titel/Beschreibung/Content der
+    Triage dienen als Prompt-Anweisung. Returns: wie _import_one_media
+    ({media_ids, urls, url, description_hint, no_vision}) oder {"error"}.
+    """
+    src = _staging_media_src(staging, entry["path"])
+    if not src.is_file():
+        return {"error": "Datei nicht gefunden (Applet-Konvertierung)"}
+    ext = src.suffix.lower()
+    if ext == ".svg":
+        # PNG-Vorschau der Vision-Triage (deterministischer Name) als Referenzbild
+        src = staging / "triage_preview" / (src.stem + ".png")
+        if not src.is_file():
+            return {"error": "Keine PNG-Vorschau für SVG vorhanden (Applet-Konvertierung)"}
+        ext = ".png"
+    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+        return {"error": f"Applet-Konvertierung nur für PNG/JPEG/WebP (hier: {ext})"}
+    mime = IMAGE_MIME[ext]
+    title = str(entry.get("triage_caption") or "").strip() or src.stem
+    parts = [
+        "Wandle das angehängte Referenzbild in ein HTML-Applet um, das die "
+        "Abbildung möglichst inhaltsgetreu (und wo sinnvoll interaktiv) wiedergibt."
+    ]
+    if title:
+        parts.append(f"Titel: {title}")
+    desc = str(entry.get("triage_description") or "").strip()
+    if desc:
+        parts.append(f"Anweisung: {desc}")
+    content = str(entry.get("triage_content") or "").strip()
+    if content:
+        parts.append("Im Bild enthaltene Inhalte (z.B. Formeln/Werte), die das "
+                     "Applet übernehmen soll:\n" + content[:2000])
+    try:
+        b64 = await asyncio.to_thread(lambda: base64.b64encode(src.read_bytes()).decode())
+    except OSError as exc:
+        return {"error": f"Datei nicht lesbar: {exc}"}
+    res = await llm_service.generate_applet(
+        prompt="\n".join(parts),
+        image_data_url=f"data:{mime};base64,{b64}",
+        config=llm_cfg,
+    )
+    data = res.get("data") if res.get("success") else None
+    html = str((data or {}).get("html") or "").strip()
+    if not html:
+        return {"error": str(res.get("error") or "Applet-LLM lieferte kein HTML")[:300]}
+    try:
+        media_service.validate_applet_html(html)
+    except Exception as exc:
+        return {"error": f"Applet-HTML ungültig: {exc}"[:300]}
+    rel, mime_app, size = media_service.save_applet(course_id, html)
+    with Session(engine) as s:
+        media = CourseMedia(
+            course_id=course_id, title=title[:300], file_path=rel,
+            media_type="applet", mime_type=mime_app, file_size=size,
+            created_by=created_by,
+        )
+        s.add(media)
+        s.commit()
+        s.refresh(media)
+    return {
+        "media_ids": [media.id], "urls": [media_service.media_url(media)],
+        "url": media_service.media_url(media),
+        "no_vision": True,
+        "description_hint": str((data or {}).get("description") or "").strip()[:2000],
+    }
 
 
 async def _backfill_descriptions(
@@ -1980,7 +3242,7 @@ async def run_media_job(
         await asyncio.to_thread(_backfill_course_media_hashes, course_id)
         def _is_media(m: dict) -> bool:
             # Extension-Fallback: altes Manifest kennt svg/eps noch nicht
-            return (m.get("type") in ("image", "figure_pdf", "svg", "eps")
+            return (m.get("type") in ("image", "figure_pdf", "svg", "eps", "scan_figure")
                     or m.get("path", "").lower().endswith((".svg", ".eps")))
 
         units = [m for m in snap["manifest"] if m["path"] in selected_paths and _is_media(m)]
@@ -2002,7 +3264,16 @@ async def run_media_job(
                 set_progress(import_id, unit_key=unit_key, unit_done=1, stage="media", stage_done_delta=1)
                 return
             set_progress(import_id, unit_key=unit_key, unit_total=1, current=f"Medien: {path}")
-            result = await asyncio.to_thread(_import_one_media, staging, course_id, entry, snap["created_by"])
+            tri = normalize_triage(entry.get("triage"))
+            if tri == "applet":
+                # M3b: Bild → HTML-Applet (LLM-Konvertierung, analog Applet-Studio)
+                async with llm_sem:
+                    if not await gate(import_id, "media"):
+                        return
+                    result = await _convert_media_to_applet(
+                        staging, course_id, entry, snap["created_by"], llm_cfg)
+            else:
+                result = await asyncio.to_thread(_import_one_media, staging, course_id, entry, snap["created_by"])
             if "error" in result:
                 append_report(import_id, warnings=[f"Medium nicht importiert ({path}): {result['error']}"])
                 set_progress(import_id, stage="media", stage_failed_delta=1)
@@ -2018,9 +3289,13 @@ async def run_media_job(
                 ])
                 set_progress(import_id, unit_key=unit_key, unit_done=1, stage="media", stage_done_delta=1)
                 return
-            # Beschreibung: SVG liefert einen Text-Hint (kein Vision-Call),
-            # Raster/PDF-Figuren per Vision-LLM (best effort)
+            # Beschreibung: Applet-/SVG-Hint > Triage-Beschreibung (M3b:
+            # import/applet; legacy M3: keep-Caption) > Vision-Call (best effort)
             description = str(result.get("description_hint") or "")
+            if not description and tri in ("import", "applet") and entry.get("triage_description"):
+                description = str(entry["triage_description"]).strip()[:2000]
+            elif not description and entry.get("triage") == "keep" and entry.get("triage_caption"):
+                description = str(entry["triage_caption"]).strip()[:2000]
             if not description and not result.get("no_vision"):
                 async with llm_sem:
                     if await gate(import_id, "media"):
@@ -3124,8 +4399,9 @@ def _collect_sources(staging: Path, ch: dict, by_path: dict) -> tuple[str, set[s
             has_tex = True
             img_refs.update(_INC_GRAPHICS_RE.findall(text))
         else:
-            # Markdown-Bilder in md-Quellen
-            for alt, url in re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", text):
+            # Markdown-Bilder in md-Quellen (1 Capture-Gruppe → findall
+            # liefert einfache Strings, kein (alt, url)-Tuple)
+            for url in re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", text):
                 if not url.startswith(("http", "/media/")):
                     img_refs.add(url)
         # Marker-Zeile: Datei + Zeilenbereich, damit das LLM die Herkunft jedes
@@ -3134,21 +4410,53 @@ def _collect_sources(staging: Path, ch: dict, by_path: dict) -> tuple[str, set[s
     return "\n\n".join(parts), img_refs, has_tex
 
 
+def _rewrite_image_urls(text: str, url_map: dict) -> str:
+    """Ersetzt auflösbare Bildpfade im Quelltext deterministisch durch die
+    Medien-URLs (vor dem LLM-Call).
+
+    Markdown-Bildmarker ``]([…](ref)`` und ``\\includegraphics{ref}`` werden
+    auf die URL aus der Medien-Mapping-Tabelle umgeschrieben — das LLM
+    wendet die Tabelle (linke Spalte = Original-Pfad) sonst nicht immer an
+    und entfernt laut Prompt-Regel das Bild (Caption bleibt nur als Text).
+    """
+    if not text:
+        return text
+    for ref in sorted(url_map, key=len, reverse=True):
+        url = url_map[ref]
+        if not url:
+            continue
+        if f"]({ref})" in text:
+            text = text.replace(f"]({ref})", f"]({url})")
+        pat = re.compile(r"(\\includegraphics(?:\[[^\]]*\])?\{)" + re.escape(ref) + r"\}")
+        if pat.search(text):
+            text = pat.sub(lambda m, u=url: m.group(1) + u + "}", text)
+    return text
+
+
 def _image_table(
-    img_refs: set[str], image_map: dict, descriptions: Optional[dict[str, str]] = None
+    img_refs: set[str], image_map: dict, descriptions: Optional[dict[str, str]] = None,
+    content_map: Optional[dict[str, str]] = None,
+    alt_texts: Optional[dict[str, str]] = None,
 ) -> str:
-    """ALLE importierten Medien (Zip-Pfad → Medien-URL, mit Kurzbeschreibung); in den
-    Quellen referenzierte Einträge werden markiert. Nicht auflösbare Referenzen
-    werden separat gemeldet."""
+    """ALLE importierten Medien (Zip-Pfad → Medien-URL, mit LLM-Alt-Text und
+    Kurzbeschreibung); in den Quellen referenzierte Einträge werden markiert.
+    Nicht auflösbare Referenzen werden separat gemeldet — Bilder mit
+    Triage-Content (M3b: „ignore“ mit Inhalt) bekommen eine
+    Integration-Anweisung statt „entfernen“."""
     lines = []
     entries = []
     descs = descriptions or {}
+    cmaps = content_map or {}
+    alts = alt_texts or {}
     for path in sorted(image_map):
         url = image_map[path]
         if not url:
             continue
         marked = any(_resolve_image_path(ref, image_map) == url for ref in img_refs)
         entry = f"{path} → {url}"
+        alt = (alts.get(path) or "").strip()
+        if alt:
+            entry += f" — Alt-Text: „{alt}“"
         d = (descs.get(path) or "").strip()
         if d:
             entry += f" — „{d}“"
@@ -3156,12 +4464,53 @@ def _image_table(
             entry += "  [in den Quellen referenziert]"
         entries.append(entry)
     if entries:
-        lines.append("ALLE importierten Medien (Original-Pfad → Medien-URL, mit Kurzbeschreibung; für Bilder NUR diese URLs verwenden):")
+        lines.append(
+            "ALLE importierten Medien (Original-Pfad → Medien-URL; bei Bildern den "
+           "angegebenen Alt-Text als Caption ![Alt-Text](URL) verwenden, falls "
+            "vorhanden, sonst eine passende selbst formulieren; für Bilder NUR "
+            "diese URLs verwenden):"
+        )
         lines.append("\n".join(entries[:300]))
     unresolved = [ref for ref in sorted(img_refs) if not _resolve_image_path(ref, image_map)]
-    if unresolved:
-        lines.append("NICHT importiert (Bild entfernen, Caption als Text behalten): " + ", ".join(unresolved[:50]))
+    with_content = [ref for ref in unresolved if cmaps.get(ref, "").strip()]
+    no_content = [ref for ref in unresolved if not cmaps.get(ref, "").strip()]
+    if with_content:
+        lines.append(
+            "NICHT importiert — INHALT an der Marker-Stelle übernehmen "
+            "(statt des Bildes; der Text enthält ggf. eine kurze Einleitung "
+            "und den vollständigen Inhalt als LaTeX/Markdown/Mermaid — "
+            "wortgetreu wiedergeben):"
+        )
+        for ref in with_content[:50]:
+            lines.append(f"  - {ref}:\n{cmaps[ref].strip()[:4000]}")
+    if no_content:
+        lines.append("NICHT importiert (Bild entfernen, Caption als Text behalten): " + ", ".join(no_content[:50]))
     return "\n".join(lines) or "(keine Medien importiert)"
+
+
+def _content_map(snap: dict) -> dict[str, str]:
+    """M3b: Marker-Pfad → Content (LaTeX/Markdown) von NICHT importierten
+    Bildern (Triage „ignore“ mit übernehmbarem Inhalt) — wird beim Generieren
+    an der Marker-Stelle integriert statt des Bildes.
+
+    Legacy: separates Feld „triage_content“. Seit Runde 3: der komplette
+    Inhalt steckt in der Beschreibung (erkennbar am Marker „Der Inhalt des
+    Bildes lautet:“); reine Design-Beschreibungen gehören NICHT hierher.
+    """
+    out: dict[str, str] = {}
+    for m in snap["manifest"] or []:
+        if m.get("type") not in ("image", "svg", "eps", "figure_pdf", "scan_figure"):
+            continue
+        if normalize_triage(m.get("triage")) != "ignore":
+            continue
+        content = str(m.get("triage_content") or "").strip()
+        if not content:
+            desc = str(m.get("triage_description") or "").strip()
+            if "Der Inhalt des Bildes lautet:" in desc:
+                content = desc
+        if content and m.get("path"):
+            out[m["path"]] = content
+    return out
 
 
 def _media_descriptions(snap: dict) -> dict[str, str]:
@@ -3195,6 +4544,18 @@ def _media_descriptions(snap: dict) -> dict[str, str]:
             if d:
                 out[path] = d
                 break
+    return out
+
+
+def _media_alt_texts(snap: dict) -> dict[str, str]:
+    """M3b+: Medien-Pfad → LLM-Caption (Alt-Text) aus der Triage — wird beim
+    Generieren als ![Alt-Text](URL)-Caption in Skript/Folien übernommen
+    (erscheint im Bild-Mapping des Prompts)."""
+    out: dict[str, str] = {}
+    for m in snap["manifest"] or []:
+        alt = str(m.get("triage_alt_text") or "").strip()
+        if alt and m.get("path"):
+            out[m["path"]] = alt
     return out
 
 
@@ -3275,9 +4636,19 @@ async def _generate_chapter(
     for p, info in snap["media_map"].items():
         if info.get("url"):
             url_map[p] = info["url"]
+    # Deterministisch: auflösbare Bildpfade im Quelltext direkt durch die
+    # Medien-URLs ersetzen (sonst sieht das LLM Staging-/LaTeX-Pfade und
+    # entfernt die Bilder statt sie zu mappen).
+    raw = _rewrite_image_urls(raw, url_map)
     # Nicht auflösbare Bildreferenzen: explizit melden (sonst fallen die Bilder
-    # still weg, wenn das LLM sie laut Prompt entfernt, und der User sieht es nicht)
-    unresolved_imgs = [r for r in sorted(img_refs) if not _resolve_image_path(r, url_map)]
+    # still weg, wenn das LLM sie laut Prompt entfernt, und der User sieht es
+    # nicht) — M3b: Bilder mit Triage-Content fallen nicht weg, der Content
+    # wird an der Marker-Stelle integriert (kein Warning).
+    ccontent = _content_map(snap)
+    unresolved_imgs = [
+        r for r in sorted(img_refs)
+        if not _resolve_image_path(r, url_map) and not ccontent.get(r, "").strip()
+    ]
     if unresolved_imgs:
         warns.append(
             f"Skript „{ch['title']}“: {len(unresolved_imgs)} Bildreferenz(en) nicht in den importierten "
@@ -3322,7 +4693,8 @@ async def _generate_chapter(
         res = await llm_service.import_convert_chapter(
             chapter_title=ch["title"],
             other_chapters=other_text,
-            image_map=_image_table(img_refs, url_map, media_descs or {}),
+            image_map=_image_table(img_refs, url_map, media_descs or {}, ccontent,
+                                   _media_alt_texts(snap)),
             references=references_text,
             source_text=raw,
             config=llm_cfg,
@@ -3751,11 +5123,12 @@ def _deck_source_sections(snap: dict, dk: dict) -> list[tuple[str, str]]:
 
 
 def _resolve_source_slides(import_id: int, dk: dict, staging: Path, by_path: dict) -> tuple[str, int]:
-    """(Prompt-Text, Anzahl) der Quell-Folien aus den pptx-Quellen des Decks.
+    """(Prompt-Text, Anzahl) der Quell-Folien aus den pptx-/PDF-Quellen des Decks.
 
-    Die Quellen des Decks zeigen auf pptx-Dateien mit Zeilenbereich (in den
-    Sidecar-.md, die „%% Folie N %%“-Marker enthalten); alle Folien, deren
-    Marker im Zeilenbereich liegt, werden 1:1 konvertiert.
+    Die Quellen des Decks zeigen auf pptx-Dateien oder PPT-Export-PDFs
+    (pdf_doc, M3) mit Zeilenbereich (in den Sidecar-.md, die
+    „%% Folie N %%“-Marker enthalten); alle Folien, deren Marker im
+    Zeilenbereich liegt, werden 1:1 konvertiert.
     Returns: ("(keine Quell-Folien …)", 0), falls das Deck keine auflösbaren
     Quell-Folien hat.
     """
@@ -3763,7 +5136,7 @@ def _resolve_source_slides(import_id: int, dk: dict, staging: Path, by_path: dic
     collected: list[tuple[int, str]] = []
     for src in dk.get("sources") or []:
         m = by_path.get(str(src.get("file") or ""))
-        if not m or m.get("type") != "pptx" or not m.get("read_path"):
+        if not m or m.get("type") not in ("pptx", "pdf_doc") or not m.get("read_path"):
             continue
         p = staging / m["read_path"]
         if not p.is_file():
@@ -3856,6 +5229,8 @@ async def _generate_deck(
                 f'=== Skript-Kapitel „{t}“ ===\n{c}' for t, c in section_parts if c.strip()
             )
         raw, img_refs, _has_tex = await asyncio.to_thread(_collect_sources, staging, dk, by_path)
+        # Deterministisch: auflösbare Bildpfade → Medien-URLs (s. _generate_chapter)
+        raw = _rewrite_image_urls(raw, url_map)
         # Roh bleibt roh: Das LLM konvertiert LaTeX/Markdown selbst (der Prompt erklärt
         # die Marker-Zeilen) — analog zum Skript-Import.
         if raw.strip():
@@ -3886,7 +5261,9 @@ async def _generate_deck(
     other_context = _deck_other_context(snap, course_id, dk.get("material_id"))
     script_labels = _extract_labels(section_content)
     ref_text = await asyncio.to_thread(_build_references_text, course_id)
-    image_map_text = _image_table(img_refs, url_map, media_descs or {})
+    image_map_text = _image_table(
+        img_refs, url_map, media_descs or {}, _content_map(snap), _media_alt_texts(snap)
+    )
 
     if not section_content.strip() and n_src_slides == 0:
         raise RuntimeError("Kein Quelltext für dieses Deck (Skript-Kapitel und Sources leer).")
@@ -4163,12 +5540,19 @@ def mark_interrupted_on_startup() -> None:
 
 
 def resolve_preview_path(course_id: int, import_id: int, path: str) -> Optional[Path]:
-    """Sichere Auflösung eines Preview-Pfads (strikt gegen Manifest, nur Medien)."""
+    """Sichere Auflösung eines Preview-Pfads (strikt gegen Manifest, nur
+    Medien; zusätzlich M3-Seiten-PNGs + transkribierte Sidecars)."""
     with Session(engine) as s:
         imp = s.get(CourseImport, import_id)
         if not imp or imp.course_id != course_id:
             return None
         staging = staging_dir(course_id, imp.job_id)
+        # M3: Seiten-PNGs + transkribiertes Sidecar (stehen nicht im Manifest)
+        if path.startswith("sidecars/") and path.lower().endswith((".png", ".md")):
+            p = (staging / path).resolve()
+            if not p.is_relative_to(staging.resolve()) or not p.is_file():
+                return None
+            return p
         m = next((x for x in (imp.manifest or []) if x.get("path") == path), None)
         if not m or m.get("type") not in ("image", "figure_pdf", "svg"):
             return None

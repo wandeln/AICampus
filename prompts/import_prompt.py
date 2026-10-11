@@ -35,6 +35,7 @@ Import-Erweiterungen (Vorrang vor der allgemeinen Führung oben):
 - {#sec:label} an JEDER Überschrift (##/###/####)
 - Medien: NUR URLs aus der Medien-Mapping-Tabelle verwenden; JEDER Abbildung eine passende
   Caption (Alt-Text) und ein Label geben: ![Caption](/media/…){#fig:label}
+  (im Bild-Mapping angegebener Alt-Text: EXAKT diesen verwenden)
 - JEDER Code-Block (auch Mermaid-Diagramme): Label + Caption auf der öffnenden Fence-Zeile:
   ```python {#code:label}[Caption]
 - JEDER Box ein Label UND eine [Caption] (beide Tokens auf derselben Zeile, in beliebiger
@@ -72,7 +73,8 @@ Import-Erweiterungen (Vorrang vor der allgemeinen Führung oben):
 SLIDE_FORMAT_SPEC = SLIDES_MARKDOWN_MANUAL + """\
 Import-Erweiterungen (Vorrang vor der allgemeinen Führung oben):
 - Medien: NUR Pfade aus der Medienliste verwenden; JEDER Abbildung eine passende Caption (Alt-Text)
-  und ein Label geben: ![Caption](/media/…){#fig:label}.
+  und ein Label geben: ![Caption](/media/…){#fig:label}
+  (im Bild-Mapping angegebener Alt-Text: EXAKT diesen verwenden).
   Ein eingebundenes Medium IMMER auch im Fließtext per @fig:label referenzieren.
 - JEDER Box eine [Caption] auf der @startbox:-Zeile (Name aus der Quelle, sonst kurz deskriptiv), z. B.
   @startbox:definition[Ableitung] {#box:ableitung}  →  Kopf „Definition N: Ableitung“.
@@ -346,7 +348,8 @@ Aufgabe:
   Ergebnis vorkommen.)
 - Verbleibendes LaTeX in Markdown/KaTeX konvertieren: \\section → ##, \\textbf → **,
   \\textit → *, Math in $...$/$$...$$, \\begin{itemize} → Markdown-Listen,
-  \\includegraphics/Bilder → ![Caption](URL) gemäß Bild-Mapping.
+  \\includegraphics/Bilder → ![Caption](URL) gemäß Bild-Mapping
+  (Caption: im Bild-Mapping angegebener Alt-Text, falls vorhanden).
 - LaTeX-Makros: Die Quelle kann eigene Makros definieren (\\newcommand, \\def).
   KaTeX kennt NUR Standard-Kommandos — ersetze JEDES solche Makro an JEDEM Vorkommen
   durch seine Definition. Die Definitionen stehen ggf. in einem der QUELLTEXT-Teile
@@ -356,12 +359,18 @@ Aufgabe:
   Beweis, Beispiel), JEDEM Code-Block, JEDER Tabelle und JEDER Abbildung ein eindeutiges
   Label geben; JEDER Box eine [Caption] auf der @startbox:-Zeile (Name aus der Quelle, sonst
   kurz deskriptiv) und Code-Blöcke, Tabellen und Abbildungen IMMER mit einer passenden
-  Caption versehen (im Original vorhanden: übernehmen, sonst kurz beschreibend formulieren).
+  Caption versehen (im Original vorhanden: übernehmen; Abbildungen sonst:
+  Alt-Text aus dem Bild-Mapping; andernfalls kurz beschreibend formulieren).
   WICHTIGE GLEICHUNGEN IMMER mit {#eq:label} labeln (direkt nach der $$…$$-Zeile, NIEMALS
   \\tag{…} in der Formel) — auch solche, die im Original NICHT gelabeled sind: zentrale
   Formeln, wichtige Definitionen/Identitäten und die Gleichungen aus Sätzen/Theoremen.
-- Wird ein Bild referenziert, dessen Pfad NICHT im Bild-Mapping steht: das Bild entfernen,
+- Wird ein Bild referenziert, dessen Pfad NICHT im Bild-Mapping steht:
+  zuerst die LINKE Spalte der Tabelle prüfen (Original-Pfade) — steht der
+  Pfad dort, ist das Bild importiert und MUSS über die Medien-URL (rechte
+  Spalte) eingebaut werden. Ist er dort wirklich nicht: das Bild entfernen,
   aber die Caption als normaler Text behalten.
+- Medien-URLs mit `.html`-Endung im Bild-Mapping sind Applets — wie Bilder an der
+  Position einbinden.
 - \\label{…}/\\ref{…}/\\eqref{…} gemäß den LABEL-REGELEN oben in {#…}-Labels und
   @…-Referenzen umwandeln (Label-Name 1:1 aus der Quelle, Prefix aus dem Kontext).
 - Beginne NICHT mit einer H1-Überschrift (der Kapiteltitel wird separat angezeigt).
@@ -510,14 +519,17 @@ Aufgabe:
   Marker vorgegeben — daran halten.
 - Ist die QUELLE rohes LaTeX: wandle NUR die Darstellung in Markdown/KaTeX um
   (\\section/\\subsection → Folientitel, \\textbf → **, \\textit → *, Math in $...$/$$...$$,
-  \\begin{itemize} → Bullets, \\includegraphics/Bilder → ![Caption](URL) gemäß Bild-Mapping,
+  \\begin{itemize} → Bullets, \\includegraphics/Bilder → ![Caption](URL) gemäß
+  Bild-Mapping (Caption: dortiger Alt-Text, falls angegeben),
   \\label/\\ref/\\eqref gemäß den LABEL-REGELEN oben in {#…}-Labels und @…-Referenzen
   umwandeln). Jedes eigene Makro der Quelle
   (\\newcommand/\\def) an JEDEM Vorkommen durch seine Definition ersetzen (KaTeX kennt NUR
   Standard-Kommandos; die Definitionen stehen ggf. in einem der QUELLE-Teile —
-  Preamble-Ausschnitt mit "%--- start"-Marker). Wird ein Bild referenziert, dessen Pfad
-  NICHT im Bild-Mapping steht:
-  das Bild entfernen, aber die Caption als Text behalten.
+  Preamble-Ausschnitt mit "%--- start"-Marker). Wird ein Bild referenziert,
+  dessen Pfad NICHT im Bild-Mapping steht: zuerst die LINKE Spalte der Tabelle
+  prüfen (Original-Pfade) — steht der Pfad dort, ist das Bild importiert und
+  MUSS über die Medien-URL (rechte Spalte) eingebaut werden; ist er dort
+  wirklich nicht: das Bild entfernen, aber die Caption als Text behalten.
 - WICHTIGE GLEICHUNGEN IMMER mit {#eq:label} labeln (direkt nach der $$…$$-Zeile) — auch
   solche, die im Original NICHT gelabeled sind (zentrale Formeln, wichtige Definitionen/
   Identitäten). Kommt dieselbe Gleichung in einem Skript-Kapitel vor: EXAKT das dortige
@@ -528,7 +540,11 @@ Aufgabe:
   geschweiften Klammern um den Key. Sonst das Zitat entfernen (den Text selbst behalten).
   NUR tatsächlich gelistete Keys verwenden, KEINE erfinden und keine neuen Zitate ergänzen.
 - Bilder: JEDER im Quelltext referenzierten Medien-URL aus dem Bild-Mapping muss im
-  Ergebnis vorkommen (an der Stelle, an der sie in der QUELLE vorkommt).
+  Ergebnis vorkommen (an der Stelle, an der sie in der QUELLE vorkommt);
+  JEDER Abbildung den im Bild-Mapping angegebenen Alt-Text als Caption geben
+  (falls vorhanden), sonst eine passende Caption formulieren.
+  Medien-URLs mit `.html`-Endung im Bild-Mapping sind Applets — wie Bilder an der
+  Position einbinden.
 - Vor dem Absenden prüfen: Deckt das Deck ALLE Abschnitte, Boxen und Bilder der QUELLE ab?
   (Anzahl von Boxen/Bildern mit der QUELLE vergleichen; im 1:1-Modus: eine Quellfolie =
   eine Ziel-Folie — keine Folie fehlt oder ist doppelt vorhanden.)
@@ -646,4 +662,151 @@ Antworte NUR mit einem JSON-Objekt — exakt eine der Aktionen:
 
 DEINE AKTIONEN BISHER (Tool-Calls + Ergebnisse):
 __STEPS__"""
+
+
+# ─── 8. PDF-Seiten-Transkription (Vision, M3) ──────────────────────────
+
+PAGE_TRANSCRIBE_PROMPT_TEMPLATE = _SECURITY + """
+Du bist ein Transkriptions-Assistent für den Kurs-Material-Import eines Lehr-Systems.
+Das angehängte BILD ist Seite __PAGE_NO__ von __PAGE_COUNT__ eines PDFs
+(Vorlesungs-Skript, handschriftliche Notizen oder exportierte Folien).
+
+AUFGABE 1 — TRANSKRIPTION (WORTGETREU, keine Zusammenfassung):
+Wandle den kompletten Inhalt der Seite in Markdown um:
+- Formulierung, Reihenfolge und ORIGINALSPRACHE behalten — NICHT übersetzen, NICHT
+  zusammenfassen, nichts weglassen oder ergänzen.
+- Überschriften als ## (bzw. tiefer), Listen als -, Tabellen als Markdown-Tabellen.
+- ALLE Formeln als KaTeX: inline $…$, als eigene Zeile $$…$$ (NUR Standard-LaTeX-
+  Kommandos).
+- Unleserliche/unsichere Stellen (Handschrift!): bestmöglich transkribieren,
+  unsichere Fragmente mit ⟨…⟩ markieren.
+- Ist die Seite leer: "markdown": "".
+
+AUFGABE 2 — SEITENTYP (layout):
+Wirkt die Seite wie eine FOLIE (kürzer Titel + Stichpunkte, kein Fließtext) →
+"layout": "slides" und das Markdown gliedern Folien-artig: Titel als erste Zeile,
+danach die Bullets (KEINE zusätzliche ##-Überschrift für den Folienvortitel).
+Normale Dokumentseiten: "layout": "text".
+
+AUFGABE 3 — EINGEBETTETE BILDER (Triage):
+Das PDF enthält auf dieser Seite die unten gelisteten Bilder. Entscheide pro Bild
+GENAU EINE Empfehlung:
+- "import": echte, wertvolle Abbildung, die als BILD gebraucht wird
+  (Abbildung, Diagramm, Foto, Graph, Kollage, QR-Code, Illustration) →
+  SETZE den Token [[IMG:idx]] an die entsprechende Stelle im Markdown +
+  "title" (kurzer Bildname) + "description" (1-2 Sätze: Inhalt/Zweck).
+  IM ZWEIFELSFALL „import“.
+- "applet": wertvolle Abbildung, die als INTERAKTIVES HTML-APPLET sinnvoll
+  wiedergegeben werden würde (z.B. technische Skizze, die sauber neu gezeichnet
+  werden kann) → SETZE den Token [[IMG:idx]] an die Stelle + "title" +
+  "description" als Anweisung, welches Applet aus dem Bild erzeugt werden soll
+  (Inhalt, Typ, Achsen/Beschriftungen).
+- "ignore": Bild NICHT als Abbildung übernehmen, NUR wenn
+  * der Inhalt VOLLSTÄNDIG in Text übernehmbar ist: Formel/Gleichungen →
+    SELBST als $…$/$$…$$ an der Stelle im Markdown;
+    Tabelle/Text/Flussgraph → SELBST als Markdown an der Stelle (Tabelle mit
+    ALLEN Zeilen). Kannst du den Inhalt nicht vollständig und sicher
+    wiedergeben → NICHT „ignore“, sondern „import“.
+  * oder es reines Design ist: Deko/Styling/Hintergrund/Logos/Wasserzeichen/
+    technische Artefakte (z.B. aus PowerPoint-Export) → einfach weglassen.
+  KEIN Token für "ignore".
+  Sonderregel: Ein Bild mit Lage „ganze Seite“ ist der Scan der Seite selbst →
+  „ignore“. (Nur eine wirklich ganztseitige Abbildung auf einer Folie ist „import“.)
+Jedes Bild braucht genau einen Eintrag mit kurzem "reason" (1 Satz).
+Für Bilder, die NICHT in der BILD-LISTE stehen, darfst du KEINE Tokens verwenden.
+
+AUFGABE 4 — ZEICHNERISCHE ABILDBILDER IM SEITENBILD (v.a. Scans!):
+Abbildungen, die im Seitenbild selbst gezeichnet/handgeschrieben sind (Skitzen,
+Diagramme, Graphen, Fotos) und NICHT in der BILD-LISTE vorkommen:
+- Token [[FIG:n]] an der Textposition setzen (n = laufende Nummer in
+  Lese-Reihenfolge: oben→unten, links→rechts, beginnend bei 1).
+- Zusätzlich in "figures" erfassen: {"idx": n, "caption": "…", "position": "…",
+  "bbox": [x0, y0, x1, y1]} —
+  * "position" = Lagebeschreibung im Seitenlayout (z.B. „Graph oben rechts",
+    „Figure 2 in der Mitte“).
+  * "bbox" = GROBE achsenparallele Umrandung der Abbildung im Seitenbild in
+    relativen Koordinaten 0-1000 (0,0 = oben links; 1000,1000 = unten
+    rechts), die Abbildung vollständig einschließend (lieber etwas
+    großzügiger als zu eng).
+
+BILD-LISTE (idx · Lage auf der Seite · Größe):
+__IMAGE_LIST__
+
+TEXTSCHICHT (exportierter Text der Seite — VERBATIM-ANKER für deine Transkription:
+nutze sie für exakte Schreibweisen, Zahlen und Formeln! Widerspricht das Bild der
+Textschicht, GILT DAS BILD):
+__TEXT_LAYER__
+
+Antworte NUR mit einem JSON-Objekt:
+{
+  "layout": "text" oder "slides",
+  "markdown": "…komplettes Markdown der Seite (mit [[IMG:idx]]/[[FIG:n]]-Tokens) …",
+  "figures": [{"idx": 1, "caption": "…", "position": "…", "bbox": [x0, y0, x1, y1]}],
+  "images": [{"idx": 1, "recommendation": "import|applet|ignore", "title": "…",
+              "caption": "…", "description": "…", "reason": "…"}]
+}
+- "images": EXAKT EIN Eintrag pro Bild der BILD-LISTE (gleiche idx-Werte).
+- "title"/"description" bei "import"/"applet" ausfüllen; bei "ignore":
+  1-Satz-"description", was der Inhalt/das Element ist (bei übernehmbarem
+  Inhalt: was für ein Inhalt es ist, z.B. „Formel: Euler-Identität").
+- "caption" bei "import"/"applet": passender Alt-Text (1 kurze Zeile, max.
+  ~15 Wörter, Originalsprache) — was das Bild zeigt; bei "ignore": "" (leer).
+- "figures": [] falls keine zeichnerischen Abbildungen.
+- Tokens NUR im "markdown"-Feld, nie anderswo."""
+
+
+# ─── 9. Eingebettete Bilder: Triage (Vision, M3b) ───────────────────
+
+IMAGE_TRIAGE_PROMPT_TEMPLATE = _SECURITY + """
+Du bist ein Assistent für den Kurs-Material-Import eines Lehr-Systems.
+Das angehängte BILD ist eine eingebettete Grafik aus der Vorlesungsdatei
+„__FILE_NAME__“.
+
+UMFELD (wo das Bild eingebettet ist — hilft bei Caption und Entscheidung):
+__CONTEXT__
+
+Entscheide, was mit dem Bild geschehen soll, und liefere Metadaten:
+- "recommendation": GENAU EINE von
+  - "import": Abbildung, die im Skript/in den Slides als BILD gebraucht wird:
+    Diagramm, Figur, Graph, Foto, Chart, Kollage, QR-Code, technische Skizze,
+    Illustration, schematische Darstellung …
+    IM ZWEIFELSFALL „import“ wählen — ein zu viel importiertes Bild ist besser
+    als ein fehlender Inhalt.
+  - "applet": wertvolle Abbildung, die als INTERAKTIVES HTML-APPLET sinnvoll
+    wäre (z.B. technische Skizze/Schaltplan, Diagramm, Funktionsgraph,
+    Geometrie) → wird per LLM aus dem Bild als Applet erzeugt.
+  - "ignore": Bild NICHT importieren, NUR wenn
+    * es reines Design ist: Logo, Hintergrund, Deko, Wasserzeichen,
+      Icon/Button ohne Inhalt, technisches Artefakt (z.B. aus
+      PowerPoint-Export); ODER
+    * sein Inhalt VOLLSTÄNDIG in Text übernehmbar ist: Formel/Gleichungen,
+      Tabelle, Text, einfacher Fluss-/Zustandsgraph.
+    WICHTIG: Kannst du den Inhalt nicht vollständig und sicher in
+    Markdown/LaTeX/Mermaid wiedergeben (z.B. komplexes Diagramm, viele Werte,
+    Handgezeichnetes) → NICHT „ignore“, sondern „import“.
+- "title": 2-6 Wörter, was das Bild ist (bei "ignore": was für ein Element es
+  ist, z.B. „Titelfolien-Logo“ oder „Formel: Euler-Identität“).
+- "caption": PASSENDER ALT-TEXT/Caption für das Bild im Markdown/in den
+  Folien — 1 kurze Zeile (max. ~15 Wörter) in der ORIGINALSPRACHE des
+  Materials, was die Abbildung zeigt (wie eine Bildunterschrift, z. B.
+  „Venn-Diagramm: ML als Teilmenge von AI“). Bei "applet": Caption für das
+  daraus erzeugte Applet. Bei "ignore": "" (leer).
+- "description":
+  * Bei "import": 1-3 Sätze Inhalt + Zweck.
+  * Bei "applet": konkrete ANWEISUNG für die Applet-Erzeugung (Art des
+    Applets, Inhalt, Achsen/Beschriftungen, Verhalten).
+  * Bei "ignore" mit vollständig übernehmbarem Inhalt: zuerst 1-2 Sätze,
+    was der Inhalt ist, DANN der komplette Inhalt WORTGETREU in Markdown
+    (Formeln als LaTeX $…$/$$…$$, Tabellen als Markdown-Table mit ALLEN
+    Zeilen, Text als Markdown, einfache Graphen als mermaid-Code) —
+    getrennt durch einen Zeilenumbruch und die Überschrift
+    „Der Inhalt des Bildes lautet:“. Diese Beschreibung ersetzt das Bild
+    direkt im Skript/in den Slides; sie muss so vollständig sein, dass das
+    Bild NICHT mehr gebraucht wird (keine Zusammenfassung, kein Auszug).
+  * Bei "ignore" für reines Design: 1 Satz, was für ein Element es ist.
+- "reason": 1 Satz Begründung der Empfehlung.
+
+Antworte NUR mit einem JSON-Objekt:
+{"recommendation": "import|applet|ignore", "title": "…", "caption": "…",
+ "description": "…", "reason": "…"}"""
 

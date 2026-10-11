@@ -17,8 +17,12 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Dependencies zuerst (Bilde-Cache)
+# libcairo2: System-Bibliothek für cairosvg (SVG-Rasterung im Import)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libcairo2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir -r requirements.txt
 
 # Code
 COPY . .

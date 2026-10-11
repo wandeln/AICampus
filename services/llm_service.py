@@ -58,6 +58,8 @@ from prompts.import_prompt import (
     SLIDE_DECK_PROMPT_TEMPLATE,
     GATHER_PROMPT_TEMPLATE,
     REF_EXTRACT_PROMPT_TEMPLATE,
+    PAGE_TRANSCRIBE_PROMPT_TEMPLATE,
+    IMAGE_TRIAGE_PROMPT_TEMPLATE,
     DECK_SUMMARY_PROMPT_TEMPLATE,
     SCRIPT_FORMAT_SPEC,
     SLIDE_FORMAT_SPEC,
@@ -1564,6 +1566,72 @@ class LLMService:
             deck_content=deck_content,
         )
         return await self._call_plain(prompt, config=config)
+
+    async def import_transcribe_page_image(
+        self,
+        image_base64: str,
+        mime_type: str,
+        text_layer: str,
+        page_no: int,
+        page_count: int,
+        pdf_images: list[dict],
+        config: Optional[dict] = None,
+    ):
+        """M3: Vision-Transkription einer PDF-Seite (Markdown + Bild-Triage).
+
+        pdf_images: M2-Liste [{idx, pfad, position, width_px, height_px}] —
+        das LLM triagt jedes Bild (import/applet/ignore, M3b-Schema) im
+        selben Call.
+        Base64 wird nie geloggt (_call_with_json loggt nur den Prompt).
+        """
+        image_list = "\n".join(
+            f"{i}. idx={im.get('idx')} · Lage: {im.get('position') or 'unbekannt'} · "
+            f"{im.get('width_px') or '?'}×{im.get('height_px') or '?'} px"
+            for i, im in enumerate(pdf_images or [], 1)
+        ) or "(keine Bilder auf dieser Seite)"
+        prompt = self._render_prompt(
+            PAGE_TRANSCRIBE_PROMPT_TEMPLATE,
+            page_no=page_no,
+            page_count=page_count,
+            text_layer=(text_layer or "(Seite hat keine Textschicht — vom Bild transkribieren)").strip(),
+            image_list=image_list,
+        )
+        return await self._call_with_json(
+            prompt,
+            response_format={"type": "json_object"},
+            config=config,
+            max_tokens=8000,
+            images=[f"data:{mime_type};base64,{image_base64}"],
+        )
+
+    async def import_triage_image(
+        self,
+        image_base64: str,
+        mime_type: str,
+        file_name: str,
+        context: str,
+        config: Optional[dict] = None,
+    ):
+        """M3b: Vision-Triage EINER eingebetteten Grafik (1 Call pro unikatem
+        Bild). Liefert {"recommendation": import|applet|ignore, "title",
+        "description", "reason"}.
+        Bei "ignore" mit übernehmbarem Inhalt steckt der komplette Bildinhalt
+        (Markdown/LaTeX/Mermaid) direkt in der "description".
+
+        Base64 wird nie geloggt (_call_with_json loggt nur den Prompt).
+        """
+        prompt = self._render_prompt(
+            IMAGE_TRIAGE_PROMPT_TEMPLATE,
+            file_name=file_name or "Vorlesungsdatei",
+            context=(context or "(kein Kontext verfügbar)").strip(),
+        )
+        return await self._call_with_json(
+            prompt,
+            response_format={"type": "json_object"},
+            config=config,
+            max_tokens=2000,
+            images=[f"data:{mime_type};base64,{image_base64}"],
+        )
 
     # ── Private call methods ───────────────────────────────────
 

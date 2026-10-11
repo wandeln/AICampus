@@ -736,8 +736,7 @@
 
     let state = null;          // aktueller Import-State (null = kein Import)
     let pollTimer = null;
-    let mediaSel = null;       // Set: ausgewählte Medien-Pfade
-    let mediaKnownPaths = new Set(); // Medien, die der Auswahl schon bekannt waren
+    let mediaFilter = 'all';   // M3b: Filter nach Empfehlung (all|import|applet|ignore)
     let refSel = null;         // Set: ausgewählte Quellen-Keys
     let refKnownKeys = new Set();    // Quellen-Keys, die der Auswahl schon bekannt waren
     let deleteOriginal = null; // null = Default (true); Checkbox-Status Folien
@@ -783,6 +782,11 @@
       return d.innerHTML;
     }
 
+    // esc + Doppel-Quotes (für value="/data-*-Attribute)
+    function escAttr(s) {
+      return esc(s).replace(/"/g, '&quot;');
+    }
+
     function fmtBytes(n) {
       if (n == null) return '';
       if (n < 1024) return n + ' B';
@@ -809,8 +813,9 @@
           if (ns) {
             const prev = state;
             if (!prev) {
-              // Erstes Laden: alte Auswahl aus einem zuvor gelöschten Import verwerfen
-              mediaSel = null;
+              // Erstes Laden: alte Filter/Auswahl aus einem zuvor gelöschten
+              // Import verwerfen
+              mediaFilter = 'all';
               refSel = null;
             } else {
               // Neu laufende Stufe → zugehöriger Abschnitt automatisch öffnen
@@ -1154,7 +1159,28 @@
       </details>`;
     }
 
-    // ─── Abschnittsinhalte ──────────────────────────────────────────
+    // ─── Abschnittsinhalte ────────────────────────────────
+
+    // M3: PDF-Transkriptions-Toggle. Fallback (50) spiegelt
+    // IMPORT_TRANSCRIBE_AUTO_MAX_PAGES — er gilt nur, solange das Backend
+    // das Report-Flag noch nicht geschrieben hat (vor dem ersten
+    // filemap-Lauf). Ein Seiten-Cap gibt es nicht mehr (alle Seiten).
+    function transcribeBlock(st) {
+      const manifest = st.manifest || [];
+      const pdfs = manifest.filter((m) => m.type === 'pdf_doc' && m.pages);
+      if (!pdfs.length) return '';
+      const total = pdfs.reduce((a, m) => a + m.pages, 0);
+      const t = (st.report && st.report.transcribe) || null;
+      const enabled = t ? !!t.enabled : (total <= 50);
+      const busy = st.filemap_status === 'running' || st.filemap_status === 'paused';
+      return `<div class="mt-3 flex items-start gap-2">
+        <input type="checkbox" id="transcribe-cb" ${enabled ? 'checked' : ''} ${busy ? 'disabled' : ''} class="accent-blue-600 mt-0.5">
+        <label for="transcribe-cb" class="text-xs ${busy ? 'text-gray-400' : 'text-gray-600 cursor-pointer'}">
+          PDF-Seiten transkribieren (Vision-LLM, inkl. Bild-Triage — ${total} S.)
+          ${busy ? ' <span class="text-gray-400">(läuft — Änderungen greifen beim nächsten Lauf)</span>' : ''}
+        </label>
+      </div>`;
+    }
 
     function filemapPanel(st) {
       const p = st.filemap_status;
@@ -1168,10 +1194,12 @@
         const nText = manifest.filter((m) => m.read_path).length;
         const nMedia = manifest.filter((m) => ['image', 'figure_pdf', 'svg', 'eps'].includes(m.type)).length;
         const nBib = manifest.filter((m) => m.type === 'bib').length;
-        const nOther = manifest.length - nText - nMedia - nBib;
+        const nFig = manifest.filter((m) => m.type === 'scan_figure').length;
+        const nOther = manifest.length - nText - nMedia - nBib - nFig;
         let html = `<div class="text-sm text-green-700">
-          ✓ Analyse abgeschlossen: ${nText} Text-Datei(en), ${nMedia} Medium/Medien${nBib ? ', ' + nBib + ' BibTeX-Datei(en)' : ''}${nOther ? ', ' + nOther + ' ignoriert' : ''}.</div>`;
+          ✓ Analyse abgeschlossen: ${nText} Text-Datei(en), ${nMedia} Medium/Medien${nFig ? ', ' + nFig + ' gescannte Figur/en' : ''}${nBib ? ', ' + nBib + ' BibTeX-Datei(en)' : ''}${nOther ? ', ' + nOther + ' ignoriert' : ''}.</div>`;
         html += fileList(st);
+        html += transcribeBlock(st);
         html += delHtml;
         return html;
       }
@@ -1191,25 +1219,32 @@
       const fmap = st.file_map || {};
       const rows = textFiles.map((m) => {
         const u = units['filemap:' + m.path] || {};
+        // M3: während der Transkription zeigt die scan-Unit den Fortschritt
+        // (Seiten), danach die Digest-Chunk-Unit.
+        const su = units['filemap:scan:' + m.path] || {};
         const fe = fmap[m.path] || {};
-        const total = u.total || 0;
-        const done = u.done || 0;
+        const scanning = m.type === 'pdf_doc' && (su.total || 0) > 0 && (su.done || 0) < (su.total || 0);
+        const total = scanning ? su.total : (u.total || 0);
+        const done = scanning ? (su.done || 0) : (u.done || 0);
         let status;
         if (fe.status === 'done') status = '<span class="text-green-600">✓</span>';
         else if (fe.status === 'error') status = `<span class="text-red-600" title="${esc(fe.error || '')}">✕</span>`;
-        else if (done > 0 && total) status = `<span class="text-blue-600">${done}/${total}</span>`;
+        else if (done > 0 && total) status = scanning
+          ? `<span class="text-blue-600">${done}/${total} S.</span>`
+          : `<span class="text-blue-600">${done}/${total}</span>`;
         else status = '<span class="text-gray-400">…</span>';
         const pctW = total ? Math.round((done / total) * 100) : 0;
         return `<div class="flex items-center gap-2">
           <span class="text-xs text-gray-700 truncate flex-1" title="${esc(m.path)}">${esc(m.path)}</span>
           <div class="w-24 bg-gray-200 rounded-full h-1"><div class="bg-blue-500 h-1 rounded-full" style="width:${pctW}%"></div></div>
-          <span class="text-xs w-8 text-right">${status}</span>
+          <span class="text-xs ${scanning ? 'whitespace-nowrap' : 'w-8'} text-right">${status}</span>
         </div>`;
       }).join('');
 
       return `<div>
         <p class="text-xs text-gray-500 mb-2">${esc(cur)}</p>
         <div id="filemap-progress" class="space-y-1 max-h-48 overflow-y-auto pr-1">${rows}</div>
+        ${transcribeBlock(st)}
         ${delHtml}
       </div>`;
     }
@@ -1229,12 +1264,24 @@
           badge = `<span class="text-blue-600 text-[11px] whitespace-nowrap">🖼️ Medium</span>`;
         } else if (m.type === 'bib') {
           badge = `<span class="text-purple-600 text-[11px] whitespace-nowrap">📚 BibTeX</span>`;
+        } else if (m.type === 'scan_figure') {
+          badge = `<span class="text-teal-600 text-[11px] whitespace-nowrap" title="Gescannte Figur — in der Medien-Stufe extrahierbar">📐 Figur</span>`;
         } else {
           badge = `<span class="text-gray-400 text-[11px] whitespace-nowrap">– ignoriert</span>`;
         }
-        // M1: PDF-Info-Zeile (Seiten, Seiten ohne Textschicht, eingebettete Bilder)
+        // M1/M3: PDF-Info-Zeile (Seiten, ohne Text, Bilder, Transkriptions-Status)
+        let scanInfo = '';
+        if (m.type === 'pdf_doc') {
+          const pagesArr = (fmap[m.path] || {}).pages;
+          if (pagesArr && pagesArr.length) {
+            const nDone = pagesArr.filter((p) => p && p.status === 'done').length;
+            const nErr = pagesArr.filter((p) => p && p.status === 'error').length;
+            scanInfo = (nDone ? ` · ${nDone} transkribiert` : '') + (nErr ? ` · ${nErr} ⚠` : '');
+          }
+        }
         const pdfInfo = (m.type === 'pdf_doc' && m.pages)
-          ? `<span class="text-[10px] text-gray-400 whitespace-nowrap" title="PDF-Dokument">${m.pages} S.${m.no_text_pages ? ` · ${m.no_text_pages} ohne Text` : ''}${m.embedded_images ? ` · ${m.embedded_images} Bilder` : ''}</span>`
+          ? `<span class="text-[10px] text-gray-400 whitespace-nowrap" title="PDF-Dokument">${m.pages} S.${m.no_text_pages ? ` · ${m.no_text_pages} ohne Text` : ''}${m.embedded_images ? ` · ${m.embedded_images} Bilder` : ''}${scanInfo}</span>
+            <a href="${API}/preview?path=${encodeURIComponent('sidecars/' + m.path + '.md')}" target="_blank" class="text-[10px] text-blue-600 hover:underline whitespace-nowrap" title="Transkript des PDFs ansehen (Qualitätsprüfung)">📄 Transkript</a>`
           : '';
         const delBtn = st.has_active
           ? ''
@@ -1302,18 +1349,100 @@
     function mediaItems(st) {
       return (st.manifest || []).filter((m) =>
         m.type === 'image' || m.type === 'figure_pdf' || m.type === 'svg' || m.type === 'eps'
+        || m.type === 'scan_figure'
         || m.path.toLowerCase().endsWith('.svg') || m.path.toLowerCase().endsWith('.eps'));
+    }
+
+    // ── M3b: Triage-Helfer (Hash-Gruppierung, Normalisierung, Filter) ──
+
+    function normTriage(t) {
+      t = (t || 'unbekannt').toLowerCase();
+      if (t === 'keep' || t === 'import') return 'import';
+      if (t === 'applet') return 'applet';
+      if (t === 'latex' || t === 'noise' || t === 'ignore') return 'ignore';
+      return 'unbekannt';
+    }
+
+    // Gleiche Grafik (gleicher Content-Hash) auf mehreren Folien/Dateien =
+    // eine Karte (Pfade = „sources“); ohne Hash = pro Pfad eine Karte.
+    function mediaGroups(st) {
+      const byKey = new Map();
+      for (const m of mediaItems(st)) {
+        const key = m.hash || m.path;
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push(m);
+      }
+      return Array.from(byKey.values()).map((members) => ({
+        key: members[0].hash || members[0].path,
+        paths: members.map((m) => m.path),
+        members,
+      }));
+    }
+
+    // Runde 3: kein „untriagt“ mehr — ungetriagte Einträge (EPS/Legacy)
+    // sind per Default Import.
+    function itemRec(m) {
+      const r = normTriage(m.triage);
+      return r === 'unbekannt' ? 'import' : r;
+    }
+
+    // Gruppen-Empfehlung: bester Wert (import > applet > ignore)
+    function groupRec(g) {
+      const recs = g.members.map((m) => itemRec(m));
+      if (recs.includes('import')) return 'import';
+      if (recs.includes('applet')) return 'applet';
+      return 'ignore';
+    }
+
+    // Anzeigefelder der Gruppe: erstes nicht-leeres Feld der Mitglieder
+    function groupMeta(g) {
+      const first = (f) => g.members.map((m) => m[f]).find((v) => (v || '').trim()) || '';
+      return {
+        title: first('triage_caption'),
+        description: first('triage_description'),
+        reason: first('triage_reason'),
+        rec: groupRec(g),
+      };
+    }
+
+    function mediaFilterRow(st, groups) {
+      const n = (r) => groups.filter((g) => groupRec(g) === r).length;
+      const btn = (f, label, count) =>
+        `<button data-act="media-filter" data-filter="${f}" class="px-2 py-0.5 rounded-full text-xs ${mediaFilter === f ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}">${label} (${count})</button>`;
+      return `<div class="flex gap-1.5 flex-wrap mb-2">
+        ${btn('all', 'Alle', groups.length)}
+        ${btn('import', '✓ Import', n('import'))}
+        ${btn('applet', '📐 Applet', n('applet'))}
+        ${btn('ignore', '📝 Nur Beschreibung', n('ignore'))}
+      </div>`;
+    }
+
+    function renderMediaGrid() {
+      const el = document.getElementById('media-grid');
+      if (el && state) el.innerHTML = mediaGridHTML(state, mediaGroups(state), true);
+      const fr = document.getElementById('media-filter-row');
+      if (fr && state) fr.innerHTML = mediaFilterRow(state, mediaGroups(state));
+    }
+
+    async function saveMediaTriage(path, fields) {
+      try {
+        await api('/media/triage', { method: 'POST', body: JSON.stringify(Object.assign({ path }, fields)) });
+        await refresh();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
     }
 
     function mediaPanel(st) {
       if (st.filemap_status !== 'done') return '';
       const p = st.media_status;
       const items = mediaItems(st);
+      const groups = mediaGroups(st);
 
       if (p === 'running' || p === 'paused' || p === 'interrupted') {
         return `<div>
           <p class="text-xs text-gray-500 mb-2">${esc((st.progress && st.progress.current) || '…')}</p>
-          ${mediaGridHTML(st, items, false)}
+          ${mediaGridHTML(st, groups, false)}
         </div>`;
       }
 
@@ -1323,16 +1452,9 @@
         <div class="mt-2"><button data-act="media-skip" class="border border-gray-300 text-gray-600 px-3 py-1.5 rounded-lg text-sm hover:bg-gray-100">Überspringen</button></div></div>`;
       }
 
-      // Default-Auswahl: zuletzt gespeicherte Auswahl (media_options), sonst alle.
-      // Neu hinzugekommene Dateien (z.B. aus weiterer Zip) sind per Default angehakt.
-      if (mediaSel === null) {
-        const opts = (st.report && st.report.media_options && st.report.media_options.paths) || null;
-        mediaSel = new Set(opts || items.map((m) => m.path));
-        mediaKnownPaths = new Set(items.map((m) => m.path));
-      }
-      for (const m of items) {
-        if (!mediaKnownPaths.has(m.path)) { mediaKnownPaths.add(m.path); mediaSel.add(m.path); }
-      }
+      // Runde 3: Das Dropdown je Medium ist die einzige Quelle der Wahrheit
+      // (keine Checkboxen/Auswahl mehr) — beim Importieren werden alle
+      // Medien mit Empfehlung Import/Applet übernommen.
       const mm = st.media_map || {};
       const imported = items.filter((m) => (mm[m.path] || {}).url).length;
       const failed = items.filter((m) => { const e = mm[m.path]; return e && !e.url && e.error; }).length;
@@ -1345,29 +1467,29 @@
       } else if (p === 'skipped') {
         html += `<div class="text-sm text-gray-500 mb-2">Medien-Import übersprungen — unten können Medien nachträglich importiert werden.</div>`;
       } else {
-        html += `<div class="flex items-center justify-between mb-2">
-          <h3 class="text-sm font-semibold text-gray-700">Medien auswählen <span class="text-gray-400 font-normal">(${items.length} gefunden, Default: alle)</span></h3>
-          <div class="flex gap-3 text-xs">
-            <button data-act="media-all" class="text-blue-600 hover:underline">alle</button>
-            <button data-act="media-none" class="text-blue-600 hover:underline">keine</button>
-          </div>
+        html += `<div class="mb-2">
+          <h3 class="text-sm font-semibold text-gray-700">Medien-Triage <span class="text-gray-400 font-normal">(${groups.length} Medien — Dropdown je Medium)</span></h3>
         </div>`;
       }
-      html += mediaGridHTML(st, items, true);
-      // Stabile Action-Kontainer-ID: die Checkbox-Handler rendern die Buttons
-      // live neu, damit der Button bei Auswahl 0 → >0 auch (wieder) erscheint.
+      html += `<div id="media-filter-row">${mediaFilterRow(st, groups)}</div>`;
+      html += `<div class="flex justify-end -mt-1 mb-1">
+        <button data-act="media-retriage" class="text-[11px] text-gray-400 hover:text-blue-600 underline"
+                title="Setzt die LLM-Empfehlungen für alle noch nicht importierten Medien zurück und lässt die Dateianalyse idempotent neu laufen (Neu-Triage — z.B. nach Prompt-Verbesserungen oder um Bilder neu einstufen zu lassen).">⟲ Triage neu ausführen</button>
+      </div>`;
+      html += `<div id="media-grid">${mediaGridHTML(st, groups, true)}</div>`;
       html += `<div id="media-actions">${mediaActionsHTML(st)}</div>`;
       html += '</div>';
       return html;
     }
 
-    // Import-Button(-Zeile) der Medien-Sektion; todo wird live aus der
-    // aktuellen Auswahl berechnet.
+    // Import-Button(-Zeile) der Medien-Sektion; die Dropdown-Empfehlung ist
+    // die einzige Quelle der Wahrheit (Runde 3: kein Counter/keine Checkboxen).
     function mediaActionsHTML(st) {
       const mm = st.media_map || {};
-      const todo = mediaItems(st).filter((m) => (mediaSel || new Set()).has(m.path) && !(mm[m.path] || {}).url).length;
+      const todo = mediaItems(st).filter((m) =>
+        (itemRec(m) === 'import' || itemRec(m) === 'applet') && !(mm[m.path] || {}).url).length;
       if (!todo) return '';
-      const label = st.media_status === 'done' ? `Weitere Medien importieren (${todo})` : `Medien importieren (${todo})`;
+      const label = st.media_status === 'done' ? 'Weitere Medien importieren' : 'Medien importieren';
       let h = `<div class="flex gap-2 mt-3">
         <button data-act="media-start" class="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-blue-700 font-semibold">${label}</button>`;
       if (st.media_status === 'pending') {
@@ -1376,18 +1498,29 @@
       return h + '</div>';
     }
 
-    function mediaGridHTML(st, items, editable) {
+    function mediaGridHTML(st, groups, editable) {
+      const shown = groups.filter((g) => mediaFilter === 'all' || groupRec(g) === mediaFilter);
+      if (!shown.length) return '<div class="text-xs text-gray-400">Keine Medien in dieser Filter-Kategorie.</div>';
       const mm = st.media_map || {};
       return `<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-96 overflow-y-auto pr-1">
-        ${items.map((m) => mediaCard(m, mm[m.path], editable)).join('')}
+        ${shown.map((g) => mediaGroupCard(g, mm, editable)).join('')}
       </div>`;
     }
 
-    function mediaCard(m, e, editable) {
+    function mediaGroupCard(g, mm, editable) {
+      const m = g.members[0]; // Thumbnail/Größe aus dem ersten Mitglied
+      const meta = groupMeta(g);
       const url = API + '/preview?path=' + encodeURIComponent(m.path);
-      const imported = !!(e && e.url);
-      const failed = !!(e && !e.url && e.error);
-      const checked = editable && !imported && (mediaSel ? mediaSel.has(m.path) : true);
+      const imported = g.paths.some((p) => (mm[p] || {}).url);
+      const failedMember = g.members.find((x) => { const e = mm[x.path]; return e && !e.url && e.error; });
+      const failed = !!failedMember;
+      // Runde 3: Das eingefärbte Dropdown ist die einzige Quelle der Wahrheit
+      // (keine Checkbox/Badge mehr); Einfärbung analog zum Rollen-Dropdown in
+      // course/members.html.
+      const rec = imported ? null : meta.rec;
+      const recCls = rec === 'import' ? 'border-green-200 bg-green-50 text-green-700'
+        : rec === 'applet' ? 'border-blue-200 bg-blue-50 text-blue-700'
+        : 'border-amber-200 bg-amber-50 text-amber-700';
       // Effektiver Medientyp (Extension-Fallback für altes Manifest)
       const t = (m.path.toLowerCase().endsWith('.svg') || m.type === 'svg') ? 'svg'
         : (m.path.toLowerCase().endsWith('.eps') || m.type === 'eps') ? 'eps'
@@ -1397,25 +1530,41 @@
         : t === 'figure_pdf'
           ? `<iframe src="${url}" title="PDF-Vorschau" class="w-full h-24 bg-white" loading="lazy"></iframe>`
           : `<div class="w-full h-24 flex items-center justify-center bg-gray-100 text-[11px] text-gray-400">EPS — Vorschau n. V.</div>`;
-      let badge;
-      if (imported) badge = `<span class="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-700 whitespace-nowrap">✓ importiert</span>`;
-      else if (failed) badge = `<span class="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 whitespace-nowrap" title="${esc(e.error || '')}">✕ ${esc(e.error || 'Fehler')}</span>`;
-      else if (editable) badge = `<span class="text-[10px] text-gray-400 whitespace-nowrap">offen</span>`;
-      else badge = `<span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 whitespace-nowrap">wartend</span>`;
-      const cb = (editable && !imported)
-        ? `<input type="checkbox" data-media="${esc(m.path)}" ${checked ? 'checked' : ''} class="accent-blue-600 shrink-0">`
-        : '<span class="w-4 shrink-0"></span>';
-      return `<label class="border border-gray-200 rounded-lg overflow-hidden ${editable && !imported ? 'cursor-pointer ' + (checked ? 'ring-2 ring-blue-500' : '') : ''}">
+      // M3b: editierbare Triage-Felder (Titel/Beschreibung + eingefärbtes
+      // Dropdown); Änderungen gelten für alle Pfade der Hash-Gruppe.
+      // Runde 3: kein separates Content-Feld — bei „Nur Beschreibung“ steht
+      // der komplette Bildinhalt (Formeln als LaTeX, Tabellen als Markdown)
+      // direkt in der Beschreibung.
+      const inputs = (editable && !imported) ? `
+        <input data-media-title="${escAttr(g.paths[0])}" value="${escAttr(meta.title)}" placeholder="Titel"
+               class="w-full mt-1.5 text-[11px] border border-gray-200 rounded px-1 py-0.5 bg-white">
+        <textarea data-media-desc="${escAttr(g.paths[0])}" rows="2" placeholder="Beschreibung"
+                  class="w-full mt-1 text-[10px] border border-gray-200 rounded px-1 py-0.5 bg-white resize-y">${esc(meta.description)}</textarea>
+        <select data-media-rec="${escAttr(g.paths[0])}"
+                class="w-full mt-1.5 border rounded px-2 py-1 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 ${recCls}">
+          <option value="import" ${rec === 'import' ? 'selected' : ''}>✓ Import (Medien-Bibliothek)</option>
+          <option value="applet" ${rec === 'applet' ? 'selected' : ''}>📐 Als Applet erzeugen</option>
+          <option value="ignore" ${rec === 'ignore' ? 'selected' : ''}>📝 Nur Beschreibung</option>
+        </select>` : '';
+      // Runde 3: Status-Zeile statt der (entfernten) Badge — für importierte
+      // und fehlgeschlagene Einträge.
+      const status = imported
+        ? `<p class="text-[10px] text-green-700 mt-1">✓ Importiert</p>`
+        : failed ? `<p class="text-[10px] text-red-700 mt-1 truncate" title="${esc(failedMember.error || '')}">✕ ${esc(failedMember.error || 'Fehler')}</p>` : '';
+      // Runde 3.1: Titel/Beschreibung nur noch in den Inputs anzeigen
+      // (kein zweiter Anzeigeblock unter dem Thumbnail) — die Karte zeigt
+      // den Dateinamen als Identifikation.
+      return `<div class="border border-gray-200 rounded-lg overflow-hidden">
         ${thumb}
-        <div class="p-1.5 flex items-center gap-1.5 bg-white">
-          ${cb}
-          <div class="min-w-0 flex-1">
+        <div class="p-1.5 bg-white">
+          <div class="min-w-0">
             <p class="text-[11px] text-gray-700 truncate" title="${esc(m.path)}">${esc(m.path.split('/').pop())}</p>
-            <p class="text-[10px] text-gray-400">${fmtBytes(m.size)}${m.pages ? ' · ' + m.pages + ' S.' : ''}</p>
+            <p class="text-[10px] text-gray-400">${fmtBytes(m.size)}${g.members.length > 1 ? ' · ×' + g.members.length + ' (gleicher Inhalt)' : ''}${m.pages ? ' · ' + m.pages + ' S.' : ''}</p>
           </div>
-          ${badge}
+          ${status}
+          ${inputs}
         </div>
-      </label>`;
+      </div>`;
     }
 
     function refExtractBlock(st) {
@@ -1850,21 +1999,7 @@
       el.scrollTop = top;
     }
 
-    function toggleAllMedia(val) {
-      mediaSel = new Set();
-      root.querySelectorAll('input[data-media]').forEach((cb) => {
-        if (cb.disabled) return;
-        cb.checked = val;
-        if (val) mediaSel.add(cb.dataset.media);
-        const label = cb.closest('label');
-        if (label) {
-          label.classList.toggle('ring-2', val);
-          label.classList.toggle('ring-blue-500', val);
-        }
-      });
-      const c = document.getElementById('media-actions');
-      if (c && state) c.innerHTML = mediaActionsHTML(state);
-    }
+
 
     // ─── Events (delegiert) ─────────────────────────────────────────
 
@@ -1920,16 +2055,18 @@
             showToast('Folien-Planner gestartet.', 'success');
             await refresh();
             break;
-          case 'media-all':
-            toggleAllMedia(true);
-            break;
-          case 'media-none':
-            toggleAllMedia(false);
+          case 'media-filter':
+            mediaFilter = btn.dataset.filter;
+            renderMediaGrid();
             break;
           case 'media-start': {
+            // Runde 3: Das Dropdown je Medium ist die einzige Quelle der
+            // Wahrheit — importiert alle als Import/Applet markierten Medien.
             const mm = state.media_map || {};
-            const paths = Array.from(mediaSel || []).filter((p) => !(mm[p] || {}).url);
-            if (!paths.length) { showToast('Keine (noch nicht importierten) Medien ausgewählt.', 'error'); return; }
+            const paths = mediaItems(state).filter((m) =>
+              (itemRec(m) === 'import' || itemRec(m) === 'applet') && !(mm[m.path] || {}).url)
+              .map((m) => m.path);
+            if (!paths.length) { showToast('Keine Medien als „Import“ oder „Applet“ markiert (Dropdown).', 'error'); return; }
             await api('/media', { method: 'POST', body: JSON.stringify({ paths }) });
             showToast('Medien-Import gestartet.', 'success');
             await refresh();
@@ -1940,6 +2077,13 @@
             await api('/media', { method: 'POST', body: JSON.stringify({ skip: true }) });
             await refresh();
             break;
+          case 'media-retriage': {
+            if (!confirm('Die LLM-Triage wird für alle noch nicht importierten Medien zurückgesetzt und neu ausgeführt.\nDazu läuft die Dateianalyse idempotent erneut (fertige Teilergebnisse bleiben erhalten).\n\nFortsetzen?')) return;
+            const data = await api('/media/triage/reset', { method: 'POST' });
+            showToast(data.message || 'Triage-Neulauf gestartet.', 'success');
+            await refresh();
+            break;
+          }
           case 'references-all':
             toggleAllRefs(true);
             break;
@@ -2019,18 +2163,22 @@
       }
     });
 
-    root.addEventListener('change', (e) => {
+    root.addEventListener('change', async (e) => {
       const t = e.target;
-      if (t.matches('input[data-media]')) {
-        if (t.checked) mediaSel.add(t.dataset.media);
-        else mediaSel.delete(t.dataset.media);
-        const label = t.closest('label');
-        if (label) {
-          label.classList.toggle('ring-2', t.checked);
-          label.classList.toggle('ring-blue-500', t.checked);
+      if (t.matches('input[data-media-title]')) {
+        saveMediaTriage(t.dataset.mediaTitle, { title: t.value });
+      } else if (t.matches('textarea[data-media-desc]')) {
+        saveMediaTriage(t.dataset.mediaDesc, { description: t.value });
+      } else if (t.matches('select[data-media-rec]')) {
+        // Runde 3: Dropdown neu einfärben (analog changeRole in members.html)
+        if (t.value === 'import') {
+          t.className = 'w-full mt-1.5 border border-green-200 rounded px-2 py-1 text-xs font-semibold bg-green-50 text-green-700 focus:outline-none focus:ring-2 focus:ring-blue-500';
+        } else if (t.value === 'applet') {
+          t.className = 'w-full mt-1.5 border border-blue-200 rounded px-2 py-1 text-xs font-semibold bg-blue-50 text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500';
+        } else {
+          t.className = 'w-full mt-1.5 border border-amber-200 rounded px-2 py-1 text-xs font-semibold bg-amber-50 text-amber-700 focus:outline-none focus:ring-2 focus:ring-blue-500';
         }
-        const c = document.getElementById('media-actions');
-        if (c && state) c.innerHTML = mediaActionsHTML(state);
+        if (t.value) saveMediaTriage(t.dataset.mediaRec, { recommendation: t.value });
       } else if (t.matches('input[data-ref]')) {
         if (t.checked) refSel.add(t.dataset.ref);
         else refSel.delete(t.dataset.ref);
@@ -2079,6 +2227,15 @@
         t.value = '';
       } else if (t.id === 'slides-del-cb') {
         deleteOriginal = t.checked;
+      } else if (t.id === 'transcribe-cb') {
+        try {
+          const d = await api('/transcribe', { method: 'POST', body: JSON.stringify({ enabled: t.checked }) });
+          showToast(d.message || (t.checked ? 'PDF-Transkription gestartet.' : 'PDF-Transkription deaktiviert.'), 'success');
+          await refresh();
+        } catch (err) {
+          t.checked = !t.checked;
+          showToast(err.message, 'error');
+        }
       }
     });
 
