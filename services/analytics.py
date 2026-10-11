@@ -37,7 +37,10 @@ from services.auth_service import decode_access_token
 logger = logging.getLogger(__name__)
 
 # Einträge älter als das werden beim App-Start gelöscht (RETENTION).
-RETENTION_DAYS = 365
+# None = unbegrenzte Speicherung (Data-Basis für Learning-Analytics-
+# Publikation). Auf eine Zahl setzen, um die automatische Löschung zu
+# reaktivieren.
+RETENTION_DAYS: Optional[int] = None
 
 # Dieselbe Seite desselben Users innerhalb des Zeitfensters zählt nur
 # einmal (schützt gegen F5-Flut).
@@ -154,8 +157,13 @@ def record_page_view(user_id: int, path: str) -> None:
         logger.exception("Analytics: Page-View konnte nicht gespeichert werden")
 
 
-def prune_old(days: int = RETENTION_DAYS) -> None:
-    """Beim App-Start: Einträge außerhalb des Retention-Fensters löschen."""
+def prune_old(days: Optional[int] = RETENTION_DAYS) -> None:
+    """Beim App-Start: Einträge außerhalb des Retention-Fensters löschen.
+
+    days=None → unbegrenzte Retention, No-Op.
+    """
+    if days is None:
+        return
     cutoff = datetime.now() - timedelta(days=days)
     try:
         with engine.begin() as conn:

@@ -114,7 +114,7 @@ async def lifespan(app: FastAPI):
     migrate_script_sections()
     migrate_forum_channels()
     import_service.mark_interrupted_on_startup()  # aktive Import-Jobs → 'interrupted'
-    analytics.prune_old()  # Page-Views außerhalb des Retention-Fensters löschen
+    analytics.prune_old()  # Page-View-Bereinigung (No-Op, solange RETENTION_DAYS=None)
 
     # Admin-User anlegen, wenn DB leer
     with Session(engine) as session:
