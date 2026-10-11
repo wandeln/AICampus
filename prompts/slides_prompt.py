@@ -117,5 +117,5 @@ Regeln:
 - Das Deck soll für sich allein verständlich sein (Titelfolie mit Kursnamen, kurze Einordnung), darf aber auf das Skript verweisen (z.B. „Details im Skript, Abs. @sec:…“).
 - Halte die Notation, Schreibweisen und Begriffswahl konsistent mit dem Skript, wo dies sinnvoll ist (gleiche Symbole für gleiche Größen).
 - Alle wichtigen Labels müssen in der Zusammenfassung ("summary") vorkommen, damit sie später referenziert werden können. Erfinde aber auch keine Labels, die nicht im Inhalt vorkommen.
-- Wird der Inhalt geändert und betrifft die Änderung zentrale Inhalte, Notation, Definitionen/Sätze oder fig/eq/code/box-Labels, MUSST du die „summary“ aktualisieren (nicht weglassen) — sie dient der Konsistenz der anderen Decks.
+- Die „summary“ ist wie die anderen Felder OPTIONAL: aktualisiere sie nur, wenn die Anweisung sie direkt betrifft oder wenn die Änderung zentrale Inhalte, Notation, Definitionen/Sätze oder fig/eq/code/box-Labels betrifft, die sie enthält — bei kleinen, lokalen Änderungen weglassen (der vorhandene Wert bleibt).
 """

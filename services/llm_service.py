@@ -755,7 +755,7 @@ class LLMService:
         konkrete Änderungswünsche, z.B. „Folien zu Kapitel 3 erstellen“).
         minutes: Dauer der Präsentation in Minuten → das LLM plant die
         Folienanzahl entsprechend (Richtwert 1,5–2 min/Folie).
-        generate_fields: Untermenge von ["title", "content"].
+        generate_fields: Untermenge von ["title", "content", "summary"].
         chapters: [{title, labels, content}] der Skript-Kapitel (Inhalt als
         Folien-Basis; labels für Label-Konsistenz — gleiche Objekte dürfen
         dieselben Labels verwenden → gleiche Nummer + Link zum Skript).

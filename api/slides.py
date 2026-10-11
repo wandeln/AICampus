@@ -153,7 +153,7 @@ async def ai_generate_slide_deck(
     _user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF, CourseRole.TUTOR)),
 ):
     """
-    LLM generiert/ändert Titel und Inhalt eines Slide-Decks.
+    LLM generiert/ändert Titel, Inhalt und/oder interne Zusammenfassung eines Slide-Decks.
 
     Request:
         {
@@ -162,13 +162,13 @@ async def ai_generate_slide_deck(
             "minutes": 90,
             "current_title": "...",
             "current_content": "...",
-            "generate_fields": {"title": true, "content": true}
+            "generate_fields": {"title": true, "content": true, "summary": true}
         }
 
     Response:
         {
             // Leeres Feld = LLM hat das Feld nicht geändert (bestehender Wert bleibt).
-            "title": "...", "content": "...",
+            "title": "...", "content": "...", "summary": "...",
             "edits_applied": 2,  // Anzahl angewendeter „content_edits“ (0 = Volltext/keine Änderung)
             "warnings": [],
             "latency_ms": 123
@@ -176,7 +176,7 @@ async def ai_generate_slide_deck(
     """
     body = await request.json()
     gen = body.get("generate_fields", {}) or {}
-    generate_fields = [f for f in ("title", "content") if gen.get(f)]
+    generate_fields = [f for f in ("title", "content", "summary") if gen.get(f)]
     if not generate_fields:
         raise HTTPException(400, "Keine Felder angefordert.")
 
@@ -282,7 +282,7 @@ async def ai_generate_slide_deck(
 
     data = result.get("data") or {}
     response = {
-        "title": "", "content": "", "edits_applied": 0, "warnings": [],
+        "title": "", "content": "", "summary": "", "edits_applied": 0, "warnings": [],
         "latency_ms": result.get("latency_ms", 0),
     }
     if "title" in generate_fields:
@@ -311,6 +311,8 @@ async def ai_generate_slide_deck(
                 raise HTTPException(400, f"LLM-Edits nicht anwendbar: {e}")
             response["content"] = merged
             response["edits_applied"] = len(content_edits)
+    if "summary" in generate_fields:
+        response["summary"] = (data.get("summary") or "").strip()
     return response
 
 

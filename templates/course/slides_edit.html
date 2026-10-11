@@ -115,6 +115,17 @@
       <!-- LLM-Box -->
       <div data-llm-box class="bg-purple-50 border-2 border-purple-300 rounded-xl p-4">
         <h3 class="font-semibold text-gray-800 mb-3 text-sm">🤖 LLM-Deck generieren</h3>
+        <div class="flex flex-wrap gap-x-4 gap-y-2 mb-3">
+          <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer">
+            <input type="checkbox" id="slide-fg-title" checked class="rounded text-purple-600">Titel
+          </label>
+          <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer">
+            <input type="checkbox" id="slide-fg-content" checked class="rounded text-purple-600">Inhalt
+          </label>
+          <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer" title="Interne Zusammenfassung für die LLM-Konsistenz zwischen Decks (nicht für Studenten sichtbar)">
+            <input type="checkbox" id="slide-fg-summary" checked class="rounded text-purple-600">Zusammenfassung (intern)
+          </label>
+        </div>
         <textarea id="slide-topic" rows="2"
                   placeholder="Thema / Anweisung (z.B. „Folien zu Kapitel 3: Rekursion erstellen“, „Übungen am Ende ergänzen“, „kürzer fassen“) — leer lassen, wenn das LLM frei überarbeiten soll."
                   class="w-full border border-purple-300 rounded px-3 py-1.5 text-sm mb-3"></textarea>
@@ -741,11 +752,23 @@
   const aiBtn = document.getElementById("slide-ai-btn");
   const topicInput = document.getElementById("slide-topic");
   const minutesInput = document.getElementById("slide-minutes");
+  const fieldTitle = document.getElementById("slide-fg-title");
+  const fieldContent = document.getElementById("slide-fg-content");
+  const fieldSummary = document.getElementById("slide-fg-summary");
   const progress = document.getElementById("slide-progress");
   const pTimer = document.getElementById("slide-ptimer");
   const pBar = document.getElementById("slide-pbar");
 
   window.slideAiGenerate = async function () {
+    const generateFields = {
+      title: fieldTitle.checked,
+      content: fieldContent.checked,
+      summary: fieldSummary.checked,
+    };
+    if (!generateFields.title && !generateFields.content && !generateFields.summary) {
+      showToast("Wähle mindestens ein Feld aus.", "error");
+      return;
+    }
     aiBtn.disabled = true;
     aiBtn.textContent = "⏳ Generiere…";
     progress.classList.remove("hidden");
@@ -772,25 +795,34 @@
           minutes: parseInt(minutesInput.value, 10) || 90,
           current_title: titleInput.value,
           current_content: contentGet(),
-          generate_fields: { title: true, content: true },
+          generate_fields: generateFields,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "LLM-Generierung fehlgeschlagen.");
 
-      if (data.title) { titleInput.value = data.title; syncTitle(); }
-      if (data.content) {
-        alignEditorContentFor = data.content;
-        contentSet(data.content);
-        renderPreview(data.content);
+      // Nicht aktivierte Felder kommen gar nicht im Response → bleiben unverändert.
+      // Leere Felder im Response = LLM hat das Feld nicht geändert.
+      const changed = [], unchanged = [];
+      if (generateFields.title) {
+        if (data.title) { titleInput.value = data.title; syncTitle(); changed.push("Titel"); }
+        else unchanged.push("Titel");
+      }
+      if (generateFields.content) {
+        if (data.content) {
+          alignEditorContentFor = data.content;
+          contentSet(data.content);
+          renderPreview(data.content);
+          changed.push("Inhalt");
+        } else unchanged.push("Inhalt");
+      }
+      if (generateFields.summary) {
+        if (data.summary) { summaryInput.value = data.summary; changed.push("Zusammenfassung"); }
+        else unchanged.push("Zusammenfassung");
       }
       // LLM-Änderungen sind ebenfalls Änderungen → Auto-Save-Trigger
       // (Titel-Set ohne input-Event hiermit zusätzlich abdecken)
       av.onChange();
-      // Leere Felder im Response = LLM hat das Feld nicht geändert
-      const changed = [], unchanged = [];
-      (data.title ? changed : unchanged).push("Titel");
-      (data.content ? changed : unchanged).push("Folien");
       let msg = "LLM-Deck generiert";
       if (data.edits_applied > 0) msg += ` (${data.edits_applied} lokale Änderung${data.edits_applied > 1 ? "en" : ""} angewendet)`;
       if (unchanged.length) msg += ` — ${unchanged.join(" & ")} unverändert gelassen`;

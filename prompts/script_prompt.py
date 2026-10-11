@@ -97,7 +97,7 @@ Regeln:
 - Das Kapitel ist reiner Vorlesungsinhalt: KEINE Übungsaufgaben, keine Aufgabenlisten und keine Aufgabenformulierungen (z.B. „Bestimme …“, „Zeige …“, „Beweise …“) — Übungsaufgaben werden gesondert im Kurs gepflegt und gehören NICHT ins Skript.
 - Falls für ein angefordertes Feld bereits ein Inhalt existiert (s. o.), überarbeite/verbessere ihn gemäß der Anweisung — gestalte das Kapitel nicht grundlos neu, sondern behalte die Struktur bei, soweit die Anweisung nichts anderes vorschreibt.{% if current_content and '"content"' in generate_list %} Bei lokalen Änderungen an vorhandenem Inhalt nutze dafür den Mechanismus „Stellenweise Bearbeitung“ („content_edits“), damit der restliche Inhalt garantiert unverändert bleibt.{% endif %}
 - Falls ein Feld KEINEN Inhalt hat, ist der zugehörige Schlüssel PFLICHT — erstelle den Inhalt neu passend zum Thema.
-- Wird der Inhalt geändert und betrifft die Änderung zentrale Begriffe, Notation, Definitionen/Sätze oder fig/eq/code/box/tab-Labels, MUSST du die „summary“ aktualisieren (nicht weglassen) — sie dient der Konsistenz der anderen Kapitel.
+- Die „summary" ist wie die anderen Felder OPTIONAL: aktualisiere sie nur, wenn die Anweisung sie direkt betrifft oder wenn die Änderung zentrale Begriffe, Notation, Definitionen/Sätze oder fig/eq/code/box-Labels betrifft, die sie enthält — bei kleinen, lokalen Änderungen weglassen (der vorhandene Wert bleibt).
 - Der Inhalt ist Markdown für ein Vorlesungsskript: lehrbuchartige, präzise und strukturierte Darstellung (Definitionen, Sätze, Beweisskizzen, Beispiele, Übungshinweise) auf dem Niveau einer Universität.
 
 FORMAT (strikt einhalten):
