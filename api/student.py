@@ -1112,6 +1112,45 @@ async def request_hint(
             + "\nWICHTIG: @fig:label / @eq:label sind KEIN Code — schreibe sie IMMER als normalen Fließtext, NIEMALS in Backticks (`...`), Code-Blöcke (``` ... ```) oder Anführungszeichen. Nur so werden sie zu klickbaren Referenzen aufgelöst. Richtig: „wie in @eq:shannon gezeigt“ — Falsch: „wie in `@eq:shannon` gezeigt“."
         )
 
+    # Multiple-Choice: Die Auswahlfragen stehen NICHT in der
+    # Aufgabenstellung (sondern in mc_data) — ohne Kontext wuerde das LLM
+    # gar nicht wissen, worum es geht. Fragen (ohne Correct-Flag) und die
+    # korrekten Antworten als Musterloesung — alles NUR LLM-seitig, dem
+    # Studenten wird nichts davon angezeigt.
+    mc_context = ""
+    mc_model_solution = ""
+    if task.task_type == TaskType.MC and task.mc_data:
+        try:
+            mc = parse_mc_data(task.mc_data)
+            q_lines = []
+            sol_lines = []
+            for qi, q in enumerate(mc["questions"]):
+                opts = " | ".join(
+                    f"{chr(ord('A') + oi)}: {o['text']}"
+                    for oi, o in enumerate(q["options"])
+                )
+                sel = "mehrere richtig" if q["multi_select"] else "genau eine richtig"
+                q_lines.append(
+                    f"Frage {qi + 1} ({q['points']} P, {sel}): {q['question']}\n"
+                    f"Optionen: {opts}"
+                )
+                correct = ", ".join(
+                    f"{chr(ord('A') + oi)} (\u201e{o['text']}\u201c)"
+                    for oi, o in enumerate(q["options"]) if o["correct"]
+                )
+                sol_lines.append(f"Frage {qi + 1}: {correct}")
+            mc_context = (
+                "AUFGABENTYP MULTIPLE CHOICE: Die Aufgabe besteht aus den "
+                "folgenden Auswahlfragen. Der Student sieht die Optionen in "
+                "zufaellig gemischter Reihenfolge und OHNE Buchstaben-Labels.\n"
+                "WICHTIG: Verweise im Hinweis auf Optionen NIEMALS mit "
+                "Buchstaben (A/B/C), sondern per Textausschnitt.\n\n"
+                "MC-FRAGEN:\n" + "\n\n".join(q_lines)
+            )
+            mc_model_solution = "Korrekte Antworten:\n" + "\n".join(sol_lines)
+        except McValidationError:
+            pass
+
     course_media = all_media_for_course(session, task.course_id)
     media_context = ""
     if course_media:
@@ -1133,7 +1172,9 @@ async def request_hint(
     # Rufe LLM fuer sokratischen Hinweis auf
     result = await llm_service.generate_socratic_hint(
         task_description=task.description,
-        model_solution=task.model_solution or "(Keine Musterloesung hintergelegt)",
+        model_solution=mc_model_solution
+        or task.model_solution
+        or "(Keine Musterloesung hintergelegt)",
         # Vorlagen-Kontext: Text-Vorlage (falls vorhanden)
         text_template=task.text_template or "",
         current_solution=hint_request.current_solution,
@@ -1142,6 +1183,7 @@ async def request_hint(
         student_question=hint_request.question,
         script_context=script_context,
         media_context=media_context,
+        mc_context=mc_context,
         config=llm_cfg,
     )
 

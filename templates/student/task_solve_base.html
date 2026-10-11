@@ -61,9 +61,10 @@
     <div class="flex gap-2 mt-3">
       <span class="px-2 py-0.5 rounded text-xs font-medium
         {% if task.task_type == 'workspace' %}bg-indigo-100 text-indigo-700
+        {% elif task.task_type == 'mc' %}bg-emerald-100 text-emerald-700
         {% else %}bg-gray-100 text-gray-600
         {% endif %}" style="align-content: center;">
-        {{ '💻 Workspace' if task.task_type == 'workspace' else '📄 Text' }}
+        {{ '💻 Workspace' if task.task_type == 'workspace' else '🎯 Multiple Choice' if task.task_type == 'mc' else '📄 Text' }}
       </span>
       <span class="badge px-2 py-0.5 rounded bg-gray-100 text-gray-600">
         {{ latest_points }} /  {{ task.max_points }} Punkte
@@ -91,8 +92,8 @@
         <template id="task-description-raw">{{ (task.description or '') | tojson }}</template>
       </div>
 
-      <!-- Socratic Hint Section (bei MC deaktiviert: Feedback kommt sofort) -->
-      {% if task.hints_enabled and task.task_type != 'mc' %}
+      <!-- Socratic Hint Section -->
+      {% if task.hints_enabled %}
       <div class="card mb-6 bg-red-50 border-blue-200 px-5 py-3 rounded-2xl">
         <button type="button" onclick="toggleHintSection()" class="w-full flex items-center justify-between cursor-pointer bg-red-50 pt-2 pb-2 hint_toggle">
           <h2 class="font-semibold text-gray-800 m-0">💡 Hinweise</h2>
@@ -1137,7 +1138,7 @@
   // SOKRATISCHER HINWEIS (Hint) Dialog
   // ──────────────────────────────────────────────────────────────
 
-  {% if task.hints_enabled and task.task_type != 'mc' %}
+  {% if task.hints_enabled %}
   const hintInput = document.getElementById('hint-input');
   const hintSendBtn = document.getElementById('hint-send-btn');
   const hintHistory = document.getElementById('hint-history');
@@ -1231,6 +1232,19 @@
     let currentSolution = '';
     const textEd = window._textSolutionEditor;
     if (textEd) currentSolution = textEd.getValue();
+    else if (typeof MC_QUESTIONS !== 'undefined' && MC_QUESTIONS && MC_QUESTIONS.questions.length) {
+      // MC: aktuelle Auswahl als Text (Optionstexte, damit das LLM sie
+      // mit dem MC-Fragen-Kontext abgleichen kann).
+      const mcLines = MC_QUESTIONS.questions.map((q, qi) => {
+        const chosen = (q.options || []).filter((text, oi) => {
+          const origIdx = (q.order && q.order[oi] != null) ? q.order[oi] : oi;
+          const input = document.querySelector("input[name='mc-q" + qi + "'][value='" + origIdx + "']");
+          return input && input.checked;
+        });
+        return 'Frage ' + (qi + 1) + ': ' + (chosen.length ? 'gewählt: ' + chosen.join(' | ') : 'noch keine Auswahl');
+      });
+      currentSolution = 'Multiple-Choice-Auswahl:\n' + mcLines.join('\n');
+    }
     else {
       const ta = document.getElementById('text-solution');
       if (ta) currentSolution = ta.value;

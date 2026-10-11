@@ -855,6 +855,7 @@ class LLMService:
         student_question: str,
         script_context: str = "",
         media_context: str = "",
+        mc_context: str = "",
         custom_prompt: Optional[str] = None,
         config: Optional[dict] = None,
     ):
@@ -878,6 +879,7 @@ class LLMService:
             student_question=student_question,
             script_context=script_context,
             media_context=media_context,
+            mc_context=mc_context,
         )
 
         return await self._call_with_json(prompt, response_format={"type": "json_object"}, config=config)
