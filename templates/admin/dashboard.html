@@ -190,7 +190,7 @@
         <div class="card p-4 mb-4">
           <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
             <h3 class="font-semibold text-gray-800">Top-Seiten</h3>
-            <select id="analytics-course" onchange="loadAnalytics()" class="border rounded px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <select id="analytics-course" onchange="loadAnalytics()" class="border rounded px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-0 max-w-full">
               <option value="">Alle Kurse</option>
               {% for course in courses %}
               <option value="{{ course.id }}">{{ course.name }}</option>
@@ -219,7 +219,7 @@
             <h3 class="font-semibold text-gray-800">Letzte Aktivität <span id="analytics-user-filter-label" class="text-sm font-normal text-gray-400"></span></h3>
             <button id="analytics-show-all" onclick="selectAnalyticsUser(null, '')" class="hidden text-xs text-blue-600 hover:text-blue-800">→ alle User anzeigen</button>
           </div>
-          <div id="recent-activity-table"></div>
+          <div id="recent-activity-table" class="overflow-x-auto"></div>
         </div>
 
         <!-- Chart.js (MIT) — lokal gespiegelt -->
@@ -1883,7 +1883,7 @@
       return `<tr class="hover:bg-gray-50 border-t">
         <td class="py-2 px-3 text-sm whitespace-nowrap">${when}</td>
         <td class="py-2 px-3 text-sm">${who}</td>
-        <td class="py-2 px-3 text-sm">${page}</td>
+        <td class="py-2 px-3 text-sm whitespace-nowrap">${page}</td>
         <td class="py-2 px-3 text-sm text-gray-500">${v.course_name ? escHtml(v.course_name) : '—'}</td>
       </tr>`;
     }).join('');

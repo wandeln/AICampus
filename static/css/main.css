@@ -113,9 +113,13 @@
   @apply border-l-blue-500;
 }
 
-/* Scrollable table */
+/* Scrollable table
+   (Plain CSS statt @apply: Das Tailwind Play CDN kompiliert @apply in
+   gelinkten Stylesheets NICHT — dieselbe Falle wie bei .card oben.) */
 .table-container {
-  @apply overflow-x-auto rounded-lg border border-gray-200;
+  overflow-x: auto;
+  border-radius: 0.5rem;
+  border: 1px solid #e5e7eb;
 }
 
 /* Print styles */
