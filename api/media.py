@@ -12,9 +12,11 @@ nicht ohne Kurs-Membership abrufbar sind.
 
 import base64
 import re
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from sqlalchemy import func
 from sqlmodel import Session, delete, select
 
 from config import MEDIA_DIR
@@ -130,29 +132,123 @@ def _media_to_dict(
     }
 
 
-def _load_media_payload(session: Session, course_id: int) -> list[dict]:
-    media_list = session.exec(
-        select(CourseMedia)
-        .where(CourseMedia.course_id == course_id)
-        .order_by(CourseMedia.created_at.desc())  # type: ignore[attr-defined]
-    ).all()
+# Filter-Werte für die Einbunde-Zahl (mit der Frontend-Auswahl in
+# templates/course/media.html synchron halten).
+_USAGE_COUNT_FILTERS = {
+    "none": lambda n: n == 0,
+    "exactly-1": lambda n: n == 1,
+    "at-least-1": lambda n: n >= 1,
+    "more-than-1": lambda n: n >= 2,
+}
+_MEDIA_FILTERS = ("all", "duplicate", "no-desc", *_USAGE_COUNT_FILTERS)
+_MEDIA_SORTS = ("newest", "oldest", "title-asc", "title-desc")
+
+
+def _filtered_media(
+    session: Session,
+    course_id: int,
+    q: str | None,
+    media_filter: str | None,
+    counts: dict[str, RefInfo],
+) -> list[CourseMedia]:
+    """Alle (noch unsortierten) Medien des Kurses, gefiltert nach Suche/Filter."""
+    stmt = select(CourseMedia).where(CourseMedia.course_id == course_id)
+    if q:
+        like = f"%{q}%"
+        stmt = stmt.where(
+            (CourseMedia.title.ilike(like))  # type: ignore[attr-defined]
+            | (CourseMedia.llm_description.ilike(like))  # type: ignore[attr-defined]
+        )
+    media_list = list(session.exec(stmt).all())
     if not media_list:
         return []
-    usages = session.exec(
-        select(MediaUsage).where(MediaUsage.media_id.in_([m.id for m in media_list]))  # type: ignore[attr-defined]
-    ).all()
+    if media_filter in _USAGE_COUNT_FILTERS:
+        usage_counts = dict(
+            session.exec(
+                select(MediaUsage.media_id, func.count())
+                .where(MediaUsage.media_id.in_([m.id for m in media_list]))  # type: ignore[attr-defined]
+                .group_by(MediaUsage.media_id)  # type: ignore[attr-defined]
+            ).all()
+        )
+        pred = _USAGE_COUNT_FILTERS[media_filter]
+        media_list = [m for m in media_list if pred(usage_counts.get(m.id, 0))]  # type: ignore[arg-type]
+        if not media_list:
+            return []
+    if media_filter == "no-desc":
+        media_list = [m for m in media_list if not (m.llm_description or "").strip()]
+    if media_filter == "duplicate":
+        media_list = [
+            m
+            for m in media_list
+            if counts.get(m.file_path.rsplit("/", 1)[-1], {}).get("duplicates")
+        ]
+    return media_list
+
+
+def _sorted_media(media_list: list[CourseMedia], sort: str | None) -> list[CourseMedia]:
+    """Sortierung wie in der Frontend-Auswahl; ID als Tiebreaker für stabile Seiten."""
+    created = lambda m: m.created_at or datetime.min
+    if sort == "oldest":
+        media_list.sort(key=lambda m: (created(m), m.id))
+    elif sort == "title-asc":
+        media_list.sort(key=lambda m: (m.title.casefold(), m.id))
+    elif sort == "title-desc":
+        media_list.sort(key=lambda m: (m.title.casefold(), m.id), reverse=True)
+    else:  # "newest" (Default)
+        media_list.sort(key=lambda m: (created(m), m.id), reverse=True)
+    return media_list
+
+
+def _load_media_payload(
+    session: Session,
+    course_id: int,
+    q: str | None = None,
+    media_filter: str | None = None,
+    sort: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> list[dict] | dict:
+    """Medien des Kurses inkl. Verwendungs-Orten (für die Medien-Übersicht).
+
+    Ohne `limit`: vollständige Liste (ältere Consumers, z.B. Applet-Studio).
+    Mit `limit` (+ `offset`): Paginierung → {"items", "total", "has_more"}.
+    Die aufwändigen Verwendungs-Details werden nur für die aktuelle Seite
+    geladen — bei 100–1000 Medien pro Kurs bleibt so der Server beim
+    Scroll-Nachladen der Medien-Übersicht entlastet.
+    """
+    # Referenz-Infos pro Datei (kurs-weit; Basis für „duplikat“-Filter und -Warnungen).
     counts = media_service.reference_counts(session, course_id)
+    media_list = _sorted_media(
+        _filtered_media(session, course_id, q, media_filter, counts), sort
+    )
+    total = len(media_list)
+    offset = max(0, offset)
+    if limit is None:
+        page = media_list
+    else:
+        page = media_list[offset:offset + limit]
+    if not page:
+        if limit is None:
+            return []
+        return {"items": [], "total": total, "has_more": False}
+    usages = session.exec(
+        select(MediaUsage).where(MediaUsage.media_id.in_([m.id for m in page]))  # type: ignore[attr-defined]
+    ).all()
     # Titel → Kapitel-ID, um "Skript: <Titel>"-Vorkommen zu verlinken.
     section_ids = {
         s.title: s.id
         for s in session.exec(
             select(ScriptSection).where(ScriptSection.course_id == course_id)
         ).all()
+        if s.id is not None
     }
-    return [
+    items = [
         _media_to_dict(m, [u for u in usages if u.media_id == m.id], counts, section_ids)
-        for m in media_list
+        for m in page
     ]
+    if limit is None:
+        return items
+    return {"items": items, "total": total, "has_more": offset + len(items) < total}
 
 
 @router.get("/courses/{course_id}/media")
@@ -160,9 +256,28 @@ async def list_media(
     course_id: int,
     session: Session = Depends(get_session),
     _user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
+    q: Optional[str] = None,
+    media_filter: Optional[str] = Query(None, alias="filter"),
+    sort: Optional[str] = None,
+    offset: int = 0,
+    limit: Optional[int] = Query(None, ge=1, le=200),
 ):
-    """Alle Medien des Kurses inkl. Verwendungs-Orten."""
-    return _load_media_payload(session, course_id)
+    """Medien des Kurses inkl. Verwendungs-Orten.
+
+    Ohne `limit`: vollständige Liste (Backwards-Compat, z.B. Applet-Studio,
+    Slides-Bildauswahl). Mit `limit` (+ `offset`): Paginierung →
+    {"items", "total", "has_more"} — so lädt die Medien-Übersicht nur noch
+    die sichtbare Seite nach. `q`/`filter`/`sort` filtern & sortieren
+    server-seitig (unklare Werte werden ignoriert).
+    """
+    q = q.strip() if q and q.strip() else None
+    if media_filter is not None and media_filter not in _MEDIA_FILTERS:
+        media_filter = None
+    if sort is not None and sort not in _MEDIA_SORTS:
+        sort = None
+    return _load_media_payload(
+        session, course_id, q=q, media_filter=media_filter, sort=sort, offset=offset, limit=limit
+    )
 
 
 @router.post("/courses/{course_id}/media")

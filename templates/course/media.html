@@ -4,7 +4,9 @@
    Kurs-Tab "Medien": Medienbibliothek (nur PROF/Admin).
 
    Upload → POST /api/courses/{id}/media (multipart)
-   Liste  → GET  /api/courses/{id}/media  (inkl. Verwendungs-Orten)
+   Liste  → GET  /api/courses/{id}/media  (inkl. Verwendungs-Orten;
+            paginiert über ?limit/&offset → {items, total, has_more},
+            die Übersicht lädt beim Scrollen nach = Infinite Scroll)
    Versand der Dateien läuft über GET /media/{course_id}/{filename}
    (authentifiziert, keine statische Map).
    ───────────────────────────────────────────────────────────────────── #}
@@ -88,6 +90,11 @@
     </div>
     <div id="media-grid" class="grid gap-4 sm:grid-cols-2">
       <p class="text-gray-400 text-sm col-span-2">Wird geladen…</p>
+    </div>
+    <!-- Infinite-Scroll-Sentinel: der Observer lädt die nächste Seite, wenn
+         dieser Bereich (mit Puffer) in den Viewport scrollt. -->
+    <div id="media-sentinel" class="flex items-center justify-center py-3 min-h-8">
+      <span id="media-sentinel-text" class="text-xs text-gray-400"></span>
     </div>
   </div>
 
@@ -200,81 +207,109 @@
 {% block extra_scripts %}
 <script>
 (function() {
-  let mediaList = [];
+  let mediaList = [];   // Alle bisher geladenen Medien (Seiten kumuliert)
   let editingId = null;
 
-  // ─── Laden ────────────────────────────────────────────────────
+  // ─── Laden (server-seitig paginiert, Infinite Scroll) ──────────
+  // Bei 100–1000 Medien würde die komplette Liste pro Aufruf Server und
+  // Browser (DOM + Applet-Iframe-Vorschauen) überlasten → nur die aktuelle
+  // Seite laden, die weiteren beim Runterscrollen nachreichen.
+  const PAGE_SIZE = 50;
+  let hasMore = true;   // weitere Seiten vorhanden?
+  let reqSeq = 0;       // jede Anfrage/Reset erhöht → veraltete Antworten verworfen
+  let inflight = 0;     // reqSeq der laufenden Anfrage (0 = keine)
+
+  const grid = document.getElementById("media-grid");
+  const sentinel = document.getElementById("media-sentinel");
+  const sentinelText = document.getElementById("media-sentinel-text");
+
+  function currentFilters() {
+    return {
+      q: (document.getElementById("media-search").value || "").trim(),
+      filter: document.getElementById("media-filter").value,
+      sort: document.getElementById("media-sort").value,
+    };
+  }
+
+  function filtersActive() {
+    const f = currentFilters();
+    return f.q !== "" || f.filter !== "all";
+  }
 
   async function loadMedia() {
-    const grid = document.getElementById("media-grid");
+    // Volle Neu-Ladung (Reset): laufende Anfrage verwerfen, ab Seite 1 neu.
+    mediaList = [];
+    hasMore = true;
+    reqSeq++;
+    inflight = 0;
+    grid.innerHTML = '<p class="text-gray-400 text-sm col-span-2">Wird geladen…</p>';
+    sentinelText.textContent = "";
+    await fetchPage(0, false);
+  }
+
+  async function loadMore() {
+    if (inflight || !hasMore) return;
+    await fetchPage(mediaList.length, true);
+  }
+
+  async function fetchPage(offset, append) {
+    if (inflight) return;
+    const seq = ++reqSeq;
+    inflight = seq;
+    if (append) sentinelText.textContent = "Weitere Medien werden geladen…";
     try {
-      const res = await fetch(`/api/courses/${courseId}/media`, { credentials: "same-origin" });
+      const f = currentFilters();
+      const params = new URLSearchParams();
+      params.set("offset", String(offset));
+      params.set("limit", String(PAGE_SIZE));
+      if (f.q) params.set("q", f.q);
+      if (f.filter !== "all") params.set("filter", f.filter);
+      if (f.sort !== "newest") params.set("sort", f.sort);
+      const res = await fetch(`/api/courses/${courseId}/media?${params.toString()}`, { credentials: "same-origin" });
       const data = await res.json().catch(() => ({}));
+      if (seq !== reqSeq) return; // veraltet (Filterwechsel/Reset in der Zwischenzeit)
       if (!res.ok) {
-        grid.innerHTML = `<p class="text-red-500 text-sm col-span-2">${escapeHtml(data.detail || "Fehler beim Laden.")}</p>`;
+        if (!append) {
+          grid.innerHTML = `<p class="text-red-500 text-sm col-span-2">${escapeHtml(data.detail || "Fehler beim Laden.")}</p>`;
+        }
+        sentinelText.textContent = "";
         return;
       }
-      mediaList = data;
-      renderGrid();
-    } catch (err) {
-      grid.innerHTML = '<p class="text-red-500 text-sm col-span-2">Fehler beim Laden.</p>';
-    }
-  }
-
-  // Suchen, Filtern und Sortieren (client-seitig, Liste ist pro Kurs klein)
-  function getVisibleMedia() {
-    const q = (document.getElementById("media-search").value || "").trim().toLowerCase();
-    const filter = document.getElementById("media-filter").value;
-    const sort = document.getElementById("media-sort").value;
-
-    const list = mediaList.filter(m => {
-      if (q && !(m.title + " " + (m.llm_description || "")).toLowerCase().includes(q)) return false;
-      const n = m.usages.length;
-      if (filter === "duplicate" && !(m.duplicate_in && m.duplicate_in.length)) return false;
-      if (filter === "no-desc" && (m.llm_description || "").trim() !== "") return false;
-      if (filter === "none" && n > 0) return false;
-      if (filter === "exactly-1" && n !== 1) return false;
-      if (filter === "at-least-1" && n < 1) return false;
-      if (filter === "more-than-1" && n < 2) return false;
-      return true;
-    });
-
-    const t = m => (m.created_at ? Date.parse(m.created_at) : 0);
-    list.sort((a, b) => {
-      switch (sort) {
-        case "oldest":
-          return t(a) - t(b);
-        case "title-asc":
-          return a.title.localeCompare(b.title, "de", { sensitivity: "base" });
-        case "title-desc":
-          return b.title.localeCompare(a.title, "de", { sensitivity: "base" });
-        case "newest":
-        default:
-          return t(b) - t(a);
+      const items = Array.isArray(data.items) ? data.items : [];
+      if (!append) grid.innerHTML = "";
+      // Applet-Iframes brauchen einen Cache-Buster (HTML-Response ohne ETag);
+      // Bilder erhalten eine stabile URL (Browser-Cache + ETag-Revalidierung,
+      // ersetzte Dateien kommen trotzdem ohne Re-Download pro Seite an).
+      const ts = Date.now();
+      items.forEach(m => grid.appendChild(mediaCard(m, ts)));
+      mediaList.push(...items);
+      hasMore = !!data.has_more;
+      if (mediaList.length === 0) {
+        grid.innerHTML = filtersActive()
+          ? '<p class="text-gray-400 text-sm col-span-2">Keine Medien für die aktuelle Filterung/Suche.</p>'
+          : '<p class="text-gray-400 text-sm col-span-2">Noch keine Medien. Lade links ein Bild hoch oder generiere ein Applet mit dem LLM.</p>';
       }
-    });
-    return list;
+      sentinelText.textContent = hasMore
+        ? ""
+        : (mediaList.length > 0 ? `Alle ${data.total} Medien geladen.` : "");
+    } catch (err) {
+      if (seq === reqSeq) {
+        if (!append) grid.innerHTML = '<p class="text-red-500 text-sm col-span-2">Fehler beim Laden.</p>';
+        sentinelText.textContent = "";
+      }
+    } finally {
+      if (inflight === seq) inflight = 0;
+    }
   }
 
-  function renderGrid() {
-    const grid = document.getElementById("media-grid");
-    if (mediaList.length === 0) {
-      grid.innerHTML = '<p class="text-gray-400 text-sm col-span-2">Noch keine Medien. Lade links ein Bild hoch oder generiere ein Applet mit dem LLM.</p>';
-      return;
-    }
-    const list = getVisibleMedia();
-    if (list.length === 0) {
-      grid.innerHTML = '<p class="text-gray-400 text-sm col-span-2">Keine Medien für die aktuelle Filterung/Suche.</p>';
-      return;
-    }
-    grid.innerHTML = "";
-    // Applet-Iframes brauchen einen Cache-Buster (HTML-Response ohne ETag).
-    // Bilder erhalten eine stabile URL: Browser-Cache + ETag-Revalidierung
-    // (304) liefert ersetzte Dateien trotzdem aktuell — ohne kompletten
-    // Re-Download jedes Bildes pro Tastendruck in der Suche.
-    const ts = Date.now();
-    list.forEach(m => grid.appendChild(mediaCard(m, ts)));
-  }
+  // Infinite Scroll: Der Sentinel unterhalb des Grids wird per
+  // IntersectionObserver beobachtet; rootMargin lädt die nächste Seite schon,
+  // bevor der Nutzer unten anstößt (bei kurzen Seiten füllt das auch den
+  // Viewport automatisch auf).
+  new IntersectionObserver(
+    entries => { if (entries.some(e => e.isIntersecting)) loadMore(); },
+    { rootMargin: "600px 0px" },
+  ).observe(sentinel);
 
   function mediaCard(m, ts) {
     const card = document.createElement("div");
@@ -290,6 +325,7 @@
       preview.onclick = () => openAppletOverlay(m.url + "?t=" + Date.now(), m.title);
       const frame = document.createElement("iframe");
       frame.src = m.url + "?t=" + ts;
+      frame.loading = "lazy"; // Vorschau nur kurz vor dem Sichtbarwerden laden
       frame.sandbox = "allow-scripts";
       frame.className = "w-full h-full border-0 pointer-events-none";
       frame.title = m.title;
@@ -297,6 +333,8 @@
     } else {
       preview = document.createElement("img");
       preview.src = m.url;
+      preview.loading = "lazy";
+      preview.decoding = "async";
       preview.alt = m.title;
       preview.title = "Klick zum Vergrößern";
       preview.onclick = () => openImageOverlay(m.url + "?t=" + Date.now(), m.title);
@@ -962,11 +1000,16 @@
     await uploadAndGenerate(file, null, uploadUI, true);
   });
 
-  // ─── Filter & Sortierung ────────────────────────────────
-
-  document.getElementById("media-search").addEventListener("input", renderGrid);
-  document.getElementById("media-filter").addEventListener("change", renderGrid);
-  document.getElementById("media-sort").addEventListener("change", renderGrid);
+  // ─── Filter & Sortierung (server-seitig) ────────────────────────
+  // Suche per Debounce: sonst würde jeder Tastendruck eine Seiten-Anfrage
+  // auslösen.
+  let searchTimer = null;
+  document.getElementById("media-search").addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(loadMedia, 300);
+  });
+  document.getElementById("media-filter").addEventListener("change", loadMedia);
+  document.getElementById("media-sort").addEventListener("change", loadMedia);
 
   loadMedia();
 })();
