@@ -461,6 +461,7 @@
     template: theme.template,
     colors: { ...theme.colors },
     font_scale: theme.font_scale,
+    padding_scale: theme.padding_scale,
     footer: theme.footer,
     logo_media_id: theme.logo_media_id,
     logo_position: theme.logo_position,
@@ -484,6 +485,12 @@
       scale.value = themeState.font_scale;
       const val = document.getElementById("tm-scale-val");
       if (val) val.textContent = String(parseFloat(themeState.font_scale)) + "×";
+    }
+    const paddingScale = document.getElementById("tm-padding-scale");
+    if (paddingScale) {
+      paddingScale.value = themeState.padding_scale;
+      const val = document.getElementById("tm-padding-scale-val");
+      if (val) val.textContent = String(parseFloat(themeState.padding_scale)) + "×";
     }
     const aspect = document.getElementById("tm-aspect");
     if (aspect) aspect.value = themeState.aspect_ratio;
@@ -517,6 +524,7 @@
     el.style.setProperty("--slides-bg", themeState.colors.background);
     el.style.setProperty("--slides-text", themeState.colors.text);
     el.style.setProperty("--slides-font-scale", themeState.font_scale);
+    el.style.setProperty("--slides-padding-scale", String(themeState.padding_scale));
     el.style.setProperty("--slides-aspect", String(themeState.aspect_value));
     el.style.setProperty("--slides-logo-scale", String(themeState.logo_scale));
     // Live-Logo-Vorschau: die Auswahl wird auf der Vorschau selbst
@@ -624,6 +632,13 @@
     await applyPreview();
   };
 
+  window.setPaddingScale = async function (value) {
+    themeState.padding_scale = parseFloat(value);
+    const val = document.getElementById("tm-padding-scale-val");
+    if (val) val.textContent = String(parseFloat(value)) + "×";
+    await applyPreview();
+  };
+
   window.setAspect = async function (value) {
     if (ASPECTS[value]) {
       themeState.aspect_ratio = value;
@@ -659,6 +674,7 @@
       template: themeState.template,
       colors: themeState.colors,
       font_scale: themeState.font_scale,
+      padding_scale: themeState.padding_scale,
       footer: themeState.footer,
       logo_media_id: themeState.logo_media_id,
       logo_position: themeState.logo_position,
@@ -749,8 +765,14 @@
 
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Textgröße: <span id="tm-scale-val"></span></label>
-          <input type="range" id="tm-scale" min="0.8" max="1.5" step="0.05"
+          <input type="range" id="tm-scale" min="0.6" max="1.5" step="0.05"
                  value="{{ slides_theme.font_scale }}" oninput="setScale(this.value)" class="w-full">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Innenabstand: <span id="tm-padding-scale-val"></span></label>
+          <input type="range" id="tm-padding-scale" min="0.3" max="1.5" step="0.05"
+                 value="{{ slides_theme.padding_scale }}" oninput="setPaddingScale(this.value)" class="w-full">
         </div>
 
         <div>

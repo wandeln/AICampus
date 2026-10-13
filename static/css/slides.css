@@ -12,6 +12,7 @@
   --slides-bg: #ffffff;
   --slides-text: #1f2937;
   --slides-font-scale: 1;
+  --slides-padding-scale: 1;
   --slides-aspect: 1.7778; /* 16:9 — pro Kurs per Theme überschrieben */
 }
 
@@ -42,7 +43,9 @@
 .reveal .slides > section,
 .reveal .slides section.slides-stack > section {
   height: 100% !important;
-  padding: 1.5em 2.5em;
+  /* Innenabstand pro Kurs skalierbar (--slides-padding-scale, Default 1). */
+  padding: calc(1.5em * var(--slides-padding-scale, 1))
+           calc(2.5em * var(--slides-padding-scale, 1));
   box-sizing: border-box;
   text-align: left; /* Default-Layout (topleft): linksbündig */
 }
@@ -171,8 +174,9 @@
   content: attr(data-footer);
   position: absolute;
   bottom: 0.45em;
-  left: 2.5em;
-  right: 2.5em;
+  /* Mit dem horizontalen Folien-Padding ausgerichtet (skaliert mit). */
+  left: calc(2.5em * var(--slides-padding-scale, 1));
+  right: calc(2.5em * var(--slides-padding-scale, 1));
   font-size: 0.4em;
   line-height: 1.2;
   color: var(--slides-text, #1f2937);
@@ -196,8 +200,8 @@ html.print-pdf .reveal .slides .pdf-page > section[data-footer]::after {
   content: attr(data-footer);
   position: absolute;
   bottom: 0.45em;
-  left: 2.5em;
-  right: 2.5em;
+  left: calc(2.5em * var(--slides-padding-scale, 1));
+  right: calc(2.5em * var(--slides-padding-scale, 1));
   font-size: 0.4em;
   line-height: 1.2;
   color: var(--slides-text, #1f2937);
@@ -570,9 +574,17 @@ html.print-pdf .reveal .slides .markdown-preview pre {
 }
 
 /* Figure-/Applet-/Code-/Tabellen-Captions: in Slides größer als im Skript
-   (0.875rem) — em-basiert, damit sie mit dem Reveal-Zoom skalieren. */
+   (0.875rem) — em-basiert, damit sie mit dem Textgrößen-Slider
+   (--slides-font-scale, Basis 28px) skalieren; 0.7em = 19.6px bei 1.0×
+   (vorher 1.2rem = 19.2px, starr).
+   Subfigure-Teil-Captions bleiben kleiner (0.5em ≈ 14px bei 1.0×, wie
+   0.875rem im Skript) — sie liegen tiefer in der Figure, brauchen eine
+   eigene Regel. */
 :is(.reveal .slides, .slides-canvas) .markdown-preview :is(.aicampus-figure, .aicampus-code-figure, .aicampus-table-figure) figcaption {
-  font-size: 1.2rem;
+  font-size: 0.7em;
+}
+:is(.reveal .slides, .slides-canvas) .markdown-preview .aicampus-subfig-item figcaption {
+  font-size: 0.5em;
 }
 
 /* Applet-Iframes: volle Breite, Höhe dämpfen (Renderer setzt inline
@@ -671,7 +683,8 @@ html.print-pdf .reveal .slides .markdown-preview pre {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 1.5em 2.5em;
+  padding: calc(1.5em * var(--slides-padding-scale, 1))
+           calc(2.5em * var(--slides-padding-scale, 1));
   box-sizing: border-box;
   text-align: center;
   font-size: calc(28px * var(--slides-font-scale, 1));
@@ -975,7 +988,8 @@ body.present-mode .present-shortcuts kbd {
    slides_present.html, weil Reveal sie aus gemessenen Scroll-Heights
    rechnet und den Sections keine feste Höhe gibt.) */
 html.print-pdf .reveal .slides .pdf-page > section {
-  padding: 1.5em 2.5em !important; /* reveal.css: padding:0 !important — wie on-screen (section) */
+  padding: calc(1.5em * var(--slides-padding-scale, 1))
+           calc(2.5em * var(--slides-padding-scale, 1)) !important; /* reveal.css: padding:0 !important — wie on-screen (section) */
   text-align: left;
   box-sizing: border-box;
 }

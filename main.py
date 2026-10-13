@@ -1269,6 +1269,7 @@ def _slides_theme_ctx(session: Session, course_id: int) -> dict:
         f"--slides-bg: {colors['background']}; "
         f"--slides-text: {colors['text']}; "
         f"--slides-font-scale: {theme['font_scale']}; "
+        f"--slides-padding-scale: {theme['padding_scale']}; "
         f"--slides-aspect: {theme['aspect_value']:.4f}; "
         f"--slides-logo-scale: {theme['logo_scale']}"
     )

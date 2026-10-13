@@ -27,7 +27,8 @@ Das Theme (Design) pro Kurs ist ein JSON-Objekt (eine DB-Zeile pro Kurs):
     {
       "template": "light" | "dark" | "serif" | "simple",
       "colors": {"primary", "accent", "background", "text"},  # je #rrggbb
-      "font_scale": 0.8–1.5,
+      "font_scale": 0.6–1.5,
+      "padding_scale": 0.3–1.5,
       "footer": true/false,
       "logo_media_id": int | null,
       "aspect_ratio": "4:3" | "3:2" | "sqrt2" | "5:3" | "16:9" | "2:1" | "golden"
@@ -85,8 +86,12 @@ THEME_TEMPLATES: dict[str, dict] = {
     "simple": {"primary": "#111827", "accent": "#6b7280", "background": "#fafafa", "text": "#1f2937", "font": ""},
 }
 
-FONT_SCALE_MIN = 0.8
+FONT_SCALE_MIN = 0.6
 FONT_SCALE_MAX = 1.5
+
+# Innenabstand der Folien (1.0 = Default 1.5em/2.5em).
+PADDING_SCALE_MIN = 0.3
+PADDING_SCALE_MAX = 1.5
 
 
 class SlideError(ValueError):
@@ -561,6 +566,23 @@ def _clamp_font_scale(value) -> float:
     return min(FONT_SCALE_MAX, max(FONT_SCALE_MIN, fs))
 
 
+def _clamp_padding_scale_lenient(value) -> float:
+    """Clamping für die Anzeige (unzulässige Werte → 1.0, kein Fehler)."""
+    try:
+        return min(PADDING_SCALE_MAX, max(PADDING_SCALE_MIN, float(value)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _clamp_padding_scale(value) -> float:
+    """Clamping für die Validierung (PUT); unzulässige Werte → SlideError."""
+    try:
+        ps = float(value)
+    except (TypeError, ValueError):
+        raise SlideError("'padding_scale' muss eine Zahl sein.")
+    return min(PADDING_SCALE_MAX, max(PADDING_SCALE_MIN, ps))
+
+
 def _clamp_logo_scale_lenient(value) -> float:
     """Clamping für die Anzeige (unzulässige Werte → 1.0, kein Fehler)."""
     try:
@@ -595,6 +617,7 @@ def resolve_theme(raw: Optional[dict]) -> dict:
         "font": base["font"],
         "colors": {key: (colors_in.get(key) or base[key]) for key in COLOR_KEYS},
         "font_scale": _clamp_font_scale_lenient(raw.get("font_scale", 1.0)),
+        "padding_scale": _clamp_padding_scale_lenient(raw.get("padding_scale", 1.0)),
         "footer": bool(raw.get("footer", True)),
         "logo_media_id": raw.get("logo_media_id") or None,
         "logo_position": (
@@ -617,6 +640,7 @@ def validate_theme(raw) -> dict:
         "template": "light",
         "colors": {},
         "font_scale": 1.0,
+        "padding_scale": 1.0,
         "footer": True,
         "logo_media_id": None,
         "logo_position": DEFAULT_LOGO_POSITION,
@@ -643,6 +667,9 @@ def validate_theme(raw) -> dict:
 
     if "font_scale" in raw and raw["font_scale"] is not None:
         theme["font_scale"] = _clamp_font_scale(raw["font_scale"])
+
+    if "padding_scale" in raw and raw["padding_scale"] is not None:
+        theme["padding_scale"] = _clamp_padding_scale(raw["padding_scale"])
 
     if "footer" in raw and raw["footer"] is not None:
         theme["footer"] = bool(raw["footer"])
