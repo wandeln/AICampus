@@ -1,7 +1,9 @@
 # Core
 python-dotenv==1.0.1
 
-fastapi==0.115.6
+fastapi==0.121.0
+# starlette explizit gepinnt: muss zu fastapi (<0.50) UND zu mcp/sse-starlette (>=0.49.1) passen
+starlette==0.49.1
 uvicorn[standard]==0.34.0
 sqlmodel==0.0.22
 python-multipart==0.0.20
@@ -44,3 +46,6 @@ pymupdf==1.24.9
 
 # Kurs-Material-Import: SVG → PNG-Rasterung für die Bild-Triage (braucht libcairo2)
 cairosvg==2.9.1
+
+# MCP (Model Context Protocol) Server
+mcp==2.3.0

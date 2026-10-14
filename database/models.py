@@ -1266,3 +1266,45 @@ class PageView(SQLModel, table=True):
     page_key: str = Field(max_length=50, index=True)  # normalisierte Seitenart (s. analytics.classify_path)
     course_id: Optional[int] = Field(default=None, foreign_key="courses.id", index=True)
     created_at: datetime = Field(default_factory=datetime.now, index=True)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MCP TOKENS (MCP-Anbindung: ein Token pro User + Kurs-Allowlist)
+# ═══════════════════════════════════════════════════════════════════
+
+class McpToken(SQLModel, table=True):
+    """MCP-Zugangstoken (analog GitHub-PATs).
+
+    Der Token selbst (Format `aic_<64 hex>`) wird NIE gespeichert — nur
+    sein SHA-256-Hash (Lookup-Index). Ein Token pro User mit einer
+    Kurs-Allowlist (McpTokenCourse); die Rolle wird pro Request live aus
+    UserCourse abgeleitet (s. services/mcp_token_service.py).
+    """
+
+    __tablename__ = "mcp_tokens"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    name: str = Field(max_length=100)
+    token_hash: str = Field(max_length=64, unique=True, index=True)
+    created_at: datetime = Field(default_factory=datetime.now)
+    last_used_at: Optional[datetime] = Field(default=None)
+    expires_at: Optional[datetime] = Field(default=None)  # NULL = kein Ablauf
+
+    courses: List["McpTokenCourse"] = Relationship(back_populates="token")
+
+
+class McpTokenCourse(SQLModel, table=True):
+    """Allowlist-Eintrag: welchen Kurs dieses Token adressieren darf.
+
+    Zugriffs-Check = Allowlist-Row ODER Kurs-Mitgliedschaft (beides muss
+    gelten) — s. api/mcp_server.py.
+    """
+
+    __tablename__ = "mcp_token_courses"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    token_id: int = Field(foreign_key="mcp_tokens.id", index=True)
+    course_id: int = Field(foreign_key="courses.id", index=True)
+
+    token: McpToken = Relationship(back_populates="courses")

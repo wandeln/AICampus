@@ -33,6 +33,8 @@ from database.models import (
     ImageSpec,
     LLMDebugEntry,
     MediaUsage,
+    McpToken,
+    McpTokenCourse,
     ScriptQuestion,
     ScriptQuestionResponse,
     ScriptSection,
@@ -57,6 +59,7 @@ def delete_user_with_data(session: Session, user: User) -> str:
       Medien, Referenzen, Einladungen, Forum-Kanäle): wird gelöscht
     - Foren-Posts, Read-States, Skript-Fragen, Hint-Dialoge,
       Workspace-Runs, Einreichungen (inkl. Feedback): werden gelöscht
+    - MCP-Tokens (inkl. Kurs-Allowlist): werden gelöscht
     - Image-Specs + LLM-Debug-Log: Zeilen bleiben, User-Referenz wird entfernt
     - Dateien (Avatar, Workspace-Snapshots, Import-Staging): best effort
 
@@ -208,7 +211,20 @@ def delete_user_with_data(session: Session, user: User) -> str:
             staging_dirs.append(import_service.staging_dir(imp.course_id, imp.job_id))
         session.delete(imp)
 
-    # 11. User-Referenzen, die nicht gelöscht werden: → NULL
+    # 11. MCP-Tokens (Allowlist-Zeilen vor den Tokens)
+    mcp_token_ids = [
+        t.id for t in session.exec(select(McpToken).where(McpToken.user_id == user_id)).all()
+    ]
+    for tc in session.exec(
+        select(McpTokenCourse).where(McpTokenCourse.token_id.in_(mcp_token_ids))
+    ).all():
+        session.delete(tc)
+    session.flush()
+    for token in session.exec(select(McpToken).where(McpToken.user_id == user_id)).all():
+        session.delete(token)
+    session.flush()
+
+    # 12. User-Referenzen, die nicht gelöscht werden: → NULL
     for spec in session.exec(select(ImageSpec).where(ImageSpec.created_by == user_id)).all():
         spec.created_by = None
     for entry in session.exec(
@@ -216,16 +232,16 @@ def delete_user_with_data(session: Session, user: User) -> str:
     ).all():
         entry.user_id = None
 
-    # 12. Kurs-Mitgliedschaften
+    # 13. Kurs-Mitgliedschaften
     for uc in session.exec(select(UserCourse).where(UserCourse.user_id == user_id)).all():
         session.delete(uc)
 
-    # 13. Den User selbst
+    # 14. Den User selbst
     avatar_rel = user.avatar
     session.delete(user)
     session.commit()
 
-    # 14. Dateien (best effort, nach dem Commit)
+    # 15. Dateien (best effort, nach dem Commit)
     if avatar_rel:
         media_service.delete_avatar_file(avatar_rel)
     for d in snapshot_dirs:

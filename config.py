@@ -55,6 +55,11 @@ PREVIEW_AGENT_PORT = int(os.getenv("PREVIEW_AGENT_PORT", "8701"))
 # DNS + TLS (Wildcard-Zertifikat) + Nginx-Server-Block OHNE
 # X-Frame-Options. Leer = aus.
 PREVIEW_BASE_DOMAIN = os.getenv("PREVIEW_BASE_DOMAIN", "").strip().lower()
+# Öffentliche Basis-Domain der App für generierte URLs (z. B. MCP-URL in
+# den User-Settings): Die UI zeigt URLs immer mit dieser Domain, nicht mit
+# dem Host des Requests — sonst laufen veraltete Zugangs-Domains (z. B.
+# cg2-04.…-bonn.de) in kopierte Configs hinein. Leer = aus Request ableiten (Dev).
+PUBLIC_DOMAIN = os.getenv("PUBLIC_DOMAIN", "").strip().lower()
 
 # ─── Datenbank ──────────────────────────────────────────────────
 DATABASE_URL = os.getenv(

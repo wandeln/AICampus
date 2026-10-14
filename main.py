@@ -33,7 +33,7 @@ from fastapi.templating import Jinja2Templates
 from jinja2 import TemplateNotFound
 from sqlmodel import Session, func, select
 
-from config import BASE_DIR, DEBUG, LLM_TIMEOUT, PREVIEW_BASE_DOMAIN, VAPID_PUBLIC_KEY, push_enabled
+from config import BASE_DIR, DEBUG, LLM_TIMEOUT, PREVIEW_BASE_DOMAIN, PUBLIC_DOMAIN, VAPID_PUBLIC_KEY, push_enabled
 from database.base import create_db_and_tables, engine, get_session, migrate_schema
 from database.models import (
     Course,
@@ -74,7 +74,7 @@ from services.slides_service import (
     slide_count,
 )
 
-from api import admin, analytics as analytics_api, auth, forum, importer, image_specs, media as media_api, materials as materials_api, notifications as notifications_api, push as push_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
+from api import admin, analytics as analytics_api, auth, forum, importer, image_specs, media as media_api, materials as materials_api, mcp_server as mcp_server_api, mcp_tokens, notifications as notifications_api, push as push_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
 
 
 def _calculate_percentile(my_score: float, other_scores: list[float]) -> int:
@@ -109,26 +109,29 @@ def _get_best_score(subs: Sequence[Submission]) -> float:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """App-Start: DB-Tabellen erstellen + Schema-Migration + Admin-User bei leerer DB."""
-    create_db_and_tables()
-    migrate_schema()
-    migrate_script_sections()
-    migrate_forum_channels()
-    import_service.mark_interrupted_on_startup()  # aktive Import-Jobs → 'interrupted'
-    analytics.prune_old()  # Page-View-Bereinigung (No-Op, solange RETENTION_DAYS=None)
+    # MCP-Subapp: Starlette-Mount führt den Lifespan des Sub-Apps (Session-Manager-
+    # Task-Group) nicht selbst aus — hier manuell starten/stoppen.
+    async with mcp_server_api.mcp_app.router.lifespan_context(mcp_server_api.mcp_app):
+        create_db_and_tables()
+        migrate_schema()
+        migrate_script_sections()
+        migrate_forum_channels()
+        import_service.mark_interrupted_on_startup()  # aktive Import-Jobs → 'interrupted'
+        analytics.prune_old()  # Page-View-Bereinigung (No-Op, solange RETENTION_DAYS=None)
 
-    # Admin-User anlegen, wenn DB leer
-    with Session(engine) as session:
-        admin_exists = session.exec(
-            select(User).where(User.username == "admin")
-        ).first()
+        # Admin-User anlegen, wenn DB leer
+        with Session(engine) as session:
+            admin_exists = session.exec(
+                select(User).where(User.username == "admin")
+            ).first()
 
-        if not admin_exists:
-            _create_admin(session)
+            if not admin_exists:
+                _create_admin(session)
 
-        # Kuratierte globale Image-Specs (idempotent)
-        image_spec_service.seed_global_specs(session)
+            # Kuratierte globale Image-Specs (idempotent)
+            image_spec_service.seed_global_specs(session)
 
-    yield
+        yield
 
 
 def _create_admin(session: Session):
@@ -385,7 +388,11 @@ app.include_router(notifications_api.router)  # /api/notifications/… (in-App-G
 app.include_router(push_api.router)  # /api/push/… (M3: Browser-Push-Subscriptions)
 app.include_router(versions_api.router)  # /api/versions/… (Versions-History + Autosave)
 app.include_router(importer.router)
+app.include_router(mcp_tokens.router)  # /api/mcp-tokens/… (MCP-Token verwalten)
 app.include_router(preview_proxy.router)  # /preview/{task}/{port}/… (same-origin)
+
+# MCP-Server (streamable HTTP) — Bearer-Token-Auth, s. api/mcp_server.py
+app.mount("/mcp", mcp_server_api.mcp_app)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -2425,6 +2432,11 @@ async def settings_page(
             "selected_course_id": None,
             "is_admin": user.role == GlobalUserRole.ADMIN,
             "use_ldap": use_ldap,
+            "mcp_url": (
+                f"https://{PUBLIC_DOMAIN}/mcp/"
+                if PUBLIC_DOMAIN
+                else _public_base_url(request) + "mcp/"
+            ),
         },
     )
 
