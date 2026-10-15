@@ -1297,6 +1297,7 @@ async def create_chapter(
         session.add(section)
         session.commit()
         session.refresh(section)
+        sync_media_usages(session, course_id)
         return _json({
             "id": section.id,
             "title": section.title,
@@ -1352,6 +1353,7 @@ async def create_slide_deck(
         session.add(material)
         session.commit()
         session.refresh(material)
+        sync_media_usages(session, course_id)
         return _json({
             "id": material.id,
             "title": material.title,
@@ -1491,6 +1493,7 @@ async def create_task(
         session.add(task)
         session.commit()
         session.refresh(task)
+        sync_media_usages(session, course_id)
         return _json({
             "id": task.id,
             "title": task.title,
