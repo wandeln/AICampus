@@ -198,6 +198,9 @@ def migrate_schema():
             "reference_map": "JSON NOT NULL DEFAULT '{}'",  # detektierte Quellen (BibTeX-Keys)
             "ref_extract_status": "VARCHAR(20) DEFAULT 'pending'",  # Stufe: LLM-Quellen-Extraktion
             "slides_plan_status": "VARCHAR(20) DEFAULT 'pending'",  # Stufe: Folien-Planner
+            "tasks_plan": "JSON NOT NULL DEFAULT '[]'",  # Aufgaben-Plan (1 Eintrag = 1 Übungsaufgabe)
+            "tasks_plan_status": "VARCHAR(20) DEFAULT 'pending'",  # Stufe: Aufgaben-Planner
+            "tasks_status": "VARCHAR(20) DEFAULT 'pending'",  # Stufe: Aufgaben-Generierung
         },
         "course_media": {
             "content_hash": "VARCHAR(64)",  # SHA256 der Quelldatei (Medien-Import-Dedup)

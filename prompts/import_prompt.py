@@ -286,6 +286,192 @@ DEINE AKTIONEN BISHER (Tool-Calls + Ergebnisse):
 __STEPS__"""
 
 
+TASKS_PLANNER_PROMPT_TEMPLATE = _SECURITY + """
+Du bist ein Planungs-Assistent für den Kurs-Material-Import eines Lehr-Systems.
+Es wurde ein Zip mit Kurs-Materialien (Skript/Lehrbuch, Foliensätze, Bilder) hochgeladen.
+Deine Aufgabe: einen AUFGABEN-PLAN erstellen (ein Eintrag = eine Übungsaufgabe), aus dem
+die Übungsaufgaben des Kurses generiert werden.
+
+Entscheide SELBST, wie du vorgehst: Orientiere dich an Dateinamen und Digests und blende
+gezielt Auszüge ein, um Übungsaufgaben zu finden. Nutze "read_file" nur, wenn es für den
+Plan wirklich nötig ist.
+
+DATEIBAUM (Pfad, Typ):
+__FILE_TREE__
+
+STRUKTUR-DIGESTS der Text-Dateien (Zusammenfassungen + Überschriften pro Datei):
+__DIGESTS__
+
+BISHERIGE AUFGABEN-VORSCHLÄGE (aus einer früheren Planung — übernehme sinnvoll passende
+Einträge, ergänze und passe an; der neue Plan ERSETZT die alte Liste):
+__PREVIOUS_PLAN__
+
+Regeln:
+- Plan NUR aus den Import-Materialien der ZIP — bereits im Zielkurs bestehende
+  Aufgaben sind NICHT Teil dieses Plans und werden nicht berücksichtigt.
+- Übungsaufgaben erkennen: Übungsblätter als eigene Dateien (Namens-Hinweise wie
+  blatt*, übung*, aufgabe*, exercise*, sheet*, worksheet*, homework*), Sektionen
+  "Aufgabe N" / "Exercise N" / "Task N" in Skript- und Tex-Dateien, Klausur-/Kontrollfragen.
+  PDF-Übungsblätter sind transkribiert (Markdown-Sidecar) — lies sie wie jede andere Datei.
+- Nur echte AUFGABEN aufnehmen (mit klarer Aufgabenstellung, idealerweise mit Lösungsweg
+  oder Musterlösung). Keine reinen Theorie-Kapitel, Definitionen, Theoreme oder Beispiele
+  ohne Aufgabenstellung.
+- Wenn dieselbe Aufgabe in mehreren Dateien vorkommt (z. B. Skript + Übungsblatt),
+  nimm sie NUR EINMAL auf (bevorzugt aus der ausführlichsten Datei).
+- "title": "<Quelle>, Aufgabe <N>: <kurzes Thema>" (z. B. "Blatt 3, Aufgabe 2: Rekursive Fibonacci").
+- "points": Punkte aus der Quelle, wenn angegeben (z. B. "(5 Punkte)"); sonst sinnvoller
+  ganzzahliger Vorschlag nach Umfang/Schwierigkeit (typisch 2-10).
+- "task_type":
+  - "text" (Default): offene Aufgabe mit Fließtext/Rechnung/Code als Lösung
+  - "mc": nur wenn sich die Aufgabe NATÜRLICH in Multiple-Choice-Fragen umsetzen lässt
+    (Richtig/Falsch-Unterpunkte, Auswahl aus Varianten, mehrere Teilfragen)
+  - "workspace": NUR wenn die Quelle explizit Code + Tests enthält (z. B. "Implementiere X,
+    die Tests müssen durchlaufen"); sonst immer "text"
+- "description": 1-3 Sätze (Deutsch), die für die spätere Konvertierung festhalten, WOHER
+  die Aufgabe kommt: QUELLENDATEN (Pfad + Zeilenbereich, 1-basiert, Zeilennummern wie in
+  Digests/reads) + Aufgaben-Kennung + Hinweis, ob eine Musterlösung in der Quelle vorhanden
+  ist ("Musterlösung enthalten" / "keine Musterlösung in der Quelle").
+- Wenn es früher Vorschläge gab: übernehme passende Einträge (alle Felder ggf. überarbeitet),
+  entferne unpassende, ergänze fehlende — das Ergebnis ist der NEUE, vollständige Plan.
+
+Antworte NUR mit einem JSON-Objekt — exakt eine der beiden Aktionen:
+
+1) Eine Datei (oder einen Teil) lesen, um besser planen zu können:
+{"action": "read_file", "path": "<Pfad aus dem Dateibaum>", "start_line": <int, 1-basiert>, "end_line": <int, 1-basiert inclusive>}
+
+2) Wenn der Plan steht — IMMER damit abschließen (auch wenn keine Aufgabe gefunden wurde:
+{"action": "final_plan", "tasks_plan": [], "notes": "<Begründung>"}):
+{"action": "final_plan", "tasks_plan": [ … ], "notes": "<kurze Begründung/Anmerkungen>"}
+
+FORMAT von "tasks_plan" (in Übungsreihenfolge — NUR diese Felder):
+[
+  {
+    "title": "<Blatt 3, Aufgabe 2: Rekursive Fibonacci>",
+    "enabled": true,
+    "points": 5,
+    "task_type": "text",
+    "description": "<Aufgabe aus uebungsblaetter/blatt3.pdf (S. 3, Zeilen 40-120), Aufgabe 2. Keine Musterlösung in der Quelle.>"
+  }
+]
+
+DEINE AKTIONEN BISHER (Tool-Calls + Ergebnisse):
+__STEPS__"""
+
+
+# ─── 2b. Aufgaben-Konvertierung (Quelle → Text/MC-Aufgabe, wortgetreu) ──
+
+TASKS_GENERATE_PROMPT_TEMPLATE = _SECURITY + """
+Du bist ein Konverter für den Kurs-Material-Import eines Lehr-Systems.
+Konvertiere aus dem Quellmaterial unten EXAKT EINE Übungsaufgabe in eine Aufgabe
+des Kurs-Systems. Die Aufgabe wurde vom Planner erkannt und vom Nutzer bestätigt
+(Titel, Art, Punkte im Plan).
+
+AUFGABE (aus dem Plan):
+- Titel: __TITLE__
+- Geplante Aufgabenart: __TASK_TYPE__ ("text" oder "mc")
+- Punkte-Budget (Plan): __POINTS__
+
+QUELLMATERIAL der Aufgabe (Marker-Zeilen "%--- start …, Zeilen x-y ---" zeigen Datei +
+Zeilenbereich — sie sind KEIN Inhalt und werden ignoriert):
+__SOURCE_TEXT__
+
+SKRIPT-KAPITEL DES KURSES (Titel — interne Zusammenfassung, ggf. mit Labels wie
+{#fig:…} / {#eq:…} / {#code:…} / {#box:…} / {#tab:…}):
+__SCRIPT_CONTEXT__
+
+MEDIENBIBLIOTHEK DES KURSES (Titel (URL): Beschreibung):
+__MEDIA__
+
+QUELLENVERZEICHNIS DES KURSES (Zitations-Keys, Autoren, Titel, Kernpunkte):
+__REFERENCES__
+
+KERNREGEL — WORTGETREUE KONVERTIERUNG:
+- "description" übernimmt die AUFGABENSTELLUNG WORTGETREU aus dem Quellmaterial — es wird
+  NUR das Format normalisiert (Markdown, Mathematik als KaTeX $…$ / $$…$$, Code als
+  ```Fences```). NICHT umformulieren, kürzen, vereinfachen oder erläutern. Teilfragen
+  (a), b), …), Punkte-Angaben ("(5 Punkte)") und Bedingungen bleiben exakt erhalten.
+  SPRACHE BEHALTEN: Ist die Quelle z. B. auf Englisch, bleibt die Aufgabenstellung auf
+  Englisch (Ergänzungen, die du neu formulieren musst, darfst auf Deutsch sein).
+- Enthält das Quellmaterial eine MUSTERLÖSUNG / Lösung: übernehme sie 1:1 (mit derselben
+  Format-Normierung) nach "model_solution".
+- Fehlt die Musterlösung im Quellmaterial: ERSTELLE eine vollständige Musterlösung
+  (Lösungsweg + Bewertungskriterien; maximal __POINTS__ Punkte, nur für das, was aus der
+  Aufgabenstellung ersichtlich ist) und erwähne das in "notes".
+
+FORMATIERUNG:
+- Markdown (**fett**, *kursiv*, Listen, Tabellen), Mathematik als KaTeX ($…$ / $$…$$),
+  Code als ```Fences```, ggf. Mermaid (```mermaid …```) für Graphen/Flussdiagramme.
+- Bilder: Nutze die /media-URLs aus dem Quellmaterial (bereits umgeschrieben) oder der
+  Medienbibliothek (nur wenn sie inhaltlich wirklich passen, max. 1-2).
+  Erfinde KEINE anderen Medien-Pfade.
+- Querverweise auf das Skript: @fig:label / @eq:label / @code:label / @box:label /
+  @tab:label — NUR Labels, die in den SKRIPT-KAPITELN oben vorkommen (sonst kaputte
+  Referenz); @cite:key NUR für gelistete Quellen. Diese Referenzen IMMER als normalen
+  Fließtext schreiben — NIEMALS in Backticks, Code-Blöcke oder Anführungszeichen.
+  Lege in der Aufgabe selbst KEINE neuen fig/eq/code/box/tab-Labels an.
+
+AUFGABENART:
+- "text" (geplante Art __TASK_TYPE__):
+  - "description": Aufgabenstellung (wortgetreu, s. Kernregel).
+  - "model_solution": Musterlösung inkl. Bewertungskriterien (aus der Quelle oder neu).
+  - "text_template": NUR wenn die Quell-Aufgabe explizit ein Eintragungs-Gerüst vorsieht
+    (Lückentext/Tabelle) — dann Markdown-Gerüst mit klar markierten Lücken, und die
+    Musterlösung zeigt die vollständig ausgefüllte Vorlage. Sonst diesen Schlüssel WEGLASSEN.
+- "mc" (geplante Art __TASK_TYPE__):
+  - Setze die Aufgabe in Multiple-Choice-Fragen um. Enthält die Quelle explizite Fragen
+    mit Optionen oder Richtig/Falsch-Unterpunkte: übernehme diese WORTGETREU (Optionen
+    unverändert, richtige Antworten wie in der Quelle). Andernfalls leite 2-4 Fragen aus
+    dem Kernaufgabeninhalt ab (Optionen als plausible Distraktoren).
+  - "description": kurze Einleitung/Anweisung für Studierende (aus der Quelle übernehmen,
+    wenn vorhanden; sonst knapp formulieren — bei Fragen mit multi_select=true HINWEISEN,
+    dass dort genau alle richtigen Antworten ausgewählt werden müssen, sonst die Frage
+    falsch ist).
+  - "mc_questions": Array der Fragen (exakt dieses Format):
+    [
+      {
+        "question": "Fragetext (Markdown und $Math$ erlaubt)",
+        "points": 5,
+        "multi_select": false,
+        "options": [
+          {"text": "…", "correct": true,  "feedback": "…"},
+          {"text": "…", "correct": false, "feedback": "…"}
+        ]
+      }
+    ]
+    - Punkte: verteile das Punkte-Budget __POINTS__ über die Fragen (ganze Zahlen,
+      Summe = __POINTS__).
+    - 3-5 Optionen je Frage. multi_select=false: GENAU EINE richtige Option.
+      multi_select=true: 2-3 richtige Optionen, und dann ZWEI Feedback-Felder je Option:
+      "feedback" (Option korrekt behandelt: richtig ausgewählt ODER falsch NICHT
+      ausgewählt) und "feedback_wrong" (Option falsch behandelt).
+    - "feedback" je Option: aus Quellen-Erklärungen/Lösungen ableiten, wenn vorhanden;
+      sonst erstellen (1-2 Sätze, präzise: richtige Option → warum richtig; falsche
+      Option → welchen konkreten Irrtum sie widerspiegelt). Kein trivial Falsches als
+      Distraktor.
+  - "model_solution": knapp — je Frage: richtige Option(en) als Text-Auszug in
+    „Anführungszeichen“ (KEINE Buchstaben, die Optionen werden gemischt angezeigt) +
+    ein Satz Begründung; danach Bewertungskriterien (volle Punkte je Frage nur bei
+    exakt richtigen Auswahlmengen, sonst keine Punkte der Frage).
+- Falls die geplante Art am Quellmaterial nicht durchführbar ist (z. B. "mc" bei einer
+  reinen offenen Beweis-Aufgabe): falle auf "text" zurück und begründe das in "notes".
+
+ANTWORT: NUR ein gültiges JSON-Objekt — keine zusätzlichen Texte, keine Code-Blöcke
+(```json … ```).
+Achte auf korrektes Escaping von special Characters. In Latex-Umgebungen muss
+insbesondere der Backslash escaped werden (z. B. $\\text{…}$ oder $$A \\rightarrow B$$).
+Dollar-Zeichen außerhalb von Code-Blöcken, die kein Latex triggern sollen, können mit
+Backslash \\$ escaped werden.
+
+FORMAT (NUR diese Schlüssel):
+{
+  "task_type": "text" | "mc",
+  "description": "…",
+  "model_solution": "…",
+  "text_template": "… (nur bei Text-Aufgabe mit Eintragungs-Gerüst — sonst Schlüssel weglassen)",
+  "mc_questions": [ … (nur bei MC-Aufgabe — sonst Schlüssel weglassen) ],
+  "notes": "<kurze Anmerkung (z. B. Typ-Änderung, erstellte Musterlösung) oder leer>"
+}"""
+
 
 # ─── 3. Kapitel-Konvertierung (Quelltext → Skript-Markdown, wortgetreu) ──
 

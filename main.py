@@ -541,7 +541,7 @@ def _course_tab_context(
         tabs.append(
             {
                 "key": "tasks",
-                "icon": "📋",
+                "icon": "📝",
                 "label": "Aufgaben",
                 "url": f"/courses/{course_id}/tasks",
                 "active": active_tab == "tasks",

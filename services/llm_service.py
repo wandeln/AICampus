@@ -53,6 +53,8 @@ from prompts.import_prompt import (
     FILE_SUMMARY_PROMPT_TEMPLATE,
     SCRIPT_PLANNER_PROMPT_TEMPLATE,
     SLIDES_PLANNER_PROMPT_TEMPLATE,
+    TASKS_PLANNER_PROMPT_TEMPLATE,
+    TASKS_GENERATE_PROMPT_TEMPLATE,
     CONVERT_CHAPTER_PROMPT_TEMPLATE,
     CHAPTER_SUMMARY_PROMPT_TEMPLATE,
     SLIDE_DECK_PROMPT_TEMPLATE,
@@ -1395,7 +1397,8 @@ class LLMService:
             steps=steps,
         )
         return await self._call_with_json(
-            prompt, response_format={"type": "json_object"}, config=config
+            prompt, response_format={"type": "json_object"}, config=config,
+            max_tokens=32768,
         )
 
     async def import_slides_planner_step(
@@ -1421,7 +1424,65 @@ class LLMService:
             steps=steps,
         )
         return await self._call_with_json(
-            prompt, response_format={"type": "json_object"}, config=config
+            prompt, response_format={"type": "json_object"}, config=config,
+            max_tokens=32768,
+        )
+
+    async def import_tasks_planner_step(
+        self,
+        file_tree: str,
+        digests: str,
+        previous_plan: str,
+        steps: str,
+        config: Optional[dict] = None,
+    ):
+        """Ein Schritt des agentic Aufgaben-Planners (JSON-Action).
+
+        previous_plan: frühere Vorschläge (Titel + Beschreibung) oder "(keine)";
+        der neue Plan ERSETZT die alte Liste.
+        """
+        prompt = self._render_prompt(
+            TASKS_PLANNER_PROMPT_TEMPLATE,
+            file_tree=file_tree,
+            digests=digests,
+            previous_plan=previous_plan,
+            steps=steps,
+        )
+        return await self._call_with_json(
+            prompt, response_format={"type": "json_object"}, config=config,
+            max_tokens=32768,
+        )
+
+    async def import_generate_task(
+        self,
+        title: str,
+        task_type: str,
+        points: int,
+        script_context: str,
+        media: str,
+        references: str,
+        source_text: str,
+        config: Optional[dict] = None,
+        max_tokens: Optional[int] = None,
+    ):
+        """Wortgetreue Konvertierung EINER Übungsaufgabe (Text/MC) — 1 LLM-Call (JSON).
+
+        script_context: Skript-Kapitel (Titel + Summary, inkl. Labels) für
+        @fig:/@eq:-Querverweise; media/references: Kurs-Kontext für Einbindungen.
+        """
+        prompt = self._render_prompt(
+            TASKS_GENERATE_PROMPT_TEMPLATE,
+            title=title,
+            task_type=task_type,
+            points=points,
+            script_context=script_context,
+            media=media,
+            references=references,
+            source_text=source_text,
+        )
+        return await self._call_with_json(
+            prompt, response_format={"type": "json_object"}, config=config,
+            max_tokens=max_tokens,
         )
 
     async def import_gather_step(

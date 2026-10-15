@@ -1128,6 +1128,12 @@ class CourseImport(SQLModel, table=True):
                     (Folien-Plan; description nennt Quelldateien inkl. pptx-Pfad
                     + Folienbereich. sources/sections (Gather-Ergebnis) und
                     material_id (generiertes Deck) werden zur Laufzeit ergänzt)
+    - tasks_plan:   [{title, enabled, points, task_type: text|mc|workspace,
+                    description?, task_id?, tasks_status: pending|done|error,
+                    tasks_error?}]
+                    (Aufgaben-Plan, 1 Eintrag = 1 Übungsaufgabe; description nennt
+                    Quelldatei + Zeilenbereich + Aufgaben-Kennung. task_id (generierter
+                    Task) wird zur Laufzeit ergänzt)
     - progress:     {current: str, stages: {stage: {total, done, failed}},
                     units: {unit_key: {done, total}}}
     - report:       {warnings: [], errors: [], summary?, slides_options?: {...}}
@@ -1151,6 +1157,8 @@ class CourseImport(SQLModel, table=True):
     slides_plan_status: str = Field(default="pending", max_length=20)  # Folien-Planner
     script_status: str = Field(default="pending", max_length=20)
     slides_status: str = Field(default="pending", max_length=20)
+    tasks_plan_status: str = Field(default="pending", max_length=20)  # Aufgaben-Planner
+    tasks_status: str = Field(default="pending", max_length=20)  # Aufgaben-Generierung
 
     manifest: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     file_map: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
@@ -1158,6 +1166,7 @@ class CourseImport(SQLModel, table=True):
     reference_map: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
     chapter_plan: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     slides_plan: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    tasks_plan: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     progress: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
     report: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
 

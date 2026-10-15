@@ -746,11 +746,15 @@
     let decks = [];               // lokale Editor-Kopie des Folien-Plans
     let decksBuiltFor = null;
     let decksDirty = false;
+    let tasks = [];               // lokale Editor-Kopie des Aufgaben-Plans
+    let tasksBuiltFor = null;
+    let tasksDirty = false;
     let dragIdx = null;
-    let dragList = null;         // 'chapters' | 'decks'
+    let dragList = null;         // 'chapters' | 'decks' | 'tasks'
     let chaptersDescOpen = new Set();  // offene Beschreibung-Details (Skript-Plan, per Index)
     let decksDescOpen = new Set();     // dito für Folien-Plan
-    let openSec = { filemap: false, media: false, references: false, script: false, slides: false, report: false };
+    let tasksDescOpen = new Set();     // dito für Aufgaben-Plan
+    let openSec = { filemap: false, media: false, references: false, script: false, slides: false, tasks: false, report: false };
     let forceOpenSec = null;   // Abschnitt, der beim nächsten Render erzwungen geöffnet wird
     let prevReportCount = 0;   // Bericht: auto-öffnen, wenn neue Meldungen eintreffen
     let firstImportRender = true; // Bericht: beim ersten Render NICHT auto-öffnen
@@ -761,6 +765,7 @@
       { key: 'references', icon: '📚', label: 'Quellen' },
       { key: 'script',     icon: '📖', label: 'Skript' },
       { key: 'slides',     icon: '📽️', label: 'Folien' },
+      { key: 'tasks',      icon: '📝', label: 'Aufgaben' },
     ];
 
     const STATUS = {
@@ -822,9 +827,9 @@
               // (wird in render() NACH dem DOM-Sync angewendet, damit der
               //  gelesene Zustand nicht wieder überschrieben wird)
               const secFor = {
-                plan: 'script', slides_plan: 'slides', ref_extract: 'references',
+                plan: 'script', slides_plan: 'slides', tasks_plan: 'tasks', ref_extract: 'references',
               };
-              for (const k of ['filemap', 'media', 'references', 'ref_extract', 'plan', 'slides_plan', 'script', 'slides']) {
+              for (const k of ['filemap', 'media', 'references', 'ref_extract', 'plan', 'slides_plan', 'script', 'slides', 'tasks_plan', 'tasks']) {
                 if (ns[k + '_status'] === 'running' && prev[k + '_status'] !== 'running') {
                   forceOpenSec = secFor[k] || k;
                 }
@@ -1019,6 +1024,7 @@
       // (Polling würde andernfalls die Listen ständig nach oben scrollen)
       const chapScroll = (document.getElementById('chapter-list') || {}).scrollTop || 0;
       const deckScroll = (document.getElementById('deck-list') || {}).scrollTop || 0;
+      const taskScroll = (document.getElementById('task-list') || {}).scrollTop || 0;
       const repErrScroll = (document.getElementById('report-err-log') || {}).scrollTop || 0;
       const repWarnScroll = (document.getElementById('report-warn-log') || {}).scrollTop || 0;
       const refScroll = (document.getElementById('ref-list') || {}).scrollTop || 0;
@@ -1028,10 +1034,13 @@
       root.innerHTML = html;
       syncChapters();
       syncDecks();
+      syncTasks();
       const cl = document.getElementById('chapter-list');
       if (cl) cl.scrollTop = chapScroll;
       const dl = document.getElementById('deck-list');
       if (dl) dl.scrollTop = deckScroll;
+      const tl = document.getElementById('task-list');
+      if (tl) tl.scrollTop = taskScroll;
       const rel = document.getElementById('report-err-log');
       if (rel) rel.scrollTop = repErrScroll;
       const rwl = document.getElementById('report-warn-log');
@@ -1093,6 +1102,7 @@
         references: ['ref_extract', 'references'],
         script: ['plan', 'script'],
         slides: ['slides_plan', 'slides'],
+        tasks: ['tasks_plan', 'tasks'],
       }[s.key] || [s.key];
       const body = {
         filemap: filemapPanel,
@@ -1100,6 +1110,7 @@
         references: referencesPanel,
         script: scriptPanel,
         slides: slidesPanel,
+        tasks: tasksPanel,
       }[s.key](st);
 
       return `<details data-sec="${s.key}" class="border border-gray-200 rounded-lg bg-white mb-3"${isOpen ? ' open' : ''}>
@@ -1297,22 +1308,23 @@
       </div>`;
     }
 
-    // Planner-Vorschlags-Block oben in Skript-/Folien-Panel (pro Art eigener Planner)
+    // Planner-Vorschlags-Block oben in Skript-/Folien-/Aufgaben-Panel (pro Art eigener Planner)
     function planSuggestBlock(st, kind) {
-      const isChap = kind === 'script';
-      const p = st[(isChap ? 'plan' : 'slides_plan') + '_status'];
+      const p = st[(kind === 'script' ? 'plan' : kind + '_plan') + '_status'];
       const [label, cls] = STATUS[p] || ['?', 'bg-gray-100 text-gray-600'];
-      const act = isChap ? 'plan-generate' : 'slides-plan-generate';
+      const act = kind === 'script' ? 'plan-generate' : kind + '-plan-generate';
+      const headLabel = kind === 'script' ? '📑 Kapitel vorschlagen' : kind === 'slides' ? '📽️ Decks vorschlagen' : '📝 Aufgaben vorschlagen';
+      const addLabel = kind === 'script' ? 'Kapitel' : kind === 'slides' ? 'Deck' : 'Aufgabe';
       let html = `<div class="mb-3 border border-gray-200 rounded-lg p-3">
         <div class="flex items-center gap-3 flex-wrap">
-          <span class="text-sm font-semibold text-gray-700">${isChap ? '📑 Kapitel vorschlagen' : '📽️ Decks vorschlagen'} <span class="text-gray-400 font-normal">(LLM-Planner)</span></span>
+          <span class="text-sm font-semibold text-gray-700">${headLabel} <span class="text-gray-400 font-normal">(LLM-Planner)</span></span>
           <span class="text-xs px-2 py-0.5 rounded-full ${cls}">${label}</span>`;
       if (p === 'running' || p === 'paused' || p === 'interrupted') {
         html += `<p class="text-xs text-gray-500 w-full">${esc((st.progress && st.progress.current) || 'Planner läuft …')}</p>`;
       } else {
         const noText = !(st.manifest || []).some((m) => m.read_path);
         if (noText) {
-          html += `<p class="text-xs text-gray-400">Keine Text-Dateien im Import — es können keine Vorschläge erstellt werden (manuelle Einträge per „+ ${isChap ? 'Kapitel' : 'Deck'}“ möglich).</p>`;
+          html += `<p class="text-xs text-gray-400">Keine Text-Dateien im Import — es können keine Vorschläge erstellt werden (manuelle Einträge per „+ ${addLabel}“ möglich).</p>`;
         } else {
           const btnLabel = p === 'done' ? '✓ vorgeschlagen — erneut ausführen'
             : (p === 'error' || p === 'cancelled' ? 'Vorschläge erneut generieren' : 'Vorschläge generieren');
@@ -1771,7 +1783,62 @@
       return html;
     }
 
-    // ─── Plan-Editoren (Skript-Kapitel + Folien-Plan) ─────────────────
+    // ─── Aufgaben-Panel (Plan + Aktionen) ───────────────────────────
+
+    // Einfärbung des Art-Dropdowns (analog Medien-Triage-Dropdown / Rollen-Dropdown)
+    function taskTypeClass(v) {
+      if (v === 'mc') return 'border border-blue-200 rounded px-1.5 py-0.5 text-xs font-semibold bg-blue-50 text-blue-700';
+      if (v === 'workspace') return 'border border-purple-200 rounded px-1.5 py-0.5 text-xs font-semibold bg-purple-50 text-purple-700';
+      return 'border border-gray-200 rounded px-1.5 py-0.5 text-xs bg-gray-50 text-gray-600';
+    }
+
+    function tasksPanel(st) {
+      if (st.filemap_status !== 'done') {
+        return `<div class="text-xs text-gray-500">Bitte zuerst die Dateianalyse abschließen.</div>`;
+      }
+      return `
+      ${planSuggestBlock(st, 'tasks')}
+      <div class="flex items-center justify-between mb-2 mt-3">
+        <h3 class="text-sm font-semibold text-gray-700">Aufgaben-Plan <span class="text-gray-400 font-normal">(je Eintrag eine Übungsaufgabe — Titel, Punkte und Art anpassbar)</span></h3>
+        <div class="flex items-center gap-2">
+          <button data-act="tasks-all" class="text-xs text-blue-600 hover:underline">Alle</button>
+          <button data-act="tasks-none" class="text-xs text-blue-600 hover:underline">Keine</button>
+          <button data-act="task-add" class="text-xs text-blue-600 hover:underline">+ Aufgabe</button>
+        </div>
+      </div>
+      <div id="task-list" class="space-y-1.5 max-h-80 overflow-y-auto pr-1"></div>
+      <p class="text-[11px] text-gray-400 mt-2">Änderungen werden automatisch gespeichert · Reihenfolge per Ziehen (⠿) ändern · Checkbox: Auswahl (importierte Aufgabe anhaken = zum Neu-Generieren auswählen) · „Beschreibung“ (zeilenweise aufklappbar): Quellenangabe für das LLM einsehen/bearbeiten · </p>
+      <div id="tasks-actions" class="mt-3 border-t border-gray-100 pt-3">${tasksActionsHTML(st.tasks_plan || [])}</div>`;
+    }
+
+    // Count + Button der Aufgaben-Sektion. Wird wie slidesActionsHTML bei jeder
+    // Plan-Änderung direkt aktualisiert.
+    function tasksActionsHTML(plan) {
+      let html = '';
+      const p = state.tasks_status;
+      const doneN = plan.filter((t) => t.tasks_status === 'done').length;
+      const todo = plan.filter((t) => t.enabled && t.tasks_status !== 'done').length;
+      if (p === 'running' || p === 'paused' || p === 'interrupted') {
+        html += `<p class="text-xs text-gray-500">${esc((state.progress && state.progress.current) || '…')}</p>`;
+      } else {
+        if (p === 'skipped') html += `<p class="text-sm text-gray-500">Aufgaben-Import übersprungen.</p>`;
+        if (plan.length === 0) html += `<p class="text-xs text-gray-400 mt-2">Keine Aufgaben im Plan — per „+ Aufgabe“ anlegen oder Vorschläge generieren.</p>`;
+        if (todo > 0) {
+          html += `<p class="text-xs text-gray-500 mt-2 mb-2">Importierte Aufgaben sind zunächst <b>versteckt</b> — im Aufgaben-Editor des Kurses publizieren.</p>
+            <div class="flex gap-2">
+              <button data-act="tasks-start" class="bg-green-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-green-700 font-semibold">
+                Aufgaben importieren (${todo})
+              </button>
+            </div>`;
+        }
+        if (doneN > 0) {
+          html += `<p class="mt-2 text-sm ${todo === 0 ? 'text-green-700' : 'text-gray-500'}">${todo === 0 ? '✓ ' : ''}${doneN}/${plan.length} Aufgaben importiert${todo === 0 ? '.' : ' — Rest per „Aufgaben importieren“.'}</p>`;
+        }
+      }
+      return html;
+    }
+
+    // ─── Plan-Editoren (Skript-Kapitel + Folien-Plan + Aufgaben-Plan) ──
 
     function statusBadge(s, err) {
       const map = {
@@ -1833,6 +1900,42 @@
             <textarea data-deck="description" data-idx="${i}" rows="3"
               class="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:border-blue-400 focus:outline-none resize-y"
               placeholder="Beschreibung für das LLM (Umfang, Fokus, Stil …)">${esc(d.description || '')}</textarea>
+          </div>
+        </details>
+      </div>`;
+    }
+
+    function taskDelBtn(i) {
+      return `<button data-act="task-del" data-idx="${i}" class="text-gray-400 hover:text-red-600" title="Aufgabe entfernen">✕</button>`;
+    }
+
+    function taskRow(t, i) {
+      const isDone = t.tasks_status === 'done';
+      const descOpen = tasksDescOpen.has(i);
+      return `<div class="plan-row border border-green-100 rounded-lg px-2 py-1.5 bg-white" data-list="tasks" data-idx="${i}"${t.regen ? ' data-regen="1"' : ''}>
+        <div class="flex items-center gap-2">
+          <span class="plan-drag cursor-grab text-gray-300 select-none" title="Ziehen zum Sortieren">⠿</span>
+          <input type="checkbox" data-task="enabled" ${t.enabled ? 'checked' : ''} class="accent-blue-600" title="${isDone ? 'Aufgabe auswählen (neu generieren)' : 'Aufgabe aktivieren'}">
+          <input type="text" data-task="title" value="${esc(t.title)}" maxlength="300"
+                 class="flex-1 min-w-0 text-sm border border-transparent hover:border-gray-200 focus:border-blue-400 rounded px-1.5 py-0.5 focus:outline-none"
+                 placeholder="Aufgaben-Titel">
+          <select data-task="type" class="${taskTypeClass(t.task_type)} focus:outline-none focus:ring-2 focus:ring-blue-500" title="Aufgabenart">
+            <option value="text" ${t.task_type === 'text' ? 'selected' : ''}>Text</option>
+            <option value="mc" ${t.task_type === 'mc' ? 'selected' : ''}>MC</option>
+            <option value="workspace" ${t.task_type === 'workspace' ? 'selected' : ''}>Workspace</option>
+          </select>
+          <input type="number" data-task="points" value="${esc(t.points != null ? t.points : 0)}" min="0" max="1000"
+                 class="w-14 text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:border-blue-400 focus:outline-none"
+                 title="Punkte (Vorschlag — wird beim Import als max_points übernommen)">
+          <span title="Aufgaben-Status">${statusBadge(t.tasks_status, t.tasks_error)}</span>
+          ${t.task_id ? '' : taskDelBtn(i)}
+        </div>
+        <details class="plan-desc mt-1.5"${descOpen ? ' open' : ''}>
+          <summary class="text-[11px] text-gray-400 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">Beschreibung ${descOpen ? '▾' : '▸'}</summary>
+          <div class="pt-1.5">
+            <textarea data-task="description" data-idx="${i}" rows="3"
+              class="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:border-blue-400 focus:outline-none resize-y"
+              placeholder="Quellenangabe für das LLM (Datei + Zeilenbereich + Aufgaben-Kennung)">${esc(t.description || '')}</textarea>
           </div>
         </details>
       </div>`;
@@ -1919,31 +2022,95 @@
     function syncChapters() { syncPlanList('chapters'); }
     function syncDecks() { syncPlanList('decks'); }
 
-    const saveTimers = { chapters: null, decks: null };
+    // Aufgaben-Liste: eigener Sync (zusätzlich Punkte- und Art-Felder; kein
+    // Gather-„sources“-Zustand wie Kapitel/Decks).
+    function syncTasks() {
+      const el = document.getElementById('task-list');
+      if (!el) return;
+      const server = state.tasks_plan || [];
+      const key = JSON.stringify(server);
+      if (key === tasksBuiltFor && tasksDirty) return; // User tippt, Server unverändert
+      const snap = new Set();
+      const keep = [];
+      el.querySelectorAll('.plan-row[data-list="tasks"]').forEach((r) => {
+        const i = parseInt(r.dataset.idx, 10);
+        const descEl = r.querySelector('details.plan-desc');
+        const ta = descEl ? descEl.querySelector('textarea') : null;
+        const desc = ta ? ta.value : null;
+        if (descEl && descEl.open) snap.add(i);
+        keep.push({
+          title: r.querySelector('input[data-task="title"]').value,
+          enabled: r.querySelector('input[data-task="enabled"]').checked,
+          points: r.querySelector('input[data-task="points"]').value,
+          task_type: r.querySelector('select[data-task="type"]').value,
+          desc: desc,
+          regen: !!r.getAttribute('data-regen'),
+        });
+      });
+      tasksDescOpen.clear();
+      snap.forEach((i) => tasksDescOpen.add(i));
+      tasks.length = 0;
+      server.forEach((c, i) => {
+        const n = Object.assign({}, c);
+        if (keep[i]) {
+          n.title = keep[i].title;
+          if (keep[i].desc != null) n.description = keep[i].desc;
+          n.points = keep[i].points;
+          n.task_type = keep[i].task_type;
+          if (keep[i].regen && n.tasks_status === 'done') {
+            // Importierte Aufgabe wurde wieder angehakt → Neu-Generierung anstehen
+            n.enabled = true;
+            n.tasks_status = 'pending';
+            n.regen = true;
+          } else {
+            n.enabled = keep[i].enabled;
+            n.regen = false;
+          }
+        }
+        if (n.tasks_status === 'done') n.enabled = false; // importiert → immer deaktiviert
+        tasks.push(n);
+      });
+      tasksBuiltFor = key;
+      tasksDirty = keep.some((k, i) => (
+        (k.title != null && k.title !== (server[i] || {}).title) ||
+        (k.enabled !== !!((server[i] || {}).enabled)) ||
+        (String(k.points) !== String((server[i] || {}).points)) ||
+        (k.task_type !== ((server[i] || {}).task_type || 'text')) ||
+        (k.desc != null && k.desc !== ((server[i] || {}).description || '')) ||
+        (k.regen && (server[i] || {}).tasks_status === 'done')
+      ));
+      el.innerHTML = tasks.map(taskRow).join('') || '<p class="text-xs text-gray-400 py-2">Keine Einträge — „+ Aufgabe“ oder Vorschläge generieren.</p>';
+      updateTasksActions();
+    }
+
+    const saveTimers = { chapters: null, decks: null, tasks: null };
 
     // Auto-Save: persistiert den Plan per PUT /plan. Bewusst ohne refresh():
     // ein Re-Render würde den Fokus im Titel-Input beim Tippen verlieren. Der nächste
     // Poll übernimmt den aktuellen Server-State (DOM-Edits werden gemerged).
     async function savePlan(kind) {
       const isChap = kind === 'chapters';
+      const isTask = kind === 'tasks';
       if (!state) return;
-      if (isChap ? !chaptersDirty : !decksDirty) return;
-      if (isChap) chaptersDirty = false; else decksDirty = false;
+      const dirty = isChap ? chaptersDirty : isTask ? tasksDirty : decksDirty;
+      if (!dirty) return;
+      if (isChap) chaptersDirty = false; else if (isTask) tasksDirty = false; else decksDirty = false;
       if (saveTimers[kind]) { clearTimeout(saveTimers[kind]); saveTimers[kind] = null; }
+      const body = isChap ? { chapters } : isTask ? { tasks } : { decks };
       try {
-        await api('/plan', { method: 'PUT', body: JSON.stringify(isChap ? { chapters } : { decks }) });
+        await api('/plan', { method: 'PUT', body: JSON.stringify(body) });
       } catch (err) {
-        if (isChap) chaptersDirty = true; else decksDirty = true;
+        if (isChap) chaptersDirty = true; else if (isTask) tasksDirty = true; else decksDirty = true;
         showToast('Plan konnte nicht gespeichert werden: ' + err.message, 'error');
       }
     }
 
     function markDirty(kind) {
-      if (kind === 'chapters') chaptersDirty = true; else decksDirty = true;
+      if (kind === 'chapters') chaptersDirty = true; else if (kind === 'tasks') tasksDirty = true; else decksDirty = true;
       if (saveTimers[kind]) clearTimeout(saveTimers[kind]);
       saveTimers[kind] = setTimeout(() => savePlan(kind), 800);
       // Count/Button sofort aktualisieren (ohne volles Re-Render → Fokus bleibt erhalten)
-      if (kind === 'chapters') updateScriptActions(); else updateSlidesActions();
+      if (kind === 'chapters') updateScriptActions(); else if (kind === 'tasks') updateTasksActions(); else updateSlidesActions();
     }
 
     // Aktualisiert nur den Button-/Count-Bereich der jeweiligen Sektion aus dem
@@ -1956,6 +2123,11 @@
     function updateSlidesActions() {
       const el = document.getElementById('slides-actions');
       if (el) el.innerHTML = slidesActionsHTML(decks);
+    }
+
+    function updateTasksActions() {
+      const el = document.getElementById('tasks-actions');
+      if (el) el.innerHTML = tasksActionsHTML(tasks);
     }
 
     function rerenderList(kind) {
@@ -1973,6 +2145,22 @@
       descOpenSet.clear();
       snap.forEach((i) => descOpenSet.add(i));
       el.innerHTML = listRowsHTML(kind);
+      el.scrollTop = top;
+    }
+
+    function rerenderTasks() {
+      const el = document.getElementById('task-list');
+      if (!el) return;
+      const top = el.scrollTop;
+      const snap = new Set();
+      el.querySelectorAll('.plan-row[data-list="tasks"]').forEach((r) => {
+        const i = parseInt(r.dataset.idx, 10);
+        const dEl = r.querySelector('details.plan-desc');
+        if (dEl && dEl.open) snap.add(i);
+      });
+      tasksDescOpen.clear();
+      snap.forEach((i) => tasksDescOpen.add(i));
+      el.innerHTML = tasks.map(taskRow).join('') || '<p class="text-xs text-gray-400 py-2">Keine Einträge — „+ Aufgabe“ oder Vorschläge generieren.</p>';
       el.scrollTop = top;
     }
 
@@ -2122,6 +2310,39 @@
             rerenderList('decks');
             break;
           }
+          case 'tasks-plan-generate':
+            await savePlan('tasks');
+            await api('/tasks_plan', { method: 'POST', body: JSON.stringify({}) });
+            showToast('Aufgaben-Planner gestartet.', 'success');
+            await refresh();
+            break;
+          case 'task-add':
+            tasks.push({
+              title: 'Neue Aufgabe', enabled: true, points: 5, task_type: 'text',
+              description: '', task_id: null, tasks_status: 'pending', tasks_error: null,
+            });
+            markDirty('tasks');
+            rerenderTasks();
+            break;
+          case 'task-del': {
+            const i = parseInt(btn.dataset.idx, 10);
+            if (tasks[i] && tasks[i].task_id) { showToast('Import-generierte Aufgaben können nicht aus der Liste entfernt werden (Aufgabe im Aufgaben-Tab löschen, dann erneut vorschlagen).', 'error'); return; }
+            if (tasks[i] && !confirm(`Aufgabe „${tasks[i].title}“ entfernen?`)) return;
+            tasks.splice(i, 1);
+            markDirty('tasks');
+            rerenderTasks();
+            break;
+          }
+          case 'tasks-all':
+            tasks.forEach((t) => { t.enabled = t.tasks_status !== 'done'; });
+            markDirty('tasks');
+            rerenderTasks();
+            break;
+          case 'tasks-none':
+            tasks.forEach((t) => { t.enabled = false; });
+            markDirty('tasks');
+            rerenderTasks();
+            break;
           case 'script-start':
             await savePlan('chapters');
             await api('/script', { method: 'POST', body: JSON.stringify({}) });
@@ -2131,6 +2352,13 @@
             await savePlan('decks');
             const cb = document.getElementById('slides-del-cb');
             await api('/slides', { method: 'POST', body: JSON.stringify({ delete_original: cb ? cb.checked : false }) });
+            await refresh();
+            break;
+          }
+          case 'tasks-start': {
+            await savePlan('tasks');
+            await api('/tasks', { method: 'POST', body: JSON.stringify({ skip: false }) });
+            showToast('Aufgaben-Import gestartet.', 'success');
             await refresh();
             break;
           }
@@ -2199,6 +2427,30 @@
           }
           markDirty('decks');
         }
+      } else if (t.matches('input[data-task="enabled"]')) {
+        const row = t.closest('.plan-row');
+        const i = parseInt(row.dataset.idx, 10);
+        if (tasks[i]) {
+          tasks[i].enabled = t.checked;
+          if (t.checked && tasks[i].tasks_status === 'done') {
+            // Importierte Aufgabe wieder angehakt → Neu-Generierung anstehen
+            tasks[i].tasks_status = 'pending';
+            tasks[i].regen = true;
+            row.setAttribute('data-regen', '1');
+          } else if (tasks[i].regen) {
+            tasks[i].regen = false;
+            row.removeAttribute('data-regen');
+          }
+          markDirty('tasks');
+        }
+      } else if (t.matches('select[data-task="type"]')) {
+        const row = t.closest('.plan-row');
+        const i = parseInt(row.dataset.idx, 10);
+        if (tasks[i]) {
+          tasks[i].task_type = t.value;
+          t.className = taskTypeClass(t.value) + ' focus:outline-none focus:ring-2 focus:ring-blue-500';
+          markDirty('tasks');
+        }
       } else if (t.id === 'add-file') {
         if (t.files && t.files.length) uploadFiles(Array.from(t.files), 'add');
         t.value = '';
@@ -2222,6 +2474,21 @@
       } else if (e.target.matches('textarea[data-deck="description"]')) {
         const i = parseInt(e.target.dataset.idx, 10);
         if (decks[i]) { decks[i].description = e.target.value; markDirty('decks'); }
+      } else if (e.target.matches('input[data-task="title"]')) {
+        const row = e.target.closest('.plan-row');
+        const i = parseInt(row.dataset.idx, 10);
+        if (tasks[i]) { tasks[i].title = e.target.value; markDirty('tasks'); }
+      } else if (e.target.matches('input[data-task="points"]')) {
+        const row = e.target.closest('.plan-row');
+        const i = parseInt(row.dataset.idx, 10);
+        if (tasks[i]) {
+          const v = parseInt(e.target.value, 10);
+          tasks[i].points = Number.isFinite(v) ? Math.max(0, Math.min(1000, v)) : 0;
+          markDirty('tasks');
+        }
+      } else if (e.target.matches('textarea[data-task="description"]')) {
+        const i = parseInt(e.target.dataset.idx, 10);
+        if (tasks[i]) { tasks[i].description = e.target.value; markDirty('tasks'); }
       }
     });
 
@@ -2275,13 +2542,13 @@
       const row = e.target.closest('.plan-row');
       if (!row || dragIdx === null || row.dataset.list !== dragList) return;
       e.preventDefault();
-      const arr = dragList === 'chapters' ? chapters : decks;
+      const arr = dragList === 'chapters' ? chapters : dragList === 'decks' ? decks : tasks;
       const to = parseInt(row.dataset.idx, 10);
       if (to !== dragIdx) {
         const [m] = arr.splice(dragIdx, 1);
         arr.splice(to, 0, m);
         markDirty(dragList);
-        rerenderList(dragList);
+        if (dragList === 'tasks') rerenderTasks(); else rerenderList(dragList);
       }
       dragIdx = null;
       dragList = null;

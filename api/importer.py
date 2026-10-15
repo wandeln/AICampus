@@ -85,6 +85,7 @@ class ReferencesStartBody(BaseModel):
 class PlanSaveBody(BaseModel):
     chapters: Optional[list[Any]] = None  # Skript-Plan
     decks: Optional[list[Any]] = None  # Folien-Plan
+    tasks: Optional[list[Any]] = None  # Aufgaben-Plan
 
 
 class ScriptStartBody(BaseModel):
@@ -134,6 +135,8 @@ _STAGE_JOBS = {
     "slides_plan": import_service.run_slides_planner_job,
     "script": import_service.run_script_job,
     "slides": import_service.run_slides_job,
+    "tasks_plan": import_service.run_tasks_planner_job,
+    "tasks": import_service.run_tasks_job,
 }
 
 
@@ -648,8 +651,8 @@ async def save_plan(
     _, course_id, _ = auth
     imp = _require_import(session, course_id)
 
-    if body.chapters is None and body.decks is None:
-        raise HTTPException(400, "Nichts zu speichern (chapters und/oder decks angeben).")
+    if body.chapters is None and body.decks is None and body.tasks is None:
+        raise HTTPException(400, "Nichts zu speichern (chapters, decks und/oder tasks angeben).")
     if _status(imp, "plan") in ("running", "paused"):
         raise HTTPException(409, "Der Plan kann nicht geändert werden, während der Planer läuft.")
 
@@ -686,6 +689,21 @@ async def save_plan(
                     d["slides_error"] = raw["slides_error"][:500]
         imp.slides_plan = decks
         message += f" Folien-Plan: {len(decks)} Decks."
+    if body.tasks is not None:
+        tasks = import_service.normalize_tasks_plan(body.tasks)
+        for i, t in enumerate(tasks):
+            if i < len(body.tasks) and isinstance(body.tasks[i], dict):
+                raw = body.tasks[i]
+                if isinstance(raw.get("task_id"), int):
+                    t["task_id"] = raw["task_id"]
+                if raw.get("tasks_status") in ("pending", "done", "error"):
+                    t["tasks_status"] = raw["tasks_status"]
+                if isinstance(raw.get("tasks_error"), str):
+                    t["tasks_error"] = raw["tasks_error"][:500]
+        imp.tasks_plan = tasks
+        if tasks and _status(imp, "tasks_plan") in ("pending", "error"):
+            imp.tasks_plan_status = "done"  # manuell erstellter Plan zählt als fertig
+        message += f" Aufgaben-Plan: {len(tasks)} Aufgaben."
     imp.updated_at = datetime.now()
     session.add(imp)
     session.commit()
@@ -755,7 +773,59 @@ async def start_slides(
     return {"message": "Folien-Generierung gestartet."}
 
 
-# ─── Pause / Resume / Cancel ──────────────────────────────────────
+# ─── Stufe 6: Übungsaufgaben ────────────────────────────────────────
+
+@router.post("/courses/{course_id}/import/tasks_plan")
+async def start_tasks_planner(
+    session: Session = Depends(get_session),
+    auth: tuple = Depends(require_prof_or_admin()),
+):
+    """Agentic Aufgaben-Planner starten → Vorschläge für Übungsaufgaben."""
+    _, course_id, _ = auth
+    imp = _require_import(session, course_id)
+
+    if imp.filemap_status != "done":
+        raise HTTPException(400, "Die Dateianalyse muss zuerst abgeschlossen sein.")
+    if _status(imp, "tasks_plan") in ("running", "paused"):
+        raise HTTPException(409, "Der Aufgaben-Planner läuft bereits.")
+    if not any(m.get("read_path") for m in (imp.manifest or [])):
+        raise HTTPException(
+            400, "Keine Text-Dateien im Import – es können keine Aufgaben-Vorschläge erstellt werden."
+        )
+
+    import_service.set_stage_status(imp.id, "tasks_plan", "running")
+    import_service.spawn_job(import_service.run_tasks_planner_job(course_id, imp.id))
+    return {"message": "Aufgaben-Planner gestartet."}
+
+
+@router.post("/courses/{course_id}/import/tasks")
+async def start_tasks(
+    body: Optional[ScriptStartBody] = None,
+    session: Session = Depends(get_session),
+    auth: tuple = Depends(require_prof_or_admin()),
+):
+    """Aktive Übungsaufgaben wortgetreu importieren (1 LLM-Call je Aufgabe — zunächst unsichtbar)."""
+    _, course_id, _ = auth
+    imp = _require_import(session, course_id)
+
+    if imp.filemap_status != "done":
+        raise HTTPException(400, "Die Dateianalyse muss zuerst abgeschlossen sein.")
+    if _status(imp, "tasks") in ("running", "paused"):
+        raise HTTPException(409, "Der Aufgaben-Import läuft bereits.")
+
+    if body and body.skip:
+        import_service.set_stage_status(imp.id, "tasks", "skipped")
+        return {"message": "Aufgaben-Import übersprungen."}
+
+    if not any(t.get("enabled") for t in (imp.tasks_plan or [])):
+        raise HTTPException(400, "Keine aktive Aufgabe im Plan – bitte im Aufgaben-Plan aktivieren.")
+
+    import_service.set_stage_status(imp.id, "tasks", "running")
+    import_service.spawn_job(import_service.run_tasks_job(course_id, imp.id))
+    return {"message": "Aufgaben-Import gestartet."}
+
+
+# ─── Pause / Resume / Cancel ────────────────────────────────────────
 
 def _control_stage(imp: CourseImport, stage: str) -> str:
     """Stufe validieren und als Key zurückgeben (Status wird vom Caller abgefragt)."""

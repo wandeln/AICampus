@@ -80,10 +80,13 @@ from database.models import (
     CourseReference,
     MaterialType,
     ScriptSection,
+    Task,
+    TaskType,
 )
 from services import bibtex as bib
 from services import media_service
 from services.llm_service import LLMService, SLIDES_MAX_TOKENS
+from services.mc_service import McValidationError, mc_total_points, validate_mc_data
 from services.references_service import build_references_text
 from services.settings_resolver import get_effective_llm_config
 from services.slides_service import (
@@ -126,7 +129,7 @@ def spawn_job(coro) -> asyncio.Task:
 
 # Reihenfolge der Stufen (für UI/Validierung)
 IMPORT_STAGES = ("filemap", "media", "references", "ref_extract", "plan",
-                 "slides_plan", "script", "slides")
+                 "slides_plan", "script", "slides", "tasks_plan", "tasks")
 
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 
@@ -198,6 +201,7 @@ def job_snapshot(import_id: int) -> Optional[dict]:
             "reference_map": {k: dict(v) for k, v in (imp.reference_map or {}).items()},
             "chapter_plan": [dict(c) for c in (imp.chapter_plan or [])],
             "slides_plan": [dict(d) for d in (imp.slides_plan or [])],
+            "tasks_plan": [dict(t) for t in (imp.tasks_plan or [])],
             "report": dict(imp.report or {}),
         }
 
@@ -463,6 +467,13 @@ def set_slides_plan(import_id: int, decks: list[dict]) -> None:
     _mutate(import_id, fn)
 
 
+def set_tasks_plan(import_id: int, tasks: list[dict]) -> None:
+    def fn(imp: CourseImport):
+        imp.tasks_plan = tasks
+
+    _mutate(import_id, fn)
+
+
 def update_slides_deck(import_id: int, idx: int, patch: dict) -> None:
     def fn(imp: CourseImport):
         plan = [dict(d) for d in (imp.slides_plan or [])]
@@ -473,8 +484,21 @@ def update_slides_deck(import_id: int, idx: int, patch: dict) -> None:
     _mutate(import_id, fn)
 
 
+def update_tasks_entry(import_id: int, idx: int, patch: dict) -> None:
+    def fn(imp: CourseImport):
+        plan = [dict(t) for t in (imp.tasks_plan or [])]
+        if 0 <= idx < len(plan):
+            plan[idx].update(patch)
+            imp.tasks_plan = plan
+
+    _mutate(import_id, fn)
+
+
 def get_llm_config(course_id: int, timeout: int) -> dict:
-    """Effektive LLM-Config (1× pro Job laden) + Feature-Timeout.
+    """Effektive LLM-Config + Feature-Timeout.
+
+    Wird pro Job-Einheit (Kapitel/Deck/Aufgabe/Medium/Planner-Schritt) frisch
+    geladen, damit LLM-Config-Änderungen laufende Jobs sofort betreffen.
 
     Nutzt die Public-Config (wenn konfiguriert): Import-Jobs dürfen teure
     LLM-/Vision-Calls nicht auf der lokalen GPU ausführen — das lokale Modell
@@ -3209,12 +3233,12 @@ async def run_media_job(
         units = [m for m in snap["manifest"] if m["path"] in selected_paths and _is_media(m)]
         # Counter pro Run neu (s. filemap) – sonst addieren sich Läufe auf.
         set_progress(import_id, stage="media", stage_total=len(units), stage_reset=True)
-        llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_MEDIA)
         llm_sem = asyncio.Semaphore(IMPORT_LLM_CONCURRENCY)
 
         async def process(entry: dict) -> None:
             path = entry["path"]
             unit_key = f"media:{path}"
+            llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_MEDIA)
             mm = get_media_map_entry(import_id, path)
             if mm:
                 # idempotent: bereits importiert (Resume) — fehlende
@@ -3439,12 +3463,12 @@ async def run_references_job(
         refmap = snap["reference_map"] or {}
         units = [{"key": k, "reimport": reimport} for k in selected_keys if k in refmap]
         set_progress(import_id, stage="references", stage_total=len(units), stage_reset=True)
-        llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_MEDIA)
         llm_sem = asyncio.Semaphore(IMPORT_LLM_CONCURRENCY)
 
         async def process(entry: dict) -> None:
             key = entry["key"]
             unit_key = f"references:{key}"
+            llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_MEDIA)
             data = refmap.get(key) or {}
             fields = {k: data[k] for k in (
                 "entry_type", "authors", "title", "year", "venue",
@@ -3676,8 +3700,6 @@ async def run_ref_extract_job(course_id: int, import_id: int) -> None:
         if snap is None:
             return
         staging = staging_dir(course_id, snap["job_id"])
-        llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_PLAN)
-
         # Deterministische Basis sicherstellen (bib/bbl/cite-Keys)
         if not snap["reference_map"]:
             refs = detect_references(course_id, import_id)
@@ -3700,6 +3722,7 @@ async def run_ref_extract_job(course_id: int, import_id: int) -> None:
             if not await gate(import_id, "ref_extract"):
                 return
             set_progress(import_id, current=f"Quellen-Extraktion: Schritt {i + 1}/{IMPORT_PLAN_MAX_ITERATIONS} …")
+            llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_PLAN)
             res = await llm_service.import_ref_extract_step(
                 bib_text, _known_refs_text(snap["reference_map"]), digests, steps, config=llm_cfg
             )
@@ -3967,6 +3990,45 @@ def normalize_slides_plan(raw: Any) -> list[dict]:
     return _normalize_slides_plan(raw)
 
 
+def _normalize_tasks_plan(raw: Any) -> list[dict]:
+    """Validiert/normalisiert den Aufgaben-Plan (1 Eintrag = 1 Übungsaufgabe).
+
+    Status-Felder (task_id/tasks_status/tasks_error) werden hier NICHT mitgeführt
+    — die Save-API übernimmt sie pro Index aus dem client-seitigen Plan
+    (analog slides_plan/material_id).
+    """
+    out: list[dict] = []
+    if not isinstance(raw, list):
+        return out
+    for t in raw[:200]:
+        if not isinstance(t, dict):
+            continue
+        title = str(t.get("title") or "").strip()[:300]
+        if not title:
+            continue
+        task_type = str(t.get("task_type") or "text").strip().lower()
+        if task_type not in ("text", "mc", "workspace"):
+            task_type = "text"
+        try:
+            points = int(float(t.get("points") or 0))
+        except (TypeError, ValueError):
+            points = 0
+        points = max(0, min(points, 1000))
+        out.append({
+            "title": title,
+            "enabled": bool(t.get("enabled", True)),
+            "points": points,
+            "task_type": task_type,
+            "description": str(t.get("description") or "").strip()[:2000],
+        })
+    return out
+
+
+def normalize_tasks_plan(raw: Any) -> list[dict]:
+    """Öffentliche Hülle für die API (manuelle Aufgaben-Plan-Edits der UI)."""
+    return _normalize_tasks_plan(raw)
+
+
 def _fallback_plan(manifest: list[dict], file_map: dict) -> list[dict]:
     """Fallback: je Text-Datei ein Kapitel (ganze Datei)."""
     out = []
@@ -4045,8 +4107,6 @@ async def run_planner_job(course_id: int, import_id: int) -> None:
         if snap is None:
             return
         staging = staging_dir(course_id, snap["job_id"])
-        llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_PLAN)
-
         file_tree = _build_file_tree_text(snap["manifest"])
         digests = _build_digests_text(snap["manifest"], snap["file_map"])
         main_tex_entries = [m["path"] for m in snap["manifest"] if m.get("main_tex")]
@@ -4063,6 +4123,7 @@ async def run_planner_job(course_id: int, import_id: int) -> None:
             if not await gate(import_id, "plan"):
                 return
             set_progress(import_id, current=f"Kapitel-Planner: Schritt {i + 1}/{IMPORT_PLAN_MAX_ITERATIONS} …")
+            llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_PLAN)
             res = await llm_service.import_script_planner_step(
                 file_tree, digests, main_tex, previous_plan, steps, config=llm_cfg
             )
@@ -4125,8 +4186,6 @@ async def run_slides_planner_job(course_id: int, import_id: int) -> None:
         if snap is None:
             return
         staging = staging_dir(course_id, snap["job_id"])
-        llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_PLAN)
-
         file_tree = _build_file_tree_text(snap["manifest"])
         digests = _build_digests_text(snap["manifest"], snap["file_map"])
         zip_decks = _build_zip_decks_text(snap["manifest"], staging)
@@ -4139,6 +4198,7 @@ async def run_slides_planner_job(course_id: int, import_id: int) -> None:
             if not await gate(import_id, "slides_plan"):
                 return
             set_progress(import_id, current=f"Folien-Planner: Schritt {i + 1}/{IMPORT_PLAN_MAX_ITERATIONS} …")
+            llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_PLAN)
             res = await llm_service.import_slides_planner_step(
                 file_tree, digests, zip_decks, previous_plan, steps, config=llm_cfg
             )
@@ -4187,7 +4247,86 @@ async def run_slides_planner_job(course_id: int, import_id: int) -> None:
             set_stage_status(import_id, "slides_plan", "error")
 
 
-# ═══════════════════════════════════════════════════════════════════
+async def run_tasks_planner_job(course_id: int, import_id: int) -> None:
+    """Stufe 7a: agentic Aufgaben-Planner → tasks_plan (1 Eintrag = 1 Übungsaufgabe).
+
+    Der neue Plan ERSETZT die alten Vorschläge vollständig (die alten Vorschläge
+    werden dem LLM mitgegeben, damit es sie übernehmen/ergänzen kann). Bestehende
+    Kurs-Aufgaben werden bei der Planung NICHT berücksichtigt.
+    """
+    logger.info("Import %s (Kurs %s): tasks_plan gestartet", import_id, course_id)
+    try:
+        set_stage_status(import_id, "tasks_plan", "running")
+        set_progress(import_id, current="Aufgaben-Planner analysiert die Materialien …")
+        snap = job_snapshot(import_id)
+        if snap is None:
+            return
+        staging = staging_dir(course_id, snap["job_id"])
+        file_tree = _build_file_tree_text(snap["manifest"])
+        digests = _build_digests_text(snap["manifest"], snap["file_map"])
+        previous_plan = _previous_plan_text(snap["tasks_plan"])
+
+        steps = "(noch keine)"
+        tool_budget = 0
+        tasks: Optional[list[dict]] = None
+        llm_error: Optional[str] = None
+        for i in range(IMPORT_PLAN_MAX_ITERATIONS):
+            if not await gate(import_id, "tasks_plan"):
+                return
+            set_progress(import_id, current=f"Aufgaben-Planner: Schritt {i + 1}/{IMPORT_PLAN_MAX_ITERATIONS} …")
+            llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_PLAN)
+            res = await llm_service.import_tasks_planner_step(
+                file_tree, digests, previous_plan, steps, config=llm_cfg
+            )
+            if not res["success"]:
+                llm_error = res.get("error")
+                break
+            action = res["data"] or {}
+            kind = str(action.get("action") or "")
+            if kind == "read_file":
+                tool_out = _planner_read(snap["manifest"], staging, action)
+                tool_budget += len(tool_out)
+                steps += (
+                    f"\n### Schritt {i + 1}\nLLM: {json.dumps(action, ensure_ascii=False)}\n"
+                    f"Tool: {tool_out}\n"
+                )
+                if tool_budget > IMPORT_PLAN_TOOL_BUDGET:
+                    steps += "(Werkzeug-Budget erschöpft — gib JETZT den final_plan aus.)\n"
+                continue
+            if kind == "final_plan":
+                raw = action.get("tasks_plan")
+                if raw is None:
+                    raw = action.get("tasks")  # Fallback-Format
+                tasks = _normalize_tasks_plan(raw)
+                if action.get("notes"):
+                    append_report(import_id, warnings=[f"Aufgaben-Planner-Anmerkung: {str(action['notes'])[:300]}"])
+                break
+            steps += (
+                f"\n### Schritt {i + 1}\nLLM: {json.dumps(action, ensure_ascii=False)}\n"
+                "Tool: (unbekannte Aktion — verwende entweder read_file oder final_plan)\n"
+            )
+
+        if tasks is None:
+            err = "Aufgaben-Planner lief nicht erfolgreich zu Ende — bitte erneut starten."
+            if llm_error:
+                err += f" (LLM: {str(llm_error)[:200]})"
+            append_report(import_id, errors=[err])
+            set_stage_status(import_id, "tasks_plan", "error")
+            return
+        # Der neue Plan ersetzt die alten Vorschläge komplett (leer = keine
+        # Übungsaufgaben in den Materialien — gültiges Ergebnis).
+        set_tasks_plan(import_id, tasks)
+        set_stage_status(import_id, "tasks_plan", "done")
+        set_progress(import_id, current="Aufgaben-Vorschläge erstellt.")
+        logger.info("Import %s: tasks_plan abgeschlossen (%d Vorschläge)", import_id, len(tasks))
+    except Exception as exc:
+        logger.exception("Import %s: tasks_plan Job fehlgeschlagen", import_id)
+        append_report(import_id, errors=[f"tasks_plan-Job intern fehlgeschlagen: {exc}"])
+        if stage_status(import_id, "tasks_plan") == "running":
+            set_stage_status(import_id, "tasks_plan", "error")
+
+
+# ═════════════════════════════════════════════════════════════════
 # Sanitizer
 # ═══════════════════════════════════════════════════════════════════
 
@@ -4731,6 +4870,12 @@ GATHER_KIND_RULES = {
     "slides": (
         "- Für Slide-Decks genügen kompakte Quellen (die Folien fassen den Inhalt zusammen)."
     ),
+    "tasks": (
+        "- Für die Übungsaufgabe müssen die Quellen KOMPLETT und WORTGETREU sein:"
+        " der gesamte Aufgabenkomplex (alle Teilfragen a), b), …, Punkte, Abbildungen)"
+        " in Dokument-Reihenfolge, plus — falls in der Quelle vorhanden — die zugehörige"
+        " Muster-/Beispiel-Lösung (ggf. in einer eigenen Lösungs-Datei)."
+    ),
 }
 
 async def _gather_sources(
@@ -4861,7 +5006,6 @@ async def run_script_job(course_id: int, import_id: int) -> None:
         deck_context = "\n".join(_deck_summary_lines(course_id))
         media_descs = await asyncio.to_thread(_media_descriptions, snap)
 
-        llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_CONVERT)
         llm_sem = asyncio.Semaphore(IMPORT_LLM_CONCURRENCY)
 
         # Plan-Reihenfolge = Ziel-Reihenfolge im Kurs: bestehende Kapitel werden zu
@@ -4896,6 +5040,7 @@ async def run_script_job(course_id: int, import_id: int) -> None:
             if not await gate(import_id, "script"):
                 return
             set_progress(import_id, current=f"Skript: {ch['title']}", unit_key=unit_key, unit_total=1)
+            llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_CONVERT)
             try:
                 # Kapitel ohne Quellen → LLM ermittelt sie aus Beschreibung + Dateibaum.
                 # Auch bereits generierte Kapitel (section_id, erneute Generierung)
@@ -5348,7 +5493,6 @@ async def run_slides_job(course_id: int, import_id: int) -> None:
         delete_original = bool((snap["report"].get("slides_options") or {}).get("delete_original"))
 
         media_descs = await asyncio.to_thread(_media_descriptions, snap)
-        llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_CONVERT)
         llm_sem = asyncio.Semaphore(IMPORT_LLM_CONCURRENCY)
 
         success = 0
@@ -5359,6 +5503,7 @@ async def run_slides_job(course_id: int, import_id: int) -> None:
             if not await gate(import_id, "slides"):
                 return
             set_progress(import_id, current=f"Folien: {dk['title']}", unit_key=unit_key, unit_total=1)
+            llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_CONVERT)
             try:
                 content = await _generate_deck(
                     course_id, import_id, staging, snap, dk, idx,
@@ -5444,6 +5589,274 @@ async def run_slides_job(course_id: int, import_id: int) -> None:
             set_stage_status(import_id, "slides", "error")
 
 
+# ─── Stufe 7b: Aufgaben (wortgetreue Konvertierung) ─────────────────
+
+
+def _script_chapter_context(course_id: int) -> str:
+    """Skript-Kapitel des Kurses (Titel + Summary, inkl. Labels) für
+    @fig:/@eq:/…-Querverweise in Aufgaben."""
+    with Session(engine) as s:
+        secs = s.exec(
+            select(ScriptSection)
+            .where(ScriptSection.course_id == course_id)
+            .order_by(ScriptSection.display_order.asc(), ScriptSection.id.asc())  # type: ignore[attr-defined]
+        ).all()
+        lines = [f"- {x.title}: {x.summary}" for x in secs[:30] if (x.summary or "").strip()]
+        return "\n".join(lines) if lines else "(noch keine Skript-Kapitel mit Zusammenfassung)"
+
+
+def _next_task_display_order(course_id: int) -> int:
+    """Erste freie display_order für neue Kurs-Aufgaben (neue Tasks anhängen)."""
+    with Session(engine) as s:
+        rows = s.exec(select(Task.display_order).where(Task.course_id == course_id)).all()
+        return (max(rows, default=-1) + 1) or 0
+
+
+def _validate_task_payload(data: dict, planned_type: str) -> Optional[str]:
+    """Struktur-Check des LLM-Aufgaben-JSON (Fehlermeldung oder None)."""
+    final_type = str(data.get("task_type") or planned_type).strip().lower()
+    if final_type not in ("text", "mc"):
+        final_type = "text"
+    if not str(data.get("description") or "").strip():
+        return '"description" (Aufgabenstellung) ist leer.'
+    if final_type == "mc":
+        qs = data.get("mc_questions")
+        if not isinstance(qs, list) or not qs:
+            return '"mc_questions" fehlt oder ist leer.'
+        try:
+            validate_mc_data({"penalty_enabled": False, "questions": qs})
+        except McValidationError as e:
+            return f"MC-Fragen ungültig: {e}"
+    return None
+
+
+def _save_task(
+    course_id: int, created_by: int, title: str, task_type: str, description: str,
+    model_solution: Optional[str], max_points: int, text_template: Optional[str],
+    mc_data: Optional[str], display_order: int, task_id: Optional[int] = None,
+) -> int:
+    """Importierte Aufgabe speichern (zunächst unsichtbar) — Regeneration
+    aktualisiert die bestehende Zeile in-place (Submissions/Hints bleiben gültig)."""
+    with Session(engine) as s:
+        t: Optional[Task] = s.get(Task, task_id) if task_id else None
+        if t and t.course_id == course_id:
+            t.title = title[:300]
+            t.task_type = TaskType(task_type)
+            t.description = description
+            t.model_solution = model_solution
+            t.max_points = max_points
+            t.text_template = text_template if task_type == "text" else None
+            t.mc_data = mc_data if task_type == "mc" else None
+        else:
+            t = Task(
+                course_id=course_id, title=title[:300], task_type=TaskType(task_type),
+                description=description, model_solution=model_solution,
+                max_points=max_points,
+                text_template=text_template if task_type == "text" else None,
+                mc_data=mc_data if task_type == "mc" else None,
+                is_visible=False, display_order=display_order, created_by=created_by,
+            )
+            s.add(t)
+        s.commit()
+        s.refresh(t)
+        assert t.id is not None
+        return t.id
+
+
+async def _generate_task(
+    course_id: int, import_id: int, staging: Path, snap: dict, tk: dict,
+    by_path: dict, url_map: dict, display_order: int,
+    script_ctx: str, references_text: str, media_text: str,
+    llm_cfg: dict, llm_sem: asyncio.Semaphore,
+) -> int:
+    """EINE Übungsaufgabe wortgetreu aus den Quellen konvertieren
+    (agentic Quellen-Sammlung + 1-2 LLM-Call(s)) → Task-Row. Liefert die Task-ID."""
+    title = tk["title"]
+    planned_type = str(tk.get("task_type") or "text")
+    planned_points = int(tk.get("points") or 0)
+
+    # 1. Quellen: agentic anhand der Plan-Beschreibung (Datei + Zeilen + Aufgaben-Kennung)
+    gathered = await _gather_sources(
+        course_id, import_id, snap, staging, title,
+        tk.get("description") or "", "tasks", "tasks", llm_cfg, llm_sem,
+    )
+    if gathered is None:
+        raise RuntimeError("Quellen-Sammlung fehlgeschlagen (LLM-Aufruf).")
+    sources, _notes = gathered
+    if not sources:
+        raise RuntimeError("Keine Quellen für die Aufgabe gefunden — bitte Quellenangabe in der Beschreibung prüfen.")
+    append_report(import_id, log=[
+        f'„{title}“: Quellen: ' + ", ".join(
+            f"{s.get('file')} (Z {s.get('start_line') or 1}–{s.get('end_line')})" for s in sources[:20]
+        )
+    ])
+
+    # 2. Quelltext (Roh bleibt roh — das LLM normalisiert; Marker zeigen die Herkunft)
+    raw, img_refs, _has_tex = await asyncio.to_thread(
+        _collect_sources, staging, {"sources": sources}, by_path
+    )
+    raw = _rewrite_image_urls(raw, url_map)
+    if not raw.strip():
+        raise RuntimeError("Quelltext leer (Quelldatei nicht lesbar?).")
+    warns: list[str] = []
+    unresolved = [r for r in img_refs if not _resolve_image_path(r, url_map)]
+    if unresolved:
+        warns.append(
+            f'„{title}“: {len(unresolved)} Bildreferenz(en) nicht in den importierten Medien '
+            f'auffindbar — die Bilder fallen weg: {", ".join(unresolved[:5])}'
+        )
+
+    # 3. Generierung (1-2 Versuche: Struktur-/MC-Validierungsfehler werden beim
+    #    Wiederholungsversuch als Fehler-Feedback mitgegeben)
+    data: Optional[dict] = None
+    last_err: Optional[str] = None
+    for _attempt in range(2):
+        async with llm_sem:
+            if not await gate(import_id, "tasks"):
+                raise RuntimeError("gestoppt (Pause/Cancel)")
+            res = await llm_service.import_generate_task(
+                title, planned_type, planned_points,
+                script_ctx, media_text, references_text, raw,
+                config=llm_cfg, max_tokens=min(32768, len(raw) // 4 + 4096),
+            )
+        if not res["success"]:
+            last_err = str(res.get("error") or "LLM-Fehler")
+            continue
+        data = res["data"] if isinstance(res.get("data"), dict) else None
+        if data is None:
+            last_err = "LLM hat kein gültiges JSON-Objekt geliefert."
+            continue
+        last_err = _validate_task_payload(data, planned_type)
+        if last_err is None:
+            break
+    if data is None or last_err is not None:
+        raise RuntimeError(f"Aufgabe konnte nicht generiert/validiert werden: {last_err}")
+
+    final_type = str(data.get("task_type") or planned_type).strip().lower()
+    if final_type not in ("text", "mc"):
+        final_type = "text"
+        warns.append(f'„{title}“: unklare Aufgabenart vom LLM — als Text-Aufgabe übernommen.')
+    if final_type != planned_type:
+        append_report(import_id, warnings=[
+            f'„{title}“: Aufgabenart wurde vom LLM geändert ({planned_type} → {final_type}).'
+        ])
+
+    # 4. Sanitizer (untrusted input!) + Speichern
+    desc, w1 = sanitize_untrusted_markdown(str(data.get("description") or "").strip())
+    sol, w2 = sanitize_untrusted_markdown(str(data.get("model_solution") or "").strip())
+    warns.extend(w1 + w2)
+    mc_data: Optional[str] = None
+    text_template: Optional[str] = None
+    if final_type == "mc":
+        mc_payload = {"penalty_enabled": False, "questions": data["mc_questions"]}
+        validate_mc_data(mc_payload)
+        mc_data = json.dumps(mc_payload, ensure_ascii=False)
+        total = mc_total_points(mc_payload)
+        if total != planned_points:
+            warns.append(
+                f'„{title}“: Punkte-Abweichung — Plan: {planned_points}, MC-Fragen-Summe: {total}. '
+                f'Fragen-Summe übernommen.'
+            )
+        max_points = total
+    else:
+        max_points = planned_points
+        tt = str(data.get("text_template") or "").strip()
+        if tt:
+            text_template, w3 = sanitize_untrusted_markdown(tt)
+            warns.extend(w3)
+    if not sol:
+        warns.append(
+            f'„{title}“: keine Musterlösung (nicht in der Quelle, vom LLM nicht erstellt) — '
+            f'bitte im Aufgaben-Editor ergänzen.'
+        )
+    note = str(data.get("notes") or "").strip()
+    if note:
+        append_report(import_id, log=[f'„{title}“: LLM-Anmerkung: {note[:300]}'])
+
+    task_id = _save_task(
+        course_id, snap["created_by"], title, final_type, desc, sol or None,
+        max_points, text_template, mc_data, display_order, task_id=tk.get("task_id"),
+    )
+    for w in warns:
+        append_report(import_id, warnings=[w])
+    return task_id
+
+
+async def run_tasks_job(course_id: int, import_id: int) -> None:
+    """Stufe 7b: enabled Aufgaben (Status != done) sequentiell wortgetreu konvertieren."""
+    logger.info("Import %s (Kurs %s): tasks gestartet", import_id, course_id)
+    try:
+        set_stage_status(import_id, "tasks", "running")
+        snap = job_snapshot(import_id)
+        if snap is None:
+            return
+        staging = staging_dir(course_id, snap["job_id"])
+        by_path = {m["path"]: m for m in snap["manifest"]}
+        plan = snap["tasks_plan"] or []
+        todo = [t for t in plan if t.get("enabled") and t.get("tasks_status") != "done"]
+        if not todo:
+            set_stage_status(import_id, "tasks", "done")
+            return
+
+        url_map = {p: i["url"] for p, i in (snap["media_map"] or {}).items() if i.get("url")}
+        script_ctx = await asyncio.to_thread(_script_chapter_context, course_id)
+        references_text = await asyncio.to_thread(_build_references_text, course_id)
+        media_text = await asyncio.to_thread(_build_media_list_text, course_id)
+        next_order = _next_task_display_order(course_id)
+        llm_sem = asyncio.Semaphore(IMPORT_LLM_CONCURRENCY)
+
+        success = 0
+        for idx, tk in enumerate(plan):
+            if not tk.get("enabled") or tk.get("tasks_status") == "done":
+                continue
+            title = tk["title"]
+            unit_key = f"tasks:{idx}"
+            if not await gate(import_id, "tasks"):
+                return
+            set_progress(import_id, current=f"Aufgabe: {title}", unit_key=unit_key, unit_total=1)
+            llm_cfg = get_llm_config(course_id, IMPORT_TIMEOUT_CONVERT)
+            if str(tk.get("task_type") or "text") == "workspace":
+                # Workspace-Import folgt in einem späteren Update
+                update_tasks_entry(import_id, idx, {"tasks_status": "skipped", "tasks_error": None, "enabled": False})
+                append_report(import_id, warnings=[
+                    f'„{title}“: Workspace-Aufgaben werden vom Import noch nicht unterstützt — '
+                    f'übersprungen (im Plan stattdessen „Text“ oder „MC“ wählen).'
+                ])
+                continue
+            try:
+                task_id = await _generate_task(
+                    course_id, import_id, staging, snap, tk, by_path, url_map,
+                    next_order, script_ctx, references_text, media_text, llm_cfg, llm_sem,
+                )
+                next_order += 1
+                update_tasks_entry(import_id, idx, {
+                    "tasks_status": "done", "tasks_error": None, "task_id": task_id,
+                    # Importiert → Checkbox deaktivieren (erneutes Anhaken = Neu-Generierung)
+                    "enabled": False,
+                })
+                set_progress(import_id, unit_key=unit_key, unit_done=1)
+                success += 1
+            except RuntimeError as e:
+                if "gestoppt" in str(e):
+                    return
+                logger.warning("Import %s: Aufgabe %s: %s", import_id, title, e)
+                update_tasks_entry(import_id, idx, {"tasks_status": "error", "tasks_error": str(e)[:500]})
+                append_report(import_id, errors=[f'„{title}“: {e}'])
+            except Exception as e:
+                logger.exception("Import %s: Aufgabe %s fehlgeschlagen", import_id, title)
+                update_tasks_entry(import_id, idx, {"tasks_status": "error", "tasks_error": str(e)[:500]})
+                append_report(import_id, errors=[f'„{title}“: {e}'])
+
+        set_stage_status(import_id, "tasks", "done")
+        set_progress(import_id, current="Aufgaben-Import abgeschlossen.")
+        logger.info("Import %s: tasks abgeschlossen (%d Aufgaben)", import_id, success)
+    except Exception as exc:
+        logger.exception("Import %s: tasks Job fehlgeschlagen", import_id)
+        append_report(import_id, errors=[f"tasks-Job intern fehlgeschlagen: {exc}"])
+        if stage_status(import_id, "tasks") == "running":
+            set_stage_status(import_id, "tasks", "error")
+
+
 # ═══════════════════════════════════════════════════════════════
 # Serialize + Lifecycle
 # ═══════════════════════════════════════════════════════════════
@@ -5457,7 +5870,8 @@ def serialize_import(imp: CourseImport) -> dict:
     ]
     statuses = (imp.filemap_status, imp.media_status, imp.references_status,
                 imp.ref_extract_status, imp.plan_status, imp.slides_plan_status,
-                imp.script_status, imp.slides_status)
+                imp.script_status, imp.slides_status,
+                imp.tasks_plan_status, imp.tasks_status)
     return {
         "id": imp.id,
         "course_id": imp.course_id,
@@ -5472,12 +5886,15 @@ def serialize_import(imp: CourseImport) -> dict:
         "slides_plan_status": imp.slides_plan_status,
         "script_status": imp.script_status,
         "slides_status": imp.slides_status,
+        "tasks_plan_status": imp.tasks_plan_status,
+        "tasks_status": imp.tasks_status,
         "manifest": imp.manifest or [],
         "file_map": imp.file_map or {},
         "media_map": imp.media_map or {},
         "reference_map": imp.reference_map or {},
         "chapter_plan": imp.chapter_plan or [],
         "slides_plan": get_slides_plan(imp),
+        "tasks_plan": imp.tasks_plan or [],
         "progress": imp.progress or {},
         "report": imp.report or {},
         "decks": decks,
