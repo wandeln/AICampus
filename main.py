@@ -74,7 +74,7 @@ from services.slides_service import (
     slide_count,
 )
 
-from api import admin, analytics as analytics_api, auth, forum, importer, image_specs, media as media_api, materials as materials_api, mcp_server as mcp_server_api, mcp_tokens, notifications as notifications_api, push as push_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
+from api import admin, analytics as analytics_api, auth, forum, importer, image_specs, media as media_api, materials as materials_api, mcp_oauth, mcp_server as mcp_server_api, mcp_tokens, notifications as notifications_api, push as push_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
 
 
 def _calculate_percentile(my_score: float, other_scores: list[float]) -> int:
@@ -389,10 +389,20 @@ app.include_router(push_api.router)  # /api/push/… (M3: Browser-Push-Subscript
 app.include_router(versions_api.router)  # /api/versions/… (Versions-History + Autosave)
 app.include_router(importer.router)
 app.include_router(mcp_tokens.router)  # /api/mcp-tokens/… (MCP-Token verwalten)
+app.include_router(mcp_oauth.router)  # /api/mcp-oauth/… (MCP-OAuth-Grants verwalten)
 app.include_router(preview_proxy.router)  # /preview/{task}/{port}/… (same-origin)
 
-# MCP-Server (streamable HTTP) — Bearer-Token-Auth, s. api/mcp_server.py
+# MCP-Consent-Seite: Route muss VOR dem Mount gematcht werden
+# (Starlette-Routenreihenfolge — sonst frisst der Mount /mcp/oauth/authorize).
+app.include_router(mcp_oauth.consent_router)
+
+# MCP-Server (streamable HTTP) — Bearer-Token-Auth (PAT + OAuth), s. api/mcp_server.py
 app.mount("/mcp", mcp_server_api.mcp_app)
+
+# RFC 9728 Protected-Resource-Metadata am Domain-Root: der WWW-Authenticate-Header
+# verweist dorthin (die Sub-App kopiert die Metadata nur unter dem /mcp-Prefix).
+for _r in mcp_server_api.protected_resource_routes:
+    app.add_route(_r.path, _r.endpoint, methods=_r.methods)
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -145,6 +145,8 @@
       Damit können AI-Tools (z.&nbsp;B. Claude Desktop, Claude Code, Cursor) über das
       <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener" class="text-blue-600 hover:underline">Model Context Protocol (MCP)</a>
       in deinen Kursen Skripte, Folien und Übungsaufgaben durchsuchen und lesen.
+      Als Tutor/Prof können sie bei aktiviertem Schreibzugriff Inhalte auch bearbeiten
+      (jede Änderung wird automatisch versioniert) und Applets anlegen.
       Jeder Token hat eine eigene Kurs-Allowlist — nur die gewählten Kurse sind erreichbar,
       personenbezogene Studierendendaten werden nie ausgeliefert.
     </p>
@@ -161,6 +163,10 @@
       />
       <p class="block text-sm font-medium text-gray-600 mt-3 mb-1">Kurse, die dieser Token erreichen darf</p>
       <div id="mcp-create-courses" class="space-y-1 max-h-40 overflow-y-auto"></div>
+      <label class="flex items-center gap-2 text-sm text-gray-700 mt-3">
+        <input type="checkbox" id="mcp-create-write" class="rounded border-gray-300" checked>
+        <span>Schreibzugriff erlauben <span class="text-gray-400 text-xs">(wirkt nur mit Tutor-/Prof-Rolle — Studenten sind immer read-only)</span></span>
+      </label>
       <button
         type="button"
         id="mcp-create-btn"
@@ -191,6 +197,18 @@
 
     <!-- Token-Liste -->
     <div id="mcp-tokens" class="mt-4 space-y-3"></div>
+
+    <!-- OAuth-Verbindungen (ChatGPT & Co.) -->
+    <div class="mt-5 pt-4 border-t border-gray-200">
+      <p class="text-sm text-gray-600">
+        <strong>OAuth-Verbindungen</strong> (z.&nbsp;B. ChatGPT): Dort die URL
+        <code class="text-xs bg-gray-100 rounded px-1.5 py-0.5 font-mono">{{ mcp_url }}</code>
+        mit <strong>Auth: OAuth</strong> eintragen — kein Token nötig.
+        Nach der Anmeldung im Browser wählst du hier aus, welche Kurse der
+        Client erreichen darf und ob er schreiben darf.
+      </p>
+      <div id="mcp-oauth-clients" class="mt-3 space-y-3"></div>
+    </div>
   </div>
 
   <!-- Dangerzone -->
@@ -516,16 +534,21 @@
               <p class="text-sm font-medium text-gray-800">${esc(t.name)}</p>
               <p class="text-xs text-gray-500 mt-0.5">
                 Kurse: ${t.courses.length ? t.courses.map((c) => esc(c.name)).join(', ') : '—'}
+                ${t.allow_write ? ' · <span class="text-emerald-600">Schreibzugriff</span>' : ' · <span class="text-amber-600">nur Lesezugriff</span>'}
                 ${t.last_used_at ? ' · Zuletzt genutzt: ' + new Date(t.last_used_at).toLocaleDateString('de-DE') : ''}
               </p>
             </div>
             <div class="flex gap-2 shrink-0">
-              <button type="button" class="mcp-edit-btn px-3 py-1.5 rounded-lg text-xs border border-gray-300 text-gray-700 hover:bg-gray-100 transition">Kurse ändern</button>
+              <button type="button" class="mcp-edit-btn px-3 py-1.5 rounded-lg text-xs border border-gray-300 text-gray-700 hover:bg-gray-100 transition">Bearbeiten</button>
               <button type="button" class="mcp-revoke-btn px-3 py-1.5 rounded-lg text-xs border border-red-300 text-red-600 hover:bg-red-50 transition">Widerrufen</button>
             </div>
           </div>
           <div class="mcp-course-edit hidden mt-3 pt-3 border-t border-gray-200">
             <div class="space-y-1 max-h-40 overflow-y-auto">${courseCheckboxes(t.courses.map((c) => c.id))}</div>
+            <label class="flex items-center gap-2 text-sm text-gray-700 mt-2">
+              <input type="checkbox" class="mcp-write-cb" ${t.allow_write ? 'checked' : ''}>
+              <span>Schreibzugriff <span class="text-gray-400 text-xs">(wirkt nur mit Tutor-/Prof-Rolle)</span></span>
+            </label>
             <button type="button" class="mcp-save-btn mt-2 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 transition">Speichern</button>
           </div>
         </div>`).join('');
@@ -540,7 +563,9 @@
         .map((cb) => Number(cb.dataset.courseId));
       if (!courseIds.length) { showToast('Bitte wähle mindestens einen Kurs aus.', 'warning'); return; }
       try {
-        const data = await api('/api/mcp-tokens/', 'POST', { name, course_ids: courseIds });
+        const data = await api('/api/mcp-tokens/', 'POST', {
+          name, course_ids: courseIds, allow_write: document.getElementById('mcp-create-write').checked
+        });
         const raw = data.token;
         const cfg = JSON.stringify(
           { mcpServers: { aicampus: { url: MCP_URL, headers: { Authorization: 'Bearer ' + raw } } } },
@@ -581,15 +606,80 @@
         const courseIds = [...row.querySelectorAll('.mcp-course-cb:checked')]
           .map((cb) => Number(cb.dataset.courseId));
         if (!courseIds.length) { showToast('Bitte wähle mindestens einen Kurs aus.', 'warning'); return; }
+        const writeCb = row.querySelector('.mcp-write-cb');
         try {
-          await api('/api/mcp-tokens/' + tokenId, 'PUT', { course_ids: courseIds });
+          await api('/api/mcp-tokens/' + tokenId, 'PUT', { course_ids: courseIds, allow_write: writeCb ? writeCb.checked : true });
           showToast('Token wurde aktualisiert.', 'success');
           loadTokens();
         } catch (err) { showToast(err.message, 'error'); }
       }
     });
 
+    // ─── OAuth-Clients (Consent-Flow, s. api/mcp_oauth.py) ─────────
+    async function loadOAuthClients() {
+      const data = await api('/api/mcp-oauth/', 'GET');
+      const list = document.getElementById('mcp-oauth-clients');
+      if (!data.grants.length) {
+        list.innerHTML = '<p class="text-sm text-gray-400">Noch keine OAuth-Verbindungen.</p>';
+        return;
+      }
+      const canWrite = MCP_COURSES.some((c) => c.role_in_course === 'PROF' || c.role_in_course === 'TUTOR');
+      list.innerHTML = data.grants.map((g) => `
+        <div class="border border-gray-200 rounded-lg p-4" data-client-id="${esc(g.client_id)}">
+          <div class="flex items-center justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-gray-800">${esc(g.name)}${g.allow_write ? ' <span title="Hat Schreibzugriff">✍️</span>' : ''}</p>
+              <p class="text-xs text-gray-500 mt-0.5">
+                Kurse: ${g.courses.length ? g.courses.map((c) => esc(c.name)).join(', ') : '—'}
+                ${g.last_used_at ? ' · Zuletzt genutzt: ' + new Date(g.last_used_at).toLocaleDateString('de-DE') : ''}
+              </p>
+            </div>
+            <div class="flex gap-2 shrink-0">
+              <button type="button" class="oauth-edit-btn px-3 py-1.5 rounded-lg text-xs border border-gray-300 text-gray-700 hover:bg-gray-100 transition">Bearbeiten</button>
+              <button type="button" class="oauth-revoke-btn px-3 py-1.5 rounded-lg text-xs border border-red-300 text-red-600 hover:bg-red-50 transition">Trennen</button>
+            </div>
+          </div>
+          <div class="oauth-course-edit hidden mt-3 pt-3 border-t border-gray-200">
+            <div class="space-y-1 max-h-40 overflow-y-auto">${courseCheckboxes(g.courses.map((c) => c.id))}</div>
+            ${canWrite ? `
+            <label class="flex items-center gap-2 mt-2 text-sm text-gray-700">
+              <input type="checkbox" class="oauth-write-cb" ${g.allow_write ? 'checked' : ''}>
+              <span>Schreibzugriff erlauben</span>
+            </label>` : ''}
+            <button type="button" class="oauth-save-btn mt-2 px-3 py-1.5 rounded-lg text-xs bg-blue-600 text-white hover:bg-blue-700 transition">Speichern</button>
+          </div>
+        </div>`).join('');
+    }
+
+    document.getElementById('mcp-oauth-clients').addEventListener('click', async (e) => {
+      const row = e.target.closest('[data-client-id]');
+      if (!row) return;
+      const clientId = row.dataset.clientId;
+      if (e.target.classList.contains('oauth-revoke-btn')) {
+        if (!confirm('Diese Verbindung wirklich trennen? Das Tool verliert sofort den Zugriff.')) return;
+        try {
+          await api('/api/mcp-oauth/' + encodeURIComponent(clientId), 'DELETE');
+          showToast('Der Client wurde getrennt.', 'success');
+          loadOAuthClients();
+        } catch (err) { showToast(err.message, 'error'); }
+      } else if (e.target.classList.contains('oauth-edit-btn')) {
+        row.querySelector('.oauth-course-edit').classList.toggle('hidden');
+      } else if (e.target.classList.contains('oauth-save-btn')) {
+        const courseIds = [...row.querySelectorAll('.mcp-course-cb:checked')]
+          .map((cb) => Number(cb.dataset.courseId));
+        if (!courseIds.length) { showToast('Bitte wähle mindestens einen Kurs aus.', 'warning'); return; }
+        const writeCb = row.querySelector('.oauth-write-cb');
+        try {
+          await api('/api/mcp-oauth/' + encodeURIComponent(clientId), 'PUT',
+            { course_ids: courseIds, allow_write: writeCb ? writeCb.checked : false });
+          showToast('Zugriff wurde aktualisiert.', 'success');
+          loadOAuthClients();
+        } catch (err) { showToast(err.message, 'error'); }
+      }
+    });
+
     loadTokens().catch((err) => showToast(err.message, 'error'));
+    loadOAuthClients().catch((err) => showToast(err.message, 'error'));
   })();
 
   // ─── Account löschen (Dangerzone) ──────────────────────────────

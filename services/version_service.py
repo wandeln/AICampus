@@ -306,6 +306,69 @@ def _get_version_checked(session: Session, user: User, version_id: int):
     return v, adapter, entity
 
 
+def _current_snapshot(entity_type: str, entity) -> dict:
+    """Snapshot des aktuellen Element-Zustands (gleiche Felder wie die
+    jeweiligen apply-Adapter)."""
+    if entity_type in ("script_section", "slide_deck"):
+        return {
+            "title": entity.title,
+            "content": entity.content or "",
+            "summary": entity.summary or "",
+        }
+    if entity_type == "applet":
+        path = media_service.MEDIA_DIR / entity.file_path
+        if not path.is_file():
+            raise HTTPException(404, "Applet-Datei fehlt (Element defekt).")
+        return {
+            "title": entity.title,
+            "html": path.read_text(encoding="utf-8"),
+            "llm_description": entity.llm_description or "",
+        }
+    if entity_type == "task":
+        return {
+            "title": entity.title,
+            "task_type": entity.task_type.value,
+            "description": entity.description or "",
+            "model_solution": entity.model_solution or "",
+            "max_points": entity.max_points,
+            "max_attempts": entity.max_attempts,
+            "deadline": entity.deadline or "",
+            "text_template": entity.text_template or "",
+            "is_visible": entity.is_visible,
+            "hints_enabled": entity.hints_enabled,
+            "mc_data": entity.mc_data or "",
+            # Workspace-Konfig mitsichern: _task_apply setzt engines/image
+            # beim Restore bedingungslos aus dem Snapshot.
+            "workspace_timeout": entity.workspace_timeout,
+            "workspace_cpu": entity.workspace_cpu,
+            "workspace_memory": entity.workspace_memory,
+            "workspace_disk_quota": entity.workspace_disk_quota,
+            "workspace_internet": entity.workspace_internet,
+            "workspace_main_file": entity.workspace_main_file or "",
+            "workspace_engines": entity.workspace_engines,
+            "workspace_image": entity.workspace_image,
+        }
+    raise HTTPException(400, "Zustands-Snapshots sind für diesen Elementtyp nicht unterstützt.")
+
+
+def snapshot_current(session: Session, user: User, entity_type: str, entity_id: int, name: str = "") -> dict:
+    """Version aus dem AKTUELLEN Element-Zustand anlegen (Element bleibt
+    unverändert) — Backup vor externen Änderungen (MCP-Edits).
+    Rollback: restore_version()."""
+    _adapter, entity = _load_entity_checked(session, user, entity_type, entity_id)
+    v = ContentVersion(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        snapshot=_current_snapshot(entity_type, entity),
+        name=(name or "").strip()[:200],
+        created_by=user.id,
+    )
+    session.add(v)
+    session.commit()
+    session.refresh(v)
+    return _version_to_dict(v)
+
+
 def _capture_task_files(session: Session, v: ContentVersion) -> None:
     """Workspace-Dateibau in Task-Versionen aufnehmen (Version B):
     bei Workspace-Aufgaben tar + Meta-JSON sichern, bei anderen

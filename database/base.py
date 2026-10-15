@@ -208,6 +208,9 @@ def migrate_schema():
         "notifications": {
             "channel_id": "INTEGER",  # Forum-Kanal (nur forum_message; Auto-Read beim Kanal-Besuch)
         },
+        "mcp_tokens": {
+            "allow_write": "BOOLEAN DEFAULT 1",  # PAT-Write-Schalter (Einstellungen → MCP)
+        },
     }
     column_drops = {
         "course_media": ["is_visible"],  # Sichtbarkeit steuert der einbindende Inhalt

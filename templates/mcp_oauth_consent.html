@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %} - MCP-Zugriff bestätigen{% endblock %}
+
+{% block extra_head %}
+{# Kein Indexierungswert (kein öffentlicher Content) — doppelt mit robots.txt #}
+<meta name="robots" content="noindex, nofollow">
+{% endblock %}
+
+{% block content %}
+<div class="min-h-[80vh] flex items-center justify-center">
+  <div class="w-full max-w-lg">
+
+    <div class="card">
+      <div class="text-center mb-6">
+        <h1 class="text-2xl font-bold text-gray-800 flex items-center justify-center gap-2">
+          <img src="{{ asset('aicampus_icon.png') }}" alt="" class="h-9 w-9 rounded-md"> AICampus
+        </h1>
+        <p class="text-gray-500 mt-1">MCP-Zugriff bestätigen</p>
+      </div>
+
+      {% if error %}
+      <div class="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-red-700 text-sm">
+        ⚠️ {{ error }}
+      </div>
+      {% else %}
+
+      {# HTMX im Formular deaktiviert (wie Login-Formular): Proxies würden #}
+      {# den POST an eine falsche URL senden → normales HTML-Formular.      #}
+      <form method="post" action="/mcp/oauth/authorize" hx-disable>
+        <input type="hidden" name="session" value="{{ code }}">
+
+        <p class="text-sm text-gray-700">
+          <strong>{{ client_name or "Dieses MCP-Tool" }}</strong> möchte über das
+          Model Context Protocol (MCP) auf deine AICampus-Kursinhalte zugreifen —
+          Skripte, Folien und Übungsaufgaben, jeweils mit deiner Kursrolle.
+          Personenbezogene Studierendendaten (Einreichungen, Punkte, Feedback,
+          Mitgliederlisten) sind über MCP nicht erreichbar.
+        </p>
+
+        <p class="block text-sm font-medium text-gray-600 mt-5 mb-2">
+          Kurse, die {{ client_name or "das Tool" }} erreichen darf
+        </p>
+        <div class="space-y-2 max-h-60 overflow-y-auto border border-gray-200 rounded-lg p-3">
+          {% for c in courses %}
+          <label class="flex items-center gap-2 text-sm text-gray-700">
+            <input type="checkbox" name="course" value="{{ c.id }}" checked>
+            <span>{{ c.name }} <span class="text-gray-400 text-xs">({{ c.semester }})</span></span>
+          </label>
+          {% else %}
+          <p class="text-sm text-gray-400">Du bist aktuell Mitglied in keinem Kurs.</p>
+          {% endfor %}
+        </div>
+
+        {% if can_write %}
+        <label class="flex items-start gap-2 mt-4 text-sm text-gray-700">
+          <input type="checkbox" name="allow_write" value="1" class="mt-0.5">
+          <span>
+            <strong>Schreibzugriff erlauben</strong>
+            <span class="block text-xs text-gray-500 mt-0.5">
+              Erlaubt dem Tool, Inhalte zu bearbeiten bzw. Applets zu generieren —
+              wirksam nur in Kursen, in denen du Tutor:in oder Professor:in bist.
+            </span>
+          </span>
+        </label>
+        {% endif %}
+
+        <div class="flex gap-3 mt-6">
+          <button type="submit" formaction="/mcp/oauth/deny"
+                  class="flex-1 border border-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-100 transition font-medium">
+            Ablehnen
+          </button>
+          <button type="submit"
+                  class="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition font-medium">
+            Zulassen
+          </button>
+        </div>
+      </form>
+      {% endif %}
+
+      <div class="mt-6 pt-4 border-t border-gray-200 text-center text-sm text-gray-500">
+        <p>Zugriffe kannst du später unter Einstellungen → MCP anpassen oder trennen.</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

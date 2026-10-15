@@ -1279,6 +1279,9 @@ class McpToken(SQLModel, table=True):
     sein SHA-256-Hash (Lookup-Index). Ein Token pro User mit einer
     Kurs-Allowlist (McpTokenCourse); die Rolle wird pro Request live aus
     UserCourse abgeleitet (s. services/mcp_token_service.py).
+
+    allow_write = Write-Schalter (Einstellungen → MCP): ohne ihn sind die
+    MCP-Write-Tools gesperrt; die Kurs-Rolle (Tutor/Prof) begrenzt zusätzlich.
     """
 
     __tablename__ = "mcp_tokens"
@@ -1287,6 +1290,7 @@ class McpToken(SQLModel, table=True):
     user_id: int = Field(foreign_key="users.id", index=True)
     name: str = Field(max_length=100)
     token_hash: str = Field(max_length=64, unique=True, index=True)
+    allow_write: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.now)
     last_used_at: Optional[datetime] = Field(default=None)
     expires_at: Optional[datetime] = Field(default=None)  # NULL = kein Ablauf
@@ -1308,3 +1312,93 @@ class McpTokenCourse(SQLModel, table=True):
     course_id: int = Field(foreign_key="courses.id", index=True)
 
     token: McpToken = Relationship(back_populates="courses")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MCP OAUTH (Authorization-Code-Flow + PKCE für ChatGPT & Co.)
+# ═══════════════════════════════════════════════════════════════════
+
+class McpOAuthClient(SQLModel, table=True):
+    """OAuth-Client, registriert via DCR (RFC 7591) durch den MCP-Client.
+
+    ChatGPT & Co. registrieren sich selbst per POST /mcp/register beim
+    ersten Verbindungsversuch. client_secret nur für confiante Clients
+    (token_endpoint_auth_method != 'none').
+    """
+
+    __tablename__ = "mcp_oauth_clients"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    client_id: str = Field(max_length=100, unique=True, index=True)
+    client_name: Optional[str] = Field(default=None, max_length=200)
+    redirect_uris: str  # JSON-Liste, z. B. '["https://chatgpt.com/mcp/oauth/callback"]'
+    token_endpoint_auth_method: str = "none"  # 'none' (Public Client) etc.
+    grant_types: str  # JSON-Liste, z. B. '["authorization_code", "refresh_token"]'
+    client_secret: Optional[str] = Field(default=None, max_length=255)
+    created_at: datetime = Field(default_factory=datetime.now)
+    last_used_at: Optional[datetime] = Field(default=None)
+
+
+class McpOAuthCode(SQLModel, table=True):
+    """Authorization-Code des OAuth-Flusses (Einmal-Code, 10 Min. gültig).
+
+    Gespeichert wird nur der SHA-256-Hash — der Klartext-Code wandert
+    einmalig in den Redirect an den Client. user_id bleibt NULL, bis der
+    User die Consent-Seite bestätigt; ein Code ohne Consent ist nicht
+    einlösbar. course_ids/allow_write = Consent-Entscheidung (Scope).
+    """
+
+    __tablename__ = "mcp_oauth_codes"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    code_hash: str = Field(max_length=64, unique=True, index=True)
+    client_id: str = Field(max_length=100, index=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    code_challenge: Optional[str] = Field(default=None, max_length=128)  # PKCE S256
+    redirect_uri: str  # URL des Clients, an die der Code zurückgeht
+    redirect_uri_explicit: bool = False  # True → Token-Request muss sie übergeben
+    state: Optional[str] = Field(default=None, max_length=512)  # wird unverändert zurückgegeben
+    course_ids: str = "[]"  # JSON-Liste: Consent-Entscheidung, welche Kurse
+    allow_write: bool = False  # Consent-Entscheidung: Schreibzugriff?
+    expires_at: datetime
+    used_at: Optional[datetime] = Field(default=None)
+
+
+class McpOAuthToken(SQLModel, table=True):
+    """OAuth-Token-Paar (Access + Refresh) pro User+Client.
+
+    Access (`aio_<64 hex>`) läuft nach 1 h ab, Refresh (`aioR_<64 hex>`) nach
+    90 Tagen; der Refresh wird bei jedem Einsatz rotiert (neuer Hash auf
+    derselben Zeile, der Alte ist sofort ungültig). Es existiert genau EIN
+    gültiges Paar pro User+Client (ältere werden beim nächsten Consent
+    gelöscht). allow_write = Schalter des Grants — Änderungen in den
+    Einstellungen werden auf die Zeile übertragen (s. Service).
+    """
+
+    __tablename__ = "mcp_oauth_tokens"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    access_hash: str = Field(max_length=64, unique=True, index=True)
+    refresh_hash: str = Field(max_length=64, unique=True, index=True)
+    client_id: str = Field(max_length=100, index=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    allow_write: bool = False
+    access_expires_at: datetime
+    refresh_expires_at: datetime
+    created_at: datetime = Field(default_factory=datetime.now)
+    last_used_at: Optional[datetime] = Field(default=None)
+
+
+class McpOAuthGrantCourse(SQLModel, table=True):
+    """Pro-Client Kurs-Allowlist (OAuth): welche Kurse dieser Client erreicht.
+
+    Setzt sich die Consent-Seite; in den User-Settings nachträglich
+    editierbar (replace-all). Analog McpTokenCourse für die PAT-Tokens.
+    """
+
+    __tablename__ = "mcp_oauth_grant_courses"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    client_id: str = Field(max_length=100, index=True)
+    course_id: int = Field(foreign_key="courses.id", index=True)

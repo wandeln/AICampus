@@ -31,11 +31,13 @@ router = APIRouter(prefix="/api/mcp-tokens", tags=["MCP"])
 class TokenCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     course_ids: list[int] = Field(min_length=1)
+    allow_write: bool = True  # Write-Tools erlauben (Rolle Tutor/Prof begrenzt zusätzlich)
 
 
 class TokenUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     course_ids: list[int] | None = Field(default=None, min_length=1)
+    allow_write: bool | None = None
 
 
 def _my_course_ids(session: Session, user: User) -> set[int]:
@@ -79,6 +81,7 @@ def _token_dict(session: Session, token: McpToken) -> dict:
         "id": token.id,
         "name": token.name,
         "courses": courses,
+        "allow_write": token.allow_write is not False,
         "created_at": token.created_at.isoformat() if token.created_at else None,
         "last_used_at": token.last_used_at.isoformat() if token.last_used_at else None,
         "expires_at": token.expires_at.isoformat() if token.expires_at else None,
@@ -113,6 +116,7 @@ async def create_token(
         user_id=user.id,  # type: ignore[arg-type]
         name=data.name.strip(),
         token_hash=token_hash,
+        allow_write=data.allow_write,
     )
     session.add(token)
     session.flush()  # token.id nötig
@@ -142,6 +146,8 @@ async def update_token(
 
     if data.name is not None:
         token.name = data.name.strip()
+    if data.allow_write is not None:
+        token.allow_write = data.allow_write
     if data.course_ids is not None:
         course_ids = _validate_courses(session, user, data.course_ids)
         for tc in list(token.courses):
