@@ -24,6 +24,8 @@ Datenschutz (bewusste Tool-Whitelist, keine generischen Read-Tools):
 """
 
 import base64
+import contextvars
+import functools
 import ipaddress
 import json
 import logging
@@ -71,6 +73,8 @@ from prompts.markdown_manual import (
     SLIDES_CONTENT_EDITS_SPEC,
     SLIDES_MARKDOWN_MANUAL,
 )
+from services import analytics
+from services import bibtex as bib
 from services import mcp_oauth_service
 from services import mcp_token_service
 from services import media_service, version_service
@@ -153,6 +157,17 @@ def _auth(
     set_current_user_id(user.id)
     logger.info("[MCP] tool=%s user=%s course=%s write=%s",
                 tool_name or "?", user.username, course_id, write)
+    _MCP_CALL.set({
+        "user_id": user.id,
+        "course_id": course_id,
+        "tool_name": tool_name or "unknown",
+        "is_write": write,
+        "client": (
+            token.name
+            if isinstance(token, McpToken)
+            else mcp_oauth_service.client_name(session, token.client_id)
+        ),
+    })
 
     if course_id is None:
         return user, token, CourseRole.STUDENT
@@ -240,12 +255,13 @@ server = MCPServer(
     "AICampus",
     instructions=(
         "AICampus-Kursinhalte: Vorlesungsskripte, Folien (Slide-Decks), "
-        "Übungsaufgaben, Quellen, Bilder und interaktive Applets. Alle "
+        "Übungsaufgaben, Quellen-Bibliothek, Bilder und interaktive Applets. Alle "
         "Kurs-Tools brauchen ein course_id: rufe zuerst list_courses() auf, "
         "um deine Kurse und deine Rolle zu ermitteln. Orientiere dich dann "
         "mit course_overview(course_id) oder search_course(course_id, query) "
         "und lies Details mit read_script_section / read_material / read_task "
-        "/ read_applet / search_references / list_media (Bilder + Applets mit"
+        "/ read_applet / list_references / search_references / list_media "
+        "(Bilder + Applets mit"
         " fertiger Markdown-Referenz zum Einbinden in Skript/Folien; "
         "Bild-Inhalt ansehen: read_image).\n"
         "Das visible-Flag in course_overview betrifft NUR die Sichtbarkeit "
@@ -262,6 +278,9 @@ server = MCPServer(
         "create_task (type 'text' oder 'mc' — Workspace-Aufgaben nur in der "
         "Kurs-Web-UI) "
         "und edit_task (bestehende Aufgaben, inkl. MC-Fragen-Ersatz). "
+        "Quellen-Bibliothek: create_reference / edit_reference (einzelne) und "
+        "import_bibtex (mehrere auf einmal aus BibTeX) — zitierbar mit "
+        "@cite:{key} (Liste: list_references). "
         "Alle Inhalte (inkl. Aufgabenstellung/Template/Musterlösung) in "
         "AICampus-Markdown (markdown_manual); Musterlösungen IMMER mit "
         "Bewertungskriterien (max. max_points Punkte, nur aus der "
@@ -280,7 +299,50 @@ server = MCPServer(
 )
 
 
-@server.tool()
+# ─── Nutzungs-Tracking (Analytics-Dashboard) ───────────────────────
+# _MCP_CALL wird von _auth gesetzt; der mcp_tool-Wrapper (ersetzt
+# @server.tool()) loggt das Ergebnis jedes Calls in mcp_events
+# (s. services/analytics.py: record_mcp_event / mcp_usage / mcp_recent).
+
+_MCP_CALL: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "mcp_call", default=None
+)
+
+
+def _record_call(ok: bool) -> None:
+    info = _MCP_CALL.get()
+    if not info:
+        return  # u. a. Auth-Fehler ohne identifizierbaren User
+    try:
+        analytics.record_mcp_event(
+            user_id=info["user_id"],
+            course_id=info["course_id"],
+            tool_name=info["tool_name"],
+            client=info["client"],
+            is_write=info["is_write"],
+            ok=ok,
+        )
+    except Exception:
+        logger.exception("[MCP] Nutzungs-Tracking fehlgeschlagen")
+
+
+def mcp_tool(fn):
+    """@server.tool() + Nutzungs-Logging (s. _record_call)."""
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            result = await fn(*args, **kwargs)
+        except Exception:
+            _record_call(False)
+            raise
+        _record_call(True)
+        return result
+
+    return server.tool()(wrapper)
+
+
+@mcp_tool
 async def list_courses(ctx: Context) -> str:
     """Alle für dieses Token freigegebenen Kurse (ID, Name, Semester, deine Rolle).
 
@@ -319,7 +381,7 @@ async def list_courses(ctx: Context) -> str:
         })
 
 
-@server.tool()
+@mcp_tool
 async def course_overview(course_id: int, ctx: Context) -> str:
     """Kursübersicht ohne Inhalt: Skript-Kapitel, Slide-Decks, Aufgaben, Quellen-Anzahl.
 
@@ -393,8 +455,9 @@ async def course_overview(course_id: int, ctx: Context) -> str:
             "reference_count": ref_count,
             "hint": (
                 "Details: read_script_section / read_material / read_task; "
-                "Volltextsuche: search_course; Quellen: search_references; "
-                "Medien (Bilder/Applets) zur Einbindung: list_media."
+                "Volltextsuche: search_course; Quellen: list_references / "
+                "search_references; Medien (Bilder/Applets) zur Einbindung: "
+                "list_media."
             ),
         }
         if tutor:
@@ -416,7 +479,7 @@ async def course_overview(course_id: int, ctx: Context) -> str:
         return _json(out)
 
 
-@server.tool()
+@mcp_tool
 async def search_course(ctx: Context, course_id: int, query: str, limit: int = 10) -> str:
     """Volltextsuche (Keyword) über Skript-Kapitel, Folien/Skripte, Aufgabenstellungen
     und Quellen. Liefert je Treffer Ort + Snippet um die Trefferstelle.
@@ -507,7 +570,7 @@ async def search_course(ctx: Context, course_id: int, query: str, limit: int = 1
         })
 
 
-@server.tool()
+@mcp_tool
 async def read_script_section(course_id: int, ref: Union[int, str], ctx: Context) -> str:
     """Komplettes Skript-Kapitel (Markdown). ref = Kapitel-ID oder exakter Titel."""
     with Session(engine) as session:
@@ -523,7 +586,7 @@ async def read_script_section(course_id: int, ref: Union[int, str], ctx: Context
         })
 
 
-@server.tool()
+@mcp_tool
 async def read_material(course_id: int, ref: Union[int, str], ctx: Context) -> str:
     """Slide-Deck oder (Legacy-)Skript als Markdown. ref = ID oder exakter Titel.
 
@@ -542,7 +605,7 @@ async def read_material(course_id: int, ref: Union[int, str], ctx: Context) -> s
         })
 
 
-@server.tool()
+@mcp_tool
 async def read_task(course_id: int, ref: Union[int, str], ctx: Context) -> str:
     """Übungsaufgabe inkl. Aufgabenstellung. ref = Aufgaben-ID oder exakter Titel.
 
@@ -580,11 +643,12 @@ async def read_task(course_id: int, ref: Union[int, str], ctx: Context) -> str:
         return _json(out)
 
 
-@server.tool()
+@mcp_tool
 async def search_references(course_id: int, query: str, ctx: Context) -> str:
     """Quellen-Bibliothek durchsuchen (Key, Titel, Autoren, Venue, Beschreibung).
 
-    Liefert Zitat + Kurzbeschreibung je Treffer."""
+    Liefert Zitat + Kurzbeschreibung je Treffer. Vollständige Liste:
+    list_references."""
     with Session(engine) as session:
         _user, _token, _role = _auth(ctx, session, course_id, tool_name="search_references")
         if not (query or "").strip():
@@ -619,7 +683,339 @@ async def search_references(course_id: int, query: str, ctx: Context) -> str:
         })
 
 
-@server.tool()
+# ─── Quellen-Tools (Quellen-Bibliothek, Zitation per @cite:{key}) ──
+
+_REF_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")  # = api/references.py
+
+
+def _ref_dict(r: CourseReference) -> dict:
+    return {
+        "id": r.id,
+        "key": r.key,
+        "entry_type": r.entry_type,
+        "authors": r.authors or [],
+        "title": r.title or "",
+        "year": r.year or "",
+        "venue": r.venue or "",
+        "detail": r.detail or "",
+        "address": r.address or "",
+        "doi": r.doi or "",
+        "url": r.url or "",
+        "note": r.note or "",
+        "description": r.description or "",
+        "citation": bib.format_entry(
+            r.authors or [], r.title or "", r.year or "",
+            r.venue or "", r.detail or "", r.doi or "", r.url or "",
+        ),
+        "cite_as": f"@cite:{r.key}",
+    }
+
+
+def _next_ref_order(session: Session, course_id: int) -> int:
+    m = session.exec(
+        select(func.max(CourseReference.display_order))
+        .where(CourseReference.course_id == course_id)
+    ).one()
+    return (m or 0) + 1
+
+
+def _resolve_reference(session: Session, course_id: int, ref: Union[int, str]) -> CourseReference:
+    """ref = ID (int) oder exakter Quellen-Key (case-insensitive)."""
+    if isinstance(ref, int) or (isinstance(ref, str) and ref.isdigit()):
+        r = session.get(CourseReference, int(ref))
+        if not r or r.course_id != course_id:
+            raise McpToolError(
+                f"Quelle mit ID {ref} nicht in diesem Kurs gefunden "
+                "(Liste: list_references)."
+            )
+        return r
+    rows = session.exec(
+        select(CourseReference)
+        .where(CourseReference.course_id == course_id)
+        .where(func.lower(CourseReference.key) == (ref or "").strip().lower())
+    ).all()
+    if len(rows) == 1:
+        return rows[0]
+    if not rows:
+        raise McpToolError(
+            f"Quelle mit Key '{ref}' nicht gefunden (Liste: list_references)."
+        )
+    names = "; ".join(f"{r.key} (ID {r.id})" for r in rows)
+    raise McpToolError(f"Key '{ref}' ist mehrdeutig: {names}. Bitte per ID aufrufen.")
+
+
+def _set_ref_fields(
+    ref: CourseReference,
+    *,
+    key: Optional[str] = None,
+    title: Optional[str] = None,
+    authors: Optional[Union[list, str]] = None,
+    entry_type: Optional[str] = None,
+    year: Optional[str] = None,
+    venue: Optional[str] = None,
+    detail: Optional[str] = None,
+    address: Optional[str] = None,
+    doi: Optional[str] = None,
+    url: Optional[str] = None,
+    note: Optional[str] = None,
+    description: Optional[str] = None,
+) -> None:
+    """Setzt die angegebenen Quellen-Felder (None = unberührt, '' = leeren);
+    Trimming/Längen analog api/references.py."""
+    if key is not None:
+        ref.key = key.strip()
+    if entry_type is not None:
+        ref.entry_type = (entry_type or "misc").strip()[:50] or "misc"
+    if authors is not None:
+        if isinstance(authors, str):
+            ref.authors = bib.split_authors(authors)
+        else:
+            ref.authors = [str(a).strip() for a in authors if str(a).strip()]
+    if title is not None:
+        ref.title = title.strip()[:500]
+    if year is not None:
+        ref.year = year.strip()[:10]
+    if venue is not None:
+        ref.venue = venue.strip()[:300]
+    if detail is not None:
+        ref.detail = detail.strip()[:200]
+    if address is not None:
+        ref.address = address.strip()[:200]
+    if doi is not None:
+        ref.doi = doi.strip()[:200]
+    if url is not None:
+        ref.url = url.strip()[:500]
+    if note is not None:
+        ref.note = note.strip()[:500]
+    if description is not None:
+        ref.description = description.strip()
+
+
+@mcp_tool
+async def list_references(course_id: int, ctx: Context) -> str:
+    """Alle Quellen (Quellen-Bibliothek) des Kurses in Zitations-Reihenfolge.
+
+    key = BibTeX-Schlüssel — Zitieren im Kurs-Markdown mit @cite:{key}
+    (Varianten @citet:/@citep: — Details: markdown_manual). description =
+    Inhalt/Kernpunkte der Quelle (wichtig für korrekte Zitation). Anlegen:
+    create_reference / import_bibtex; durchsuchen: search_references."""
+    with Session(engine) as session:
+        _user, _token, role = _auth(ctx, session, course_id, tool_name="list_references")
+        course = session.get(Course, course_id)
+        if not course:
+            raise McpToolError(f"Kurs {course_id} nicht gefunden (siehe list_courses).")
+        refs = session.exec(
+            select(CourseReference).where(CourseReference.course_id == course_id)
+        ).all()
+        refs.sort(key=lambda r: (r.display_order, r.id))
+        hint = None
+        if refs:
+            hint = "Zitieren im Kurs-Markdown mit @cite:{key}."
+            if _is_tutor(role):
+                hint += " Anlegen: create_reference / import_bibtex; ändern: edit_reference."
+        return _json({
+            "course": course.name,
+            "references": [_ref_dict(r) for r in refs],
+            "hint": hint,
+        })
+
+
+@mcp_tool
+async def create_reference(
+    course_id: int,
+    key: str,
+    title: str,
+    ctx: Context,
+    authors: Optional[Union[list, str]] = None,
+    entry_type: str = "misc",
+    year: Optional[str] = None,
+    venue: Optional[str] = None,
+    detail: Optional[str] = None,
+    address: Optional[str] = None,
+    doi: Optional[str] = None,
+    url: Optional[str] = None,
+    note: Optional[str] = None,
+    description: Optional[str] = None,
+) -> str:
+    """Legt eine neue Quelle in der Kurs-Quellen-Bibliothek an (Write).
+
+    key = BibTeX-Schlüssel (Pflicht; nur Buchstaben, Ziffern, '_' und '-',
+    z. B. 'smith2021deep'), einzig pro Kurs — danach mit @cite:{key} in
+    Skript/Folien/Aufgaben zitierbar. Mehrere Quellen auf einmal:
+    import_bibtex (rohes BibTeX). authors: Liste von Namen ODER String mit
+    ' and ' als Trenner (BibTeX-Konvention, z. B. 'Smith, J. and Doe, A.').
+    entry_type: article/book/inproceedings/… (Default 'misc').
+    venue: Zeitschrift / Konferenz / Verlag. detail: Band(Heft), Seiten,
+    Edition. description (empfohlen): 1–2 Sätze zum Inhalt der Quelle —
+    Skript/Aufgaben nutzen sie, um die Quelle korrekt zu zitieren.
+    Die neue Quelle erhält die nächste Zitations-Nummer."""
+    with Session(engine) as session:
+        user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="create_reference")
+        k = (key or "").strip()
+        if not _REF_KEY_RE.fullmatch(k):
+            raise McpToolError(
+                "Ungültiger Quellen-Key (erlaubt: Buchstaben, Ziffern, '_' und '-')."
+            )
+        if not (title or "").strip():
+            raise McpToolError("Der Titel darf nicht leer sein.")
+        clash = session.exec(
+            select(CourseReference)
+            .where(CourseReference.course_id == course_id)
+            .where(func.lower(CourseReference.key) == k.lower())
+        ).first()
+        if clash:
+            raise McpToolError(
+                f"Der Key '{k}' existiert bereits in diesem Kurs "
+                "(Liste: list_references — ändern: edit_reference)."
+            )
+        ref = CourseReference(
+            course_id=course_id,
+            created_by=user.id,  # type: ignore[arg-type]
+            display_order=_next_ref_order(session, course_id),
+        )
+        _set_ref_fields(ref, key=k, title=title, authors=authors, entry_type=entry_type,
+                        year=year, venue=venue, detail=detail, address=address,
+                        doi=doi, url=url, note=note, description=description)
+        session.add(ref)
+        session.commit()
+        session.refresh(ref)
+        return _json(_ref_dict(ref) | {
+            "note": (
+                f"Quelle angelegt (Zitations-Nummer {ref.display_order + 1}). "
+                f"Zitieren mit @cite:{ref.key}."
+            ),
+        })
+
+
+@mcp_tool
+async def edit_reference(
+    course_id: int,
+    ref: Union[int, str],
+    ctx: Context,
+    key: Optional[str] = None,
+    title: Optional[str] = None,
+    authors: Optional[Union[list, str]] = None,
+    entry_type: Optional[str] = None,
+    year: Optional[str] = None,
+    venue: Optional[str] = None,
+    detail: Optional[str] = None,
+    address: Optional[str] = None,
+    doi: Optional[str] = None,
+    url: Optional[str] = None,
+    note: Optional[str] = None,
+    description: Optional[str] = None,
+) -> str:
+    """Bearbeitet eine bestehende Quelle (Write). ref = Quellen-Key
+    (z. B. 'smith2021deep') oder ID (Liste: list_references).
+
+    Alle Parameter optional — nur angegebene Felder werden geändert
+    ('' = Feld leeren). ACHTUNG: key ist der Zitier-Schlüssel — ein
+    Schlüssel-Wechsel bricht @cite:{key}-Referenzen in Skript/Folien,
+    bis der Inhalt angepasst ist. description = Inhalt/Kernpunkte der
+    Quelle (wichtig, dass Skript/Aufgaben sie korrekt zitieren).
+
+    Vor dem Edit wird automatisch eine Version des alten Zustands angelegt
+    (Rückgängig: list_versions + restore_version)."""
+    with Session(engine) as session:
+        user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="edit_reference")
+        existing = _resolve_reference(session, course_id, ref)
+        params = dict(key=key, title=title, authors=authors, entry_type=entry_type,
+                      year=year, venue=venue, detail=detail, address=address,
+                      doi=doi, url=url, note=note, description=description)
+        if all(v is None for v in params.values()):
+            raise McpToolError(
+                "Nichts zu ändern: mindestens ein Feld angeben (key, title, authors, "
+                "entry_type, year, venue, detail, address, doi, url, note, description)."
+            )
+        if key is not None:
+            k = key.strip()
+            if not _REF_KEY_RE.fullmatch(k):
+                raise McpToolError(
+                    "Ungültiger Quellen-Key (erlaubt: Buchstaben, Ziffern, '_' und '-')."
+                )
+            if k.lower() != existing.key.lower():
+                clash = session.exec(
+                    select(CourseReference)
+                    .where(CourseReference.course_id == course_id)
+                    .where(func.lower(CourseReference.key) == k.lower())
+                ).first()
+                if clash and clash.id != existing.id:
+                    raise McpToolError(f"Der Key '{k}' existiert bereits in diesem Kurs.")
+        if title is not None and not title.strip():
+            raise McpToolError("Der Titel darf nicht leer sein.")
+        version_service.snapshot_current(session, user, "reference", int(existing.id), name="Vor MCP-Edit")
+        changed = [f for f, v in params.items() if v is not None]
+        _set_ref_fields(existing, **params)
+        session.add(existing)
+        session.commit()
+        session.refresh(existing)
+        return _json(_ref_dict(existing) | {
+            "changed": changed,
+            "note": (
+                "Vor dem Edit wurde automatisch eine Version des alten Zustands "
+                "angelegt (Rückgängig: list_versions + restore_version)."
+            ),
+        })
+
+
+@mcp_tool
+async def import_bibtex(course_id: int, bibtex: str, ctx: Context) -> str:
+    """Importiert mehrere Quellen auf einmal aus rohem BibTeX (Write).
+
+    bibtex = BibTeX-Text mit einem oder mehreren @-Entries (z. B.
+    '@article{smith2021deep, author = {Smith, J.}, title = {…}, …}').
+    Vorhandene Keys werden übersprungen (NICHT überschrieben). description
+    (Inhalt/Kernpunkte) bleibt leer — bei Bedarf danach per edit_reference
+    ergänzen. Einzelne Quelle: create_reference."""
+    with Session(engine) as session:
+        user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="import_bibtex")
+        entries = bib.parse_bibtex(bibtex or "")
+        if not entries:
+            raise McpToolError(
+                "Keine BibTeX-Entries erkannt (erwartet: @article{key, …} o. ä.)."
+            )
+        existing_keys = {
+            (r.key or "").lower()
+            for r in session.exec(
+                select(CourseReference).where(CourseReference.course_id == course_id)
+            ).all()
+        }
+        order = _next_ref_order(session, course_id)
+        imported, skipped, errors = [], [], []
+        for e in entries:
+            k = e["key"]
+            if not _REF_KEY_RE.fullmatch(k):
+                errors.append(
+                    f"'{k}': ungültiger Key (erlaubt: Buchstaben, Ziffern, '_' und '-')"
+                )
+                continue
+            if k.lower() in existing_keys:
+                skipped.append(k)
+                continue
+            ref = CourseReference(
+                course_id=course_id,
+                created_by=user.id,  # type: ignore[arg-type]
+                key=k,
+                display_order=order,
+                **bib.entry_to_reference(e),
+            )
+            session.add(ref)
+            existing_keys.add(k.lower())
+            imported.append(k)
+            order += 1
+        session.commit()
+        return _json({
+            "imported": imported,
+            "skipped": skipped,
+            "errors": errors,
+            "note": (
+                "Neue Quellen sind mit @cite:{key} zitierbar; description (Inhalt) "
+                "fehlt — bei Bedarf per edit_reference ergänzen."
+            ),
+        })
+
+
+@mcp_tool
 async def list_media(course_id: int, ctx: Context, kind: Optional[str] = None, limit: int = 50) -> str:
     """Alle Medien (Bilder + Applets) des Kurses — mit FERTIGER
     Markdown-Referenz zum Einbinden in Skript/Folien:
@@ -744,7 +1140,7 @@ async def _fetch_image_bytes(url_str: str) -> bytes:
     return b"".join(chunks)
 
 
-@server.tool()
+@mcp_tool
 async def read_image(course_id: int, ref: Union[int, str], ctx: Context) -> list[TextContent | Image]:
     """Zeigt ein Bild-Medium des Kurses (das BILD selbst + Metadaten).
 
@@ -882,12 +1278,15 @@ def _resolve_editable(session: Session, course_id: int, ref: Union[int, str], ty
         return m
     if type == "task":
         return _resolve(session, Task, course_id, ref, "Aufgabe")
+    if type == "reference":
+        return _resolve_reference(session, course_id, ref)
     raise McpToolError(
-        "type muss 'script_section', 'slide_deck', 'applet' oder 'task' sein."
+        "type muss 'script_section', 'slide_deck', 'applet', 'task' oder "
+        "'reference' sein."
     )
 
 
-@server.tool()
+@mcp_tool
 async def markdown_manual(ctx: Context, kind: str = "script") -> str:
     """AICampus-Formatierung für Kursinhalte — VOR dem Anlegen/Bearbeiten
     von Skript-, Folien-, Applet- oder Aufgaben-Inhalten aufrufen.
@@ -906,7 +1305,7 @@ async def markdown_manual(ctx: Context, kind: str = "script") -> str:
         return SCRIPT_MARKDOWN_MANUAL + "\n\nStellenweise Edits (\u201econtent_edits\u201c):\n" + SCRIPT_CONTENT_EDITS_SPEC
 
 
-@server.tool()
+@mcp_tool
 async def read_applet(course_id: int, ref: Union[int, str], ctx: Context) -> str:
     """Interaktives Applet (HTML-Quelle). ref = Applet-ID oder exakter Titel
     (Liste: course_overview → applets).
@@ -933,7 +1332,7 @@ async def read_applet(course_id: int, ref: Union[int, str], ctx: Context) -> str
         })
 
 
-@server.tool()
+@mcp_tool
 async def edit_content(
     course_id: int,
     type: str,
@@ -1066,7 +1465,7 @@ async def edit_content(
         })
 
 
-@server.tool()
+@mcp_tool
 async def edit_applet(
     course_id: int,
     ref: Union[int, str],
@@ -1151,7 +1550,7 @@ async def edit_applet(
         })
 
 
-@server.tool()
+@mcp_tool
 async def create_applet(
     course_id: int,
     title: str,
@@ -1196,7 +1595,7 @@ async def create_applet(
         })
 
 
-@server.tool()
+@mcp_tool
 async def create_image(
     course_id: int,
     title: str,
@@ -1259,7 +1658,7 @@ async def create_image(
         })
 
 
-@server.tool()
+@mcp_tool
 async def create_chapter(
     course_id: int,
     title: str,
@@ -1311,7 +1710,7 @@ async def create_chapter(
         })
 
 
-@server.tool()
+@mcp_tool
 async def create_slide_deck(
     course_id: int,
     title: str,
@@ -1395,7 +1794,7 @@ def _mc_data_from_questions(existing: Optional[str], questions: list[dict]) -> d
         raise McpToolError(f"Ungültige Multiple-Choice-Fragen: {e}")
 
 
-@server.tool()
+@mcp_tool
 async def create_task(
     course_id: int,
     type: str,
@@ -1509,7 +1908,7 @@ async def create_task(
         })
 
 
-@server.tool()
+@mcp_tool
 async def edit_task(
     course_id: int,
     ref: Union[int, str],
@@ -1630,18 +2029,19 @@ async def edit_task(
         })
 
 
-@server.tool()
+@mcp_tool
 async def list_versions(
     course_id: int,
     type: str,
     ref: Union[int, str],
     ctx: Context,
 ) -> str:
-    """Version-Historie eines Skript-Kapitels, Slide-Decks, Applets oder einer
-    Aufgabe.
+    """Version-Historie eines Skript-Kapitels, Slide-Decks, Applets, einer
+    Aufgabe oder Quelle.
 
-    type = "script_section" | "slide_deck" | "applet" | "task"; ref = ID oder
-    exakter Titel. MCP-Edits erzeugen automatisch einen Snapshot „Vor MCP-Edit“ —
+    type = "script_section" | "slide_deck" | "applet" | "task" | "reference"
+    (bei reference: ref = Quellen-Key oder ID; sonst: ID oder exakter Titel).
+    MCP-Edits erzeugen automatisch einen Snapshot „Vor MCP-Edit“ —
     diesen (oder einen älteren) Eintrag kann man mit restore_version
     zurücksetzen."""
     with Session(engine) as session:
@@ -1656,7 +2056,7 @@ async def list_versions(
         })
 
 
-@server.tool()
+@mcp_tool
 async def restore_version(
     course_id: int,
     type: str,
@@ -1664,10 +2064,11 @@ async def restore_version(
     version_id: int,
     ctx: Context,
 ) -> str:
-    """Setzt ein Skript-Kapitel, Slide-Deck, Applet oder eine Aufgabe auf eine
-    frühere Version zurück (version_id aus list_versions). Der alte Zustand wird
-    angewendet und als NEUE Version gespeichert — nichts geht verloren,
-    Rückrollen ist jederzeit wieder möglich."""
+    """Setzt ein Skript-Kapitel, Slide-Deck, Applet, eine Aufgabe oder Quelle
+    auf eine frühere Version zurück (version_id aus list_versions; ref/Type
+    wie bei list_versions). Der alte Zustand wird angewendet und als NEUE
+    Version gespeichert — nichts geht verloren, Rückrollen ist jederzeit
+    wieder möglich."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="restore_version")
         entity = _resolve_editable(session, course_id, ref, type)

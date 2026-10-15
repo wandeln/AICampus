@@ -71,6 +71,24 @@ async def recent(
     return analytics.recent_views(limit)
 
 
+@router.get("/mcp")
+async def mcp_usage(
+    days: int = Query(30, ge=1, le=365),
+    user: User = Depends(require_global_admin()),
+):
+    """MCP-Nutzung (ChatGPT & Co.): KPIs, Top-Tools, Top-Clients."""
+    return analytics.mcp_usage(days)
+
+
+@router.get("/mcp/recent")
+async def mcp_recent(
+    limit: int = Query(100, ge=10, le=500),
+    user: User = Depends(require_global_admin()),
+):
+    """Neueste MCP-Tool-Calls (Wer-Wann-Was)."""
+    return analytics.mcp_recent(limit)
+
+
 @router.get("/users/{user_id}/views")
 async def user_views(
     user_id: int,

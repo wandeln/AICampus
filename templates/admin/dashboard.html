@@ -213,6 +213,48 @@
           </div>
         </div>
 
+        <!-- MCP-Nutzung (ChatGPT & Co.) -->
+        <div class="card p-4 mb-4">
+          <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h3 class="font-semibold text-gray-800">MCP-Nutzung (ChatGPT &amp; Co.)</h3>
+            <span class="text-xs text-gray-400">Tool-Calls über die MCP-Anbindung</span>
+          </div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="mcp-kpi-calls" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Calls (Fenster)</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="mcp-kpi-users" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Aktive User</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="mcp-kpi-writes" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Write-Calls</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="mcp-kpi-errors" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Fehler</div>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div>
+              <h4 class="text-sm font-medium text-gray-600 mb-2">Top-Tools</h4>
+              <div id="mcp-top-tools"></div>
+            </div>
+            <div>
+              <h4 class="text-sm font-medium text-gray-600 mb-2">Top-Clients</h4>
+              <div id="mcp-top-clients"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Letzte MCP-Calls -->
+        <div class="card p-4 mb-4">
+          <h3 class="font-semibold text-gray-800 mb-3">Letzte MCP-Calls</h3>
+          <div id="mcp-recent-table" class="overflow-x-auto"></div>
+        </div>
+
         <!-- Letzte Aktivität -->
         <div class="card p-4">
           <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
@@ -1790,11 +1832,13 @@
   async function loadAnalytics() {
     const days = document.getElementById('analytics-days').value || '30';
     const courseId = document.getElementById('analytics-course').value;
-    const [ov, pages, courses, users] = await Promise.all([
+    const [ov, pages, courses, users, mcp, mcpRecent] = await Promise.all([
       fetch(`/api/admin/analytics/overview?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/top-pages?days=${days}${courseId ? `&course_id=${courseId}` : ''}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/top-courses?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/top-users?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
+      fetch(`/api/admin/analytics/mcp?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
+      fetch('/api/admin/analytics/mcp/recent?limit=50', { credentials: 'same-origin' }).then(r => r.json()),
     ]);
 
     // KPIs
@@ -1857,7 +1901,66 @@
         <td class="py-2 px-3 text-sm text-center" title="Anzahl verschiedener Seiten">${r.pages}</td>
       </tr>`);
 
+    // MCP-Nutzung
+    document.getElementById('mcp-kpi-calls').textContent = mcp.calls ?? 0;
+    document.getElementById('mcp-kpi-users').textContent = mcp.users ?? 0;
+    document.getElementById('mcp-kpi-writes').textContent = mcp.writes ?? 0;
+    document.getElementById('mcp-kpi-errors').textContent = mcp.errors ?? 0;
+    renderMcpTable('mcp-top-tools', mcp.tools, (r, total) =>
+      `<tr class="hover:bg-gray-50 border-t">
+        <td class="py-2 px-3 text-sm font-mono text-xs">${escHtml(r.tool_name)}</td>
+        <td class="py-2 px-3 text-sm text-center">${r.calls} <span class="text-gray-400 text-xs">(${total ? Math.round(r.calls / total * 100) : 0}%)</span></td>
+        <td class="py-2 px-3 text-sm text-center">${r.users}</td>
+        <td class="py-2 px-3 text-sm text-center">${r.writes}</td>
+      </tr>`, ['Tool', 'Aufrufe', 'User', 'Writes']);
+    renderMcpTable('mcp-top-clients', mcp.clients, (r, total) =>
+      `<tr class="hover:bg-gray-50 border-t">
+        <td class="py-2 px-3 text-sm font-medium">${escHtml(r.client)}</td>
+        <td class="py-2 px-3 text-sm text-center">${r.calls} <span class="text-gray-400 text-xs">(${total ? Math.round(r.calls / total * 100) : 0}%)</span></td>
+        <td class="py-2 px-3 text-sm text-center">${r.users}</td>
+      </tr>`, ['Client', 'Aufrufe', 'User']);
+    document.getElementById('mcp-recent-table').innerHTML = renderMcpRecentRows(mcpRecent);
+
     await loadAnalyticsRecent();
+  }
+
+  function renderMcpTable(elId, rows, rowFn, head) {
+    const el = document.getElementById(elId);
+    if (!rows || !rows.length) {
+      el.innerHTML = '<div class="text-center py-4 text-gray-400 text-xs">Keine MCP-Calls im gewählten Zeitraum.</div>';
+      return;
+    }
+    const total = rows.reduce((sum, r) => sum + r.calls, 0);
+    el.innerHTML = `<table class="w-full border-collapse">
+      <tr class="bg-gray-100">${head.map(h => `<th class="text-left py-2 px-3 text-sm font-semibold">${h}</th>`).join('')}</tr>
+      ${rows.map(r => rowFn(r, total)).join('')}
+    </table>`;
+  }
+
+  function renderMcpRecentRows(recent) {
+    if (!recent.length) {
+      return '<div class="text-center py-6 text-gray-400 text-sm">Noch keine MCP-Calls aufgezeichnet.</div>';
+    }
+    const rows = recent.map(v => {
+      const when = v.created_at
+        ? new Date(v.created_at.slice(0, 19).replace(' ', 'T')).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+        : '';
+      const who = (v.username !== undefined && v.username !== null)
+        ? `<span class="font-medium">${escHtml(v.name || v.username)}</span> <span class="text-gray-400 font-mono text-xs">${escHtml(v.username)}</span>`
+        : '<span class="text-gray-400">(gelöschter User)</span>';
+      const tool = `<span class="font-mono text-xs">${escHtml(v.tool_name)}</span>`
+        + (v.is_write ? ' <span class="text-xs text-blue-600">write</span>' : '')
+        + (v.ok ? '' : ' <span class="text-xs text-red-500 font-semibold">Fehler</span>');
+      return `<tr class="hover:bg-gray-50 border-t">
+        <td class="py-2 px-3 text-sm whitespace-nowrap">${when}</td>
+        <td class="py-2 px-3 text-sm">${who}</td>
+        <td class="py-2 px-3 text-sm text-gray-500">${v.client ? escHtml(v.client) : '—'}</td>
+        <td class="py-2 px-3 text-sm whitespace-nowrap">${tool}</td>
+        <td class="py-2 px-3 text-sm text-gray-500">${v.course_name ? escHtml(v.course_name) : '—'}</td>
+      </tr>`;
+    }).join('');
+    const header = '<tr class="bg-gray-100"><th class="text-left py-2 px-3 text-sm font-semibold">Zeit</th><th class="text-left py-2 px-3 text-sm font-semibold">User</th><th class="text-left py-2 px-3 text-sm font-semibold">Client</th><th class="text-left py-2 px-3 text-sm font-semibold">Tool</th><th class="text-left py-2 px-3 text-sm font-semibold">Kurs</th></tr>';
+    return `<table class="w-full border-collapse">${header}${rows}</table>`;
   }
 
   async function loadAnalyticsRecent() {

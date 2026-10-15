@@ -152,6 +152,10 @@ async def update_token(
         course_ids = _validate_courses(session, user, data.course_ids)
         for tc in list(token.courses):
             session.delete(tc)
+        # Collection bereinigen: die deleteden Instanzen durften nicht darin
+        # verbleiben, sonst crash der save-update-Cascade beim session.add(token)
+        # (InvalidRequestError) — s. PUT /api/mcp-tokens/{id} 500er.
+        token.courses.clear()
         session.flush()
         for cid in course_ids:
             session.add(McpTokenCourse(token_id=token.id, course_id=cid))  # type: ignore[arg-type]

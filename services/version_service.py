@@ -4,7 +4,7 @@ Content Versions: generische Versions-History für bearbeitbare Elemente.
 Ein `ContentVersion` ist ein Snapshot ({title, content, summary, …}) eines
 Elements. Über (entity_type, entity_id) ist die History elementtyp-agnostisch —
 so können Skript-Kapitel, Slide-Decks, Applets und Aufgaben dieselbe
-Logik + dieselben API-Endpoints wiederverwenden.
+Logik + dieselben API-Endpoints wiederverwenden (Quellen: nur MCP-Edits).
 
 Wiederverwendung über "Adapter": Jeder Elementtyp registriert drei Funktionen
 (load / course_id_of / apply). `apply` setzt den Snapshot auf das Element
@@ -38,6 +38,7 @@ from database.models import (
     ContentVersion,
     CourseMaterial,
     CourseMedia,
+    CourseReference,
     CourseRole,
     GlobalUserRole,
     MaterialType,
@@ -238,6 +239,31 @@ def _task_apply(session: Session, entity: Task, snapshot: dict) -> None:
             schedule_task_sync(entity.id)
 
 
+def _reference_load(session: Session, entity_id: int):
+    return session.get(CourseReference, entity_id)
+
+
+def _reference_apply(session: Session, entity: CourseReference, snapshot: dict) -> None:
+    title = (snapshot.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "Titel darf nicht leer sein.")
+    entity.key = snapshot.get("key") or entity.key
+    entity.entry_type = snapshot.get("entry_type") or "misc"
+    entity.authors = snapshot.get("authors") or []
+    entity.title = title
+    entity.year = snapshot.get("year") or ""
+    entity.venue = snapshot.get("venue") or ""
+    entity.detail = snapshot.get("detail") or ""
+    entity.address = snapshot.get("address") or ""
+    entity.doi = snapshot.get("doi") or ""
+    entity.url = snapshot.get("url") or ""
+    entity.note = snapshot.get("note") or ""
+    entity.description = snapshot.get("description") or ""
+    session.add(entity)
+    session.commit()
+    session.refresh(entity)
+
+
 ADAPTERS: dict[str, _Adapter] = {
     "script_section": _Adapter(
         type="script_section",
@@ -262,6 +288,12 @@ ADAPTERS: dict[str, _Adapter] = {
         load=_task_load,
         course_id_of=lambda e: e.course_id,
         apply=_task_apply,
+    ),
+    "reference": _Adapter(
+        type="reference",
+        load=_reference_load,
+        course_id_of=lambda e: e.course_id,
+        apply=_reference_apply,
     ),
 }
 
@@ -323,6 +355,21 @@ def _current_snapshot(entity_type: str, entity) -> dict:
             "title": entity.title,
             "html": path.read_text(encoding="utf-8"),
             "llm_description": entity.llm_description or "",
+        }
+    if entity_type == "reference":
+        return {
+            "key": entity.key,
+            "entry_type": entity.entry_type or "misc",
+            "authors": entity.authors or [],
+            "title": entity.title or "",
+            "year": entity.year or "",
+            "venue": entity.venue or "",
+            "detail": entity.detail or "",
+            "address": entity.address or "",
+            "doi": entity.doi or "",
+            "url": entity.url or "",
+            "note": entity.note or "",
+            "description": entity.description or "",
         }
     if entity_type == "task":
         return {

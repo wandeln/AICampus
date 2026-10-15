@@ -71,6 +71,12 @@ def store_client(
     return row
 
 
+def client_name(session: Session, client_id: str) -> str:
+    """Anzeigename eines registrierten Clients (Fallback: client_id)."""
+    row = get_client_row(session, client_id)
+    return (row.client_name or client_id) if row else client_id
+
+
 def get_client_row(session: Session, client_id: str) -> Optional[McpOAuthClient]:
     return session.exec(
         select(McpOAuthClient).where(McpOAuthClient.client_id == client_id)

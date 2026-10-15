@@ -1411,3 +1411,25 @@ class McpOAuthGrantCourse(SQLModel, table=True):
     user_id: int = Field(foreign_key="users.id", index=True)
     client_id: str = Field(max_length=100, index=True)
     course_id: int = Field(foreign_key="courses.id", index=True)
+
+
+class McpEvent(SQLModel, table=True):
+    """MCP-Nutzungs-Tracking (Analytics-Dashboard): welcher User hat über
+    welchen Client welches Tool in welchem Kurs mit welchem Ergebnis aufgerufen.
+
+    Wird bei jedem Tool-Call von api/mcp_server.py geschrieben und
+    ausschließlich von api/analytics.py gelesen. Wie bei PageView Privacy:
+    nur User, Client-Name, Kurs, Tool, Read/Write und Ergebnis — kein
+    Inhalt, keine IPs.
+    """
+
+    __tablename__ = "mcp_events"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    course_id: Optional[int] = Field(default=None, foreign_key="courses.id", index=True)
+    tool_name: str = Field(max_length=100, index=True)
+    client: Optional[str] = Field(default=None, max_length=100)  # PAT-Token-Name oder OAuth-Client-Name
+    is_write: bool = Field(default=False)
+    ok: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=datetime.now, index=True)

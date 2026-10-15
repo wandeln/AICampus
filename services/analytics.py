@@ -20,6 +20,10 @@ Nur bekannte HTML-Seiten (Allowlist in _PAGE_RULES) werden gezählt —
 API-Endpunkte, Dateien, HTMX-Partials, Redirects und Gäste-Zugriffe bleiben
 außen vor. Neue Seiten müssen in _PAGE_RULES ergänzt werden, um gezählt
 zu werden.
+
+MCP-Tracking (Tabelle mcp_events): api/mcp_server.py ruft bei jedem
+Tool-Call record_mcp_event() auf (User, Client, Kurs, Tool, Read/Write,
+Ergebnis) — ebenfalls nur für das Admin-Dashboard lesbar.
 """
 
 import logging
@@ -31,7 +35,7 @@ from typing import Any, Optional
 from sqlmodel import Session, text
 
 from database.base import engine
-from database.models import PageView
+from database.models import McpEvent, PageView
 from services.auth_service import decode_access_token
 
 logger = logging.getLogger(__name__)
@@ -171,9 +175,13 @@ def prune_old(days: Optional[int] = RETENTION_DAYS) -> None:
                 text("DELETE FROM page_views WHERE created_at < :cutoff"),
                 {"cutoff": cutoff},
             )
-            deleted = result.rowcount or 0
+            mcp = conn.execute(
+                text("DELETE FROM mcp_events WHERE created_at < :cutoff"),
+                {"cutoff": cutoff},
+            )
+            deleted = (result.rowcount or 0) + (mcp.rowcount or 0)
         if deleted:
-            logger.info(f"Analytics: {deleted} Page-Views älter als {days} Tage gelöscht.")
+            logger.info(f"Analytics: {deleted} Tracking-Einträge älter als {days} Tage gelöscht.")
     except Exception:
         logger.exception("Analytics: Bereinigung alter Einträge fehlgeschlagen")
 
@@ -295,6 +303,113 @@ def top_users(days: int, limit: int = 15) -> list[dict[str, Any]]:
         }
         for r in rows
     ]
+
+
+def record_mcp_event(
+    user_id: int,
+    course_id: Optional[int],
+    tool_name: str,
+    client: Optional[str],
+    is_write: bool,
+    ok: bool,
+) -> None:
+    """MCP-Tool-Call (wird von api/mcp_server.py aufgerufen).
+
+    Geht nie in die Knie: Tracking-Fehler dürfen den Tool-Call nicht stören.
+    """
+    try:
+        with Session(engine) as session:
+            session.add(McpEvent(
+                user_id=user_id,
+                course_id=course_id,
+                tool_name=tool_name,
+                client=client,
+                is_write=is_write,
+                ok=ok,
+                created_at=datetime.now(),
+            ))
+            session.commit()
+    except Exception:
+        logger.exception("Analytics: MCP-Event konnte nicht gespeichert werden")
+
+
+def mcp_usage(days: int) -> dict[str, Any]:
+    """MCP-Nutzung im Fenster: KPIs + Top-Tools + Top-Clients."""
+    since = _since(days)
+    with Session(engine) as session:
+        row = session.execute(
+            text(
+                "SELECT COUNT(*), COUNT(DISTINCT user_id), "
+                "COALESCE(SUM(CASE WHEN is_write THEN 1 ELSE 0 END), 0), "
+                "COALESCE(SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0) "
+                "FROM mcp_events WHERE created_at >= :since"
+            ),
+            {"since": since},
+        ).first()
+        tools = session.execute(
+            text(
+                "SELECT tool_name, COUNT(*) AS calls, COUNT(DISTINCT user_id) AS users, "
+                "COALESCE(SUM(CASE WHEN is_write THEN 1 ELSE 0 END), 0) AS writes, "
+                "COALESCE(SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0) AS errors "
+                "FROM mcp_events WHERE created_at >= :since "
+                "GROUP BY tool_name ORDER BY calls DESC LIMIT 20"
+            ),
+            {"since": since},
+        ).all()
+        clients = session.execute(
+            text(
+                "SELECT COALESCE(client, '(unbekannt)') AS client, COUNT(*) AS calls, "
+                "COUNT(DISTINCT user_id) AS users "
+                "FROM mcp_events WHERE created_at >= :since "
+                "GROUP BY client ORDER BY calls DESC LIMIT 10"
+            ),
+            {"since": since},
+        ).all()
+    return {
+        "calls": (row[0] if row else 0) or 0,
+        "users": (row[1] if row else 0) or 0,
+        "writes": int(row[2] or 0) if row else 0,
+        "errors": int(row[3] or 0) if row else 0,
+        "tools": [
+            {
+                "tool_name": r[0], "calls": r[1], "users": r[2],
+                "writes": int(r[3] or 0), "errors": int(r[4] or 0),
+            }
+            for r in tools
+        ],
+        "clients": [
+            {"client": r[0], "calls": r[1], "users": r[2]} for r in clients
+        ],
+    }
+
+
+def mcp_recent(limit: int = 100) -> list[dict[str, Any]]:
+    """Neueste MCP-Tool-Calls (Wer-Wann-Was), inkl. User-/Kursname."""
+    sql = (
+        "SELECT me.created_at, u.username, u.name, me.client, me.tool_name, "
+        "me.is_write, me.ok, c.name AS course_name "
+        "FROM mcp_events me "
+        "LEFT JOIN users u ON u.id = me.user_id "
+        "LEFT JOIN courses c ON c.id = me.course_id "
+        "ORDER BY me.created_at DESC LIMIT :limit"
+    )
+    with Session(engine) as session:
+        rows = session.execute(text(sql), {"limit": limit}).all()
+    out = []
+    for r in rows:
+        ts = r[0]
+        # Rohe SQL-Query: created_at kommt je DB als datetime ODER String zurück.
+        out.append({
+            "created_at": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+            "username": r[1],
+            "name": r[2],
+            "client": r[3],
+            "tool_name": r[4],
+            "is_write": bool(r[5]),
+            "ok": bool(r[6]),
+            "course_name": r[7],
+        })
+    return out
 
 
 def recent_views(limit: int = 100, user_id: Optional[int] = None) -> list[dict[str, Any]]:
