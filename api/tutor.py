@@ -44,6 +44,7 @@ from database.models import (
 )
 from services.auth_service import get_current_user, require_course_access
 from services import file_edits
+from services import version_service
 from services.export_service import ExportService
 from services.grading_service import GradingService
 from services.llm_service import LLMService
@@ -270,12 +271,14 @@ async def create_task(
             logger.warning("System-Stubs (task %s): %s", task.id, e)
         _schedule_workspace_sync(task.id)
 
+    v = version_service.mark_created(session, user, "task", task.id)
     return {
         "message": f"Aufgabe '{task.title}' erstellt.",
         "task": {
             "id": task.id,
             "title": task.title,
             "task_type": task.task_type.value,
+            **({"version_id": v["id"]} if v else {}),
         },
     }
 
@@ -635,7 +638,8 @@ async def duplicate_task(
 
     session.commit()
     session.refresh(new_task)
-    sync_media_usages(session, task.course_id)
+    sync_media_usages(task.course_id)
+    version_service.mark_created(session, user, "task", new_task.id)
 
     if task.task_type.value == "workspace":
         _schedule_workspace_sync(new_task.id)
@@ -1505,6 +1509,7 @@ async def ai_generate_task(
             session.refresh(task)
             sync_media_usages(session, course_id)
             task_created = True
+            version_service.mark_created(session, user_and_course[0], "task", task.id)
 
         if task is None:
             # Nur Textfelder angefordert, keine bestehende Aufgabe → nichts

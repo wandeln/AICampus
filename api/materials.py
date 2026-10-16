@@ -29,6 +29,7 @@ from database.models import (
     UserCourse,
 )
 from services.auth_service import get_current_user, require_course_access
+from services import version_service
 from services.media_service import sync_media_usages
 from services.slides_service import SlideError, parse_slides, slide_count, strip_slide_notes
 
@@ -193,6 +194,8 @@ async def create_material(
     session.commit()
     session.refresh(material)
     sync_media_usages(session, course_id)
+    if mtype == MaterialType.SLIDES:
+        version_service.mark_created(session, user, "slide_deck", material.id)
 
     return {"message": f"{LABELS[mtype]} '{material.title}' erstellt.", "material": _material_to_dict(material)}
 

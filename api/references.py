@@ -16,6 +16,7 @@ from sqlmodel import Session, select
 from database.base import get_session
 from database.models import CourseReference, CourseRole, User
 from services import bibtex as bib
+from services import version_service
 from services.auth_service import require_course_access
 
 router = APIRouter(prefix="/api", tags=["Quellen"])
@@ -152,6 +153,7 @@ async def create_reference(
     session.add(ref)
     session.commit()
     session.refresh(ref)
+    version_service.mark_created(session, user, "reference", ref.id)
     return _ref_to_dict(ref)
 
 
@@ -243,6 +245,7 @@ async def import_bibtex(
     imported = 0
     skipped = 0
     errors: list[str] = []
+    created_refs: list[CourseReference] = []
     order = _next_order(session, course_id)
     for e in entries:
         key = e["key"]
@@ -265,9 +268,12 @@ async def import_bibtex(
             display_order=order, **data,
         )
         session.add(ref)
+        created_refs.append(ref)
         order += 1
         imported += 1
     session.commit()
+    for r in created_refs:
+        version_service.mark_created(session, user, "reference", r.id)
     return {
         "imported": imported,
         "skipped": skipped,

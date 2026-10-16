@@ -34,6 +34,7 @@ from database.models import (
 from services import bibtex as bib
 from services import content_edits
 from services import fig_labels
+from services import version_service
 from services.auth_service import get_current_user, require_course_access
 from services.content_edits import ContentEditError, mask_code_blocks
 from services.llm_service import LLMService
@@ -792,10 +793,11 @@ async def create_section(
     session.commit()
     session.refresh(section)
     sync_media_usages(session, course_id)
+    v = version_service.mark_created(session, user, "script_section", section.id)
 
     return {
         "message": f"Kapitel '{section.title}' erstellt.",
-        "section": _section_to_dict(section),
+        "section": _section_to_dict(section) | ({"version_id": v["id"]} if v else {}),
     }
 
 

@@ -27,12 +27,14 @@ from database.models import (
     GlobalSettingsUpdate,
     GlobalSettingsRead,
     GlobalUserRole,
+    MaterialType,
     ScriptSection,
     Task,
     User,
     UserCourse,
 )
 from services import course_service, user_service
+from services import version_service
 from services.auth_service import hash_password, require_global_admin
 from services.llm_service import get_llm_debug_entry, get_llm_debug_log
 from services.llm_service import record_llm_debug_entry
@@ -153,6 +155,7 @@ async def duplicate_course(
 
     # 3. Alle Tasks kopieren (ohne Submissions/Feedback)
     source_tasks = session.exec(select(Task).where(Task.course_id == course_id)).all()
+    new_tasks: list[Task] = []
     for src_task in source_tasks:
         new_task = Task(
             course_id=new_course.id,  # type: ignore[arg-type]
@@ -168,7 +171,10 @@ async def duplicate_course(
             created_by=user.id,  # type: ignore[arg-type]
         )
         session.add(new_task)
+        new_tasks.append(new_task)
     session.commit()
+    for t in new_tasks:
+        version_service.mark_created(session, user, "task", t.id)
 
     # 4. CourseSettings kopieren
     source_settings = session.exec(
@@ -194,59 +200,67 @@ async def duplicate_course(
     source_sections = session.exec(
         select(ScriptSection).where(ScriptSection.course_id == course_id)
     ).all()
+    new_sections: list[ScriptSection] = []
     for src_section in source_sections:
-        session.add(
-            ScriptSection(
-                course_id=new_course.id,  # type: ignore[arg-type]
-                title=src_section.title,
-                content=src_section.content,
-                is_visible=src_section.is_visible,
-                display_order=src_section.display_order,
-                summary=src_section.summary,
-                created_by=user.id,  # type: ignore[arg-type]
-            )
+        s = ScriptSection(
+            course_id=new_course.id,  # type: ignore[arg-type]
+            title=src_section.title,
+            content=src_section.content,
+            is_visible=src_section.is_visible,
+            display_order=src_section.display_order,
+            summary=src_section.summary,
+            created_by=user.id,  # type: ignore[arg-type]
         )
+        session.add(s)
+        new_sections.append(s)
     session.commit()
+    for s in new_sections:
+        version_service.mark_created(session, user, "script_section", s.id)
 
     # 6. Materialien (Slide-Decks) kopieren
     source_materials = session.exec(
         select(CourseMaterial).where(CourseMaterial.course_id == course_id)
     ).all()
+    new_materials: list[CourseMaterial] = []
     for src_material in source_materials:
-        session.add(
-            CourseMaterial(
-                course_id=new_course.id,  # type: ignore[arg-type]
-                title=src_material.title,
-                material_type=src_material.material_type,
-                content=src_material.content,
-                is_visible=src_material.is_visible,
-                display_order=src_material.display_order,
-                summary=src_material.summary,
-                created_by=user.id,  # type: ignore[arg-type]
-            )
+        m = CourseMaterial(
+            course_id=new_course.id,  # type: ignore[arg-type]
+            title=src_material.title,
+            material_type=src_material.material_type,
+            content=src_material.content,
+            is_visible=src_material.is_visible,
+            display_order=src_material.display_order,
+            summary=src_material.summary,
+            created_by=user.id,  # type: ignore[arg-type]
         )
+        session.add(m)
+        new_materials.append(m)
     session.commit()
+    for m in new_materials:
+        if m.material_type == MaterialType.SLIDES:
+            version_service.mark_created(session, user, "slide_deck", m.id)
 
     # 7. Quellen-Referenzen (für @cite:{key} im Inhalt) + Slides-Theme kopieren
     source_references = session.exec(
         select(CourseReference).where(CourseReference.course_id == course_id)
     ).all()
+    new_refs: list[CourseReference] = []
     for src_ref in source_references:
-        session.add(
-            CourseReference(
-                course_id=new_course.id,  # type: ignore[arg-type]
-                key=src_ref.key,
-                entry_type=src_ref.entry_type,
-                authors=src_ref.authors,
-                title=src_ref.title,
-                year=src_ref.year,
-                venue=src_ref.venue,
-                detail=src_ref.detail,
-                address=src_ref.address,
-                doi=src_ref.doi,
-                created_by=user.id,  # type: ignore[arg-type]
-            )
+        r = CourseReference(
+            course_id=new_course.id,  # type: ignore[arg-type]
+            key=src_ref.key,
+            entry_type=src_ref.entry_type,
+            authors=src_ref.authors,
+            title=src_ref.title,
+            year=src_ref.year,
+            venue=src_ref.venue,
+            detail=src_ref.detail,
+            address=src_ref.address,
+            doi=src_ref.doi,
+            created_by=user.id,  # type: ignore[arg-type]
         )
+        session.add(r)
+        new_refs.append(r)
     source_theme = session.exec(
         select(CourseSlidesTheme).where(CourseSlidesTheme.course_id == course_id)
     ).first()
@@ -258,6 +272,8 @@ async def duplicate_course(
             )
         )
     session.commit()
+    for r in new_refs:
+        version_service.mark_created(session, user, "reference", r.id)
 
     return {
         "message": f"Kurs '{data.name}' aus '{source_course.name}' dupliziert.",

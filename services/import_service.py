@@ -82,9 +82,10 @@ from database.models import (
     ScriptSection,
     Task,
     TaskType,
+    User,
 )
 from services import bibtex as bib
-from services import media_service
+from services import media_service, version_service
 from services.llm_service import LLMService, SLIDES_MAX_TOKENS
 from services.mc_service import McValidationError, mc_total_points, validate_mc_data
 from services.references_service import build_references_text
@@ -3144,6 +3145,7 @@ async def _convert_media_to_applet(
         s.add(media)
         s.commit()
         s.refresh(media)
+        _mark_import_created(s, created_by, "applet", media.id)
     return {
         "media_ids": [media.id], "urls": [media_service.media_url(media)],
         "url": media_service.media_url(media),
@@ -4834,6 +4836,14 @@ async def _generate_chapter(
     return content, sec_label, warns
 
 
+def _mark_import_created(s: Session, created_by: int, entity_type: str, entity_id: int) -> None:
+    """Initial-Version „Erstellt“ für beim Import neu angelegte Elemente
+    (Fehler werden von mark_created geschluckt, blockieren den Import nie)."""
+    user = s.get(User, created_by)
+    if user:
+        version_service.mark_created(s, user, entity_type, entity_id)
+
+
 def _save_section(
     course_id: int, created_by: int, title: str, content: str, order: int,
     section_id: Optional[int], summary: str = "",
@@ -4842,6 +4852,7 @@ def _save_section(
         sec: Optional[ScriptSection] = None
         if section_id:
             sec = s.get(ScriptSection, section_id)
+        created = sec is None
         if sec:
             sec.title = title[:300]
             sec.content = content
@@ -4858,6 +4869,8 @@ def _save_section(
         s.commit()
         s.refresh(sec)
         assert sec.id is not None
+        if created:
+            _mark_import_created(s, created_by, "script_section", sec.id)
         return sec.id
 
 
@@ -5511,6 +5524,7 @@ async def run_slides_job(course_id: int, import_id: int) -> None:
                 )
                 with Session(engine) as s:
                     mat = s.get(CourseMaterial, dk["material_id"]) if dk.get("material_id") else None
+                    created = mat is None
                     if mat:
                         # Retry eines bereits generierten Decks → Inhalt aktualisieren
                         mat.title = dk["title"][:300]
@@ -5527,6 +5541,8 @@ async def run_slides_job(course_id: int, import_id: int) -> None:
                     s.commit()
                     s.refresh(mat)
                     mat_id = mat.id
+                    if created:
+                        _mark_import_created(s, snap["created_by"], "slide_deck", mat.id)
                 # Interne Zusammenfassung für Cross-Deck-Kontexte (best effort):
                 # dient anderen Decks/Kapiteln als Kontext (Konsistenz, Querverweise)
                 async with llm_sem:
@@ -5639,6 +5655,7 @@ def _save_task(
     aktualisiert die bestehende Zeile in-place (Submissions/Hints bleiben gültig)."""
     with Session(engine) as s:
         t: Optional[Task] = s.get(Task, task_id) if task_id else None
+        created = t is None or t.course_id != course_id
         if t and t.course_id == course_id:
             t.title = title[:300]
             t.task_type = TaskType(task_type)
@@ -5660,6 +5677,8 @@ def _save_task(
         s.commit()
         s.refresh(t)
         assert t.id is not None
+        if created:
+            _mark_import_created(s, created_by, "task", t.id)
         return t.id
 
 

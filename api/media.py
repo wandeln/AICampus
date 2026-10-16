@@ -26,6 +26,7 @@ from services.auth_service import require_course_access
 from services.llm_service import LLMService
 from services.settings_resolver import get_effective_llm_config
 from services import media_service
+from services import version_service
 from services.media_service import RefInfo
 from services.content_edits import ContentEditError, _resolve_span
 
@@ -494,6 +495,7 @@ async def create_applet_media(
     session.add(media)
     session.commit()
     session.refresh(media)
+    version_service.mark_created(session, user, "applet", media.id)
 
     counts = media_service.reference_counts(session, course_id)
     return {"message": f"Applet '{media.title}' erstellt.", "media": _media_to_dict(media, [], counts)}
@@ -698,6 +700,7 @@ async def duplicate_applet_media(
     session.add(new_media)
     session.commit()
     session.refresh(new_media)
+    version_service.mark_created(session, user, "applet", new_media.id)
 
     counts = media_service.reference_counts(session, course_id)
     return {"message": f"Applet '{new_media.title}' dupliziert.", "media": _media_to_dict(new_media, [], counts)}

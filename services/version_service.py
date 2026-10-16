@@ -15,6 +15,8 @@ speichert das Element UND legt/aktualisiert die aktuelle Version.
 Semantik:
 - create_version  → Element wird mit dem Snapshot gespeichert + neue Version
 - update_version  → Element wird mit dem Snapshot gespeichert + Version geupdatet
+- snapshot_current → Version des AKTUELLEN Zustands ohne Element-Änderung:
+  „Erstellt“ bei Element-Anlage (mark_created), „MCP Edit“ nach MCP-Edits
 - restore_version → Snapshot eines alten Eintrags wird auf das Element
   angewendet (gespeichert) und als neue (aktuelle) Version hinterlegt,
   sodass immer die neueste Version = aktueller Zustand ist.
@@ -398,22 +400,59 @@ def _current_snapshot(entity_type: str, entity) -> dict:
     raise HTTPException(400, "Zustands-Snapshots sind für diesen Elementtyp nicht unterstützt.")
 
 
-def snapshot_current(session: Session, user: User, entity_type: str, entity_id: int, name: str = "") -> dict:
+def snapshot_current(
+    session: Session,
+    user: User,
+    entity_type: str,
+    entity_id: int,
+    name: str = "",
+    skip_if_same_as_latest: bool = False,
+) -> Optional[dict]:
     """Version aus dem AKTUELLEN Element-Zustand anlegen (Element bleibt
-    unverändert) — Backup vor externen Änderungen (MCP-Edits).
-    Rollback: restore_version()."""
+    unverändert) — z. B. „MCP Edit“ nach einem MCP-Edit oder „Erstellt“
+    bei der Element-Anlage. Rollback: restore_version().
+
+    `skip_if_same_as_latest`: Wenn der Zustand exakt der letzten Version
+    entspricht (z. B. MCP-Edit ohne tatsächliche Änderung), wird keine
+    Version angelegt → None."""
     _adapter, entity = _load_entity_checked(session, user, entity_type, entity_id)
+    snapshot = _current_snapshot(entity_type, entity)
+    if skip_if_same_as_latest:
+        latest = session.exec(
+            select(ContentVersion)
+            .where(ContentVersion.entity_type == entity_type)
+            .where(ContentVersion.entity_id == entity_id)
+            .order_by(ContentVersion.updated_at.desc(), ContentVersion.id.desc())  # type: ignore[attr-defined]
+        ).first()
+        if latest is not None and latest.snapshot == snapshot:
+            logger.info(
+                "snapshot_current: %s %s — keine neue Version (identisch mit v%s).",
+                entity_type, entity_id, latest.id,
+            )
+            return None
     v = ContentVersion(
         entity_type=entity_type,
         entity_id=entity_id,
-        snapshot=_current_snapshot(entity_type, entity),
+        snapshot=snapshot,
         name=(name or "").strip()[:200],
         created_by=user.id,
     )
     session.add(v)
     session.commit()
     session.refresh(v)
+    _capture_task_files(session, v)
     return _version_to_dict(v)
+
+
+def mark_created(session: Session, user: User, entity_type: str, entity_id: int) -> Optional[dict]:
+    """Initial-Version „Erstellt“ für neu angelegte Elemente (Web-UI, LLM,
+    MCP, Duplikate). Fehler dürfen die Element-Anlage nicht blockieren."""
+    try:
+        return snapshot_current(session, user, entity_type, entity_id, name="Erstellt")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Initial-Version 'Erstellt' fehlgeschlagen (%s %s): %s",
+                       entity_type, entity_id, e)
+        return None
 
 
 def _capture_task_files(session: Session, v: ContentVersion) -> None:

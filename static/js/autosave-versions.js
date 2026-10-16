@@ -188,6 +188,9 @@
           if (!createEntity) throw new Error('Kein createEntity definiert (neues Element).');
           const saved = await createEntity(payload);
           id = saved && saved.id != null ? saved.id : saved;
+          // Initial-Version „Erstellt“ entsteht serverseitig bei der
+          // Element-Anlage → übernehmen statt hier eine zweite anzulegen.
+          if (saved && saved.version_id != null) versionId = saved.version_id;
           created = true;
         }
         if (versionId == null) {

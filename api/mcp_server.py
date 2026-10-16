@@ -16,9 +16,10 @@ Datenschutz (bewusste Tool-Whitelist, keine generischen Read-Tools):
   edit_content / edit_applet / create_applet / edit_task / Versions-Tools):
   nur Tutor/Prof +
   Write-Schalter des Tokens (PAT: allow_write, OAuth: Consent-Entscheidung
-  bzw. Grant-Update in den Settings — gilt auch für Admins); vor jedem
-  Edit wird automatisch eine Version des alten Zustands angelegt
-  (version_service.snapshot_current)
+  bzw. Grant-Update in den Settings — gilt auch für Admins). Versionierung:
+  neues Element → Initial-Version „Erstellt“; jedes MCP-Edit → Version
+  „MCP Edit“ (neuer Zustand) — der Zustand vorher bleibt in der Version
+  davor erhalten (Rückgängig: list_versions + restore_version)
 - Nie erreichbar: Einreichungen, Feedback, Punkte, Mitglieder, Forum,
   Hint-Dialoge, interne LLM-Summaries, Settings
 """
@@ -33,6 +34,7 @@ import re
 import socket
 from datetime import datetime, timezone
 from typing import Optional, Union
+from urllib.parse import unquote
 
 import httpx
 from fastapi import HTTPException
@@ -85,6 +87,22 @@ from services.media_service import sync_media_usages
 from services.slides_service import SlideError, apply_slide_edits, parse_slides
 
 logger = logging.getLogger(__name__)
+
+_MCP_EDIT_VERSION_NOTE = (
+    "Automatisch angelegt: Version \u201eMCP Edit\u201c (neuer Zustand). Zustand vorher = "
+    "die Version davor (R\u00fcckg\u00e4ngig: list_versions + restore_version)."
+)
+_MCP_NOOP_VERSION_NOTE = "Keine neue Version angelegt: Inhalt blieb unverändert."
+
+
+# ─── Versionierung ───────────────────────────────────────────────
+def _mcp_version_note(session: Session, user: User, entity_type: str, entity_id: int) -> str:
+    """„MCP Edit“-Version aus dem aktuellen Zustand anlegen — aber nur,
+    wenn sich wirklich etwas geändert hat (sonst: Hinweis ohne Version)."""
+    v = version_service.snapshot_current(
+        session, user, entity_type, entity_id, name="MCP Edit", skip_if_same_as_latest=True)
+    return _MCP_EDIT_VERSION_NOTE if v else _MCP_NOOP_VERSION_NOTE
+
 
 ROLE_LABELS = {
     CourseRole.PROF: "Professor",
@@ -879,6 +897,7 @@ async def create_reference(
         session.add(ref)
         session.commit()
         session.refresh(ref)
+        version_service.mark_created(session, user, "reference", int(ref.id))
         return _json(_ref_dict(ref) | {
             "note": (
                 f"Quelle angelegt (Zitations-Nummer {ref.display_order + 1}). "
@@ -914,7 +933,8 @@ async def edit_reference(
     bis der Inhalt angepasst ist. description = Inhalt/Kernpunkte der
     Quelle (wichtig, dass Skript/Aufgaben sie korrekt zitieren).
 
-    Vor dem Edit wird automatisch eine Version des alten Zustands angelegt
+    Nach dem Edit wird automatisch die Version „MCP Edit“ (neuer Zustand)
+    angelegt — der Zustand vorher ist die Version davor
     (Rückgängig: list_versions + restore_version)."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="edit_reference")
@@ -943,18 +963,15 @@ async def edit_reference(
                     raise McpToolError(f"Der Key '{k}' existiert bereits in diesem Kurs.")
         if title is not None and not title.strip():
             raise McpToolError("Der Titel darf nicht leer sein.")
-        version_service.snapshot_current(session, user, "reference", int(existing.id), name="Vor MCP-Edit")
         changed = [f for f, v in params.items() if v is not None]
         _set_ref_fields(existing, **params)
         session.add(existing)
         session.commit()
         session.refresh(existing)
+        version_note = _mcp_version_note(session, user, "reference", int(existing.id))
         return _json(_ref_dict(existing) | {
             "changed": changed,
-            "note": (
-                "Vor dem Edit wurde automatisch eine Version des alten Zustands "
-                "angelegt (Rückgängig: list_versions + restore_version)."
-            ),
+            "note": version_note,
         })
 
 
@@ -981,7 +998,7 @@ async def import_bibtex(course_id: int, bibtex: str, ctx: Context) -> str:
             ).all()
         }
         order = _next_ref_order(session, course_id)
-        imported, skipped, errors = [], [], []
+        imported, skipped, errors, created_refs = [], [], [], []
         for e in entries:
             k = e["key"]
             if not _REF_KEY_RE.fullmatch(k):
@@ -1002,8 +1019,11 @@ async def import_bibtex(course_id: int, bibtex: str, ctx: Context) -> str:
             session.add(ref)
             existing_keys.add(k.lower())
             imported.append(k)
+            created_refs.append(ref)
             order += 1
         session.commit()
+        for r in created_refs:
+            version_service.mark_created(session, user, "reference", int(r.id))
         return _json({
             "imported": imported,
             "skipped": skipped,
@@ -1101,11 +1121,109 @@ def _decode_data_url(source: str) -> bytes:
         raise McpToolError("Ungültiges Base64 in der Data-URL.")
 
 
+# Wikimedia-Datei-URLs (Pfad /wikipedia/<lang>/… oder /wikimedia/<projekt>/…):
+# LLMs raten die Hash-Pfade und Thumbnail-Breiten häufig falsch (→ 404/400),
+# daher wird die Datei NACH NAME über die MediaWiki-API aufgelöst (kanonische
+# URL; große Bilder/SVGs kommen als Thumbnail mit erlaubter Breite zurück).
+_WIKIMEDIA_PROJECTS = {
+    "commons", "meta", "species", "wikibooks", "wikinews",
+    "wikiquote", "wikisource", "wikiversity", "wikidata",
+}
+_WM_DOWNLOAD_HOSTS = ("upload.wikimedia.org", "thumb.wikimedia.org")
+
+# User-Agent für Bild-Downloads: viele Hosts (z. B. Wikimedia) blockieren
+# Standard-Client-User-Agents (python-httpx/…) mit 403.
+_UA_IMAGE_DOWNLOAD = (
+    f"AICampus/1.0 (+https://{PUBLIC_DOMAIN})" if PUBLIC_DOMAIN else "AICampus/1.0"
+)
+
+
+def _wikimedia_file_ref(url: httpx.URL) -> Optional[tuple[str, str]]:
+    """(api_host, dateiname) für Wikimedia-Datei-URLs, sonst None.
+
+    Pfade: /wikipedia/<lang>/[thumb/]<x>/<y>/<name>[/Wpx-…] oder
+           /wikimedia/<projekt>/… (commons, meta, …)."""
+    if url.host not in _WM_DOWNLOAD_HOSTS:
+        return None
+    parts = [p for p in url.path.split("/") if p]
+    if len(parts) < 5 or parts[0] not in ("wikipedia", "wikimedia"):
+        return None
+    wiki = parts[1].lower()
+    if wiki in _WIKIMEDIA_PROJECTS:
+        api_host = f"{wiki}.wikimedia.org"
+    elif parts[0] == "wikipedia":
+        api_host = f"{wiki}.wikipedia.org"
+    else:
+        return None
+    # Original-Dateiname: bei Thumbnails das Segment VOR „<Wpx-…“,
+    # sonst das letzte Pfad-Segment.
+    if parts[2] == "thumb" and len(parts) >= 7:
+        name = parts[5]
+    else:
+        name = parts[-1]
+    return api_host, unquote(name)
+
+
+async def _resolve_wikimedia_url(client: httpx.AsyncClient, api_host: str, filename: str) -> httpx.URL:
+    """Kanonische (Thumbnail-)URL einer Datei per MediaWiki-API auflösen."""
+    resp = await client.get(
+        f"https://{api_host}/w/api.php",
+        params={
+            "action": "query",
+            "titles": f"File:{filename}",
+            "prop": "imageinfo",
+            "iiprop": "url|mime",
+            "iiurlwidth": "1600",
+            "format": "json",
+        },
+    )
+    if resp.status_code != 200:
+        raise McpToolError(f"MediaWiki-API ({api_host}) Fehler (HTTP {resp.status_code}).")
+    try:
+        data = resp.json()
+    except ValueError:
+        raise McpToolError(f"MediaWiki-API ({api_host}): ungültige Antwort.")
+    pages = data.get("query", {}).get("pages") or {}
+    page = next(iter(pages.values()), {})
+    info = (page.get("imageinfo") or [{}])[0]
+    target = info.get("thumburl") or info.get("url")
+    if not target:
+        raise McpToolError(
+            f"Datei 'File:{filename}' existiert nicht auf {api_host} — Dateiname prüfen."
+        )
+    parsed = httpx.URL(target)
+    if parsed.host not in _WM_DOWNLOAD_HOSTS:
+        raise McpToolError("Unerwartete URL von der MediaWiki-API (abgelehnt).")
+    return parsed
+
+
+async def _download_image_bytes(client: httpx.AsyncClient, url: httpx.URL) -> bytes:
+    """Stream-Download mit Größen-Limit (keine Redirects)."""
+    chunks: list[bytes] = []
+    total = 0
+    async with client.stream("GET", url) as resp:
+        if resp.status_code >= 300:
+            extra = " (Redirects werden nicht gefolgt)" if resp.status_code < 400 else ""
+            raise McpToolError(f"Download fehlgeschlagen (HTTP {resp.status_code}){extra}.")
+        async for chunk in resp.aiter_bytes(64 * 1024):
+            total += len(chunk)
+            if total > media_service.MAX_UPLOAD_BYTES:
+                raise McpToolError(
+                    f"Bild zu groß (max. {media_service.MAX_UPLOAD_BYTES // (1024 * 1024)} MB)."
+                )
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def _fetch_image_bytes(url_str: str) -> bytes:
     """Lädt ein Bild von einer öffentlichen http(s)-URL (max. 5 MB).
 
     Sicherheit: keine Redirects, keine lokalen/internen Ziel-Adressen
-    (SSRF-Schutz via DNS-Auflösung vor dem Download)."""
+    (SSRF-Schutz via DNS-Auflösung vor dem Download).
+    User-Agent: viele Hosts (z. B. Wikimedia) blockieren Standard-Client-User-Agents
+    (python-httpx/…) mit 403 — daher eigener, beschreibender UA.
+    Wikimedia-URLs werden per MediaWiki-API nach Dateiname aufgelöst
+    (s. _wikimedia_file_ref)."""
     url = httpx.URL(url_str.strip())
     if url.scheme not in ("http", "https") or not url.host:
         raise McpToolError("source muss eine http(s)-URL sein.")
@@ -1118,26 +1236,20 @@ async def _fetch_image_bytes(url_str: str) -> bytes:
         if (ip.is_private or ip.is_loopback or ip.is_link_local
                 or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
             raise McpToolError("Der Download von lokalen/internen Adressen ist nicht erlaubt.")
-    chunks: list[bytes] = []
-    total = 0
     try:
-        async with httpx.AsyncClient(follow_redirects=False, timeout=20.0) as client:
-            async with client.stream("GET", url) as resp:
-                if resp.status_code >= 300:
-                    raise McpToolError(
-                        f"Download fehlgeschlagen (HTTP {resp.status_code}) — "
-                        "Redirects werden nicht gefolgt."
-                    )
-                async for chunk in resp.aiter_bytes(64 * 1024):
-                    total += len(chunk)
-                    if total > media_service.MAX_UPLOAD_BYTES:
-                        raise McpToolError(
-                            f"Bild zu groß (max. {media_service.MAX_UPLOAD_BYTES // (1024 * 1024)} MB)."
-                        )
-                    chunks.append(chunk)
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=20.0,
+            headers={"User-Agent": _UA_IMAGE_DOWNLOAD},
+        ) as client:
+            wm = _wikimedia_file_ref(url)
+            if wm:
+                url = await _resolve_wikimedia_url(client, *wm)
+            return await _download_image_bytes(client, url)
+    except McpToolError:
+        raise
     except (httpx.HTTPError, OSError):
         raise McpToolError("Download fehlgeschlagen (Netzwerk-Fehler).")
-    return b"".join(chunks)
 
 
 @mcp_tool
@@ -1404,7 +1516,6 @@ async def edit_content(
                     raise McpToolError(str(e))
             else:  # nur Metadaten
                 new_content, applied = section.content or "", 0
-            version_service.snapshot_current(session, user, "script_section", int(section.id), name="Vor MCP-Edit")
             if full_rewrite:
                 section.content = new_content
             if title is not None:
@@ -1415,17 +1526,18 @@ async def edit_content(
             session.add(section)
             session.commit()
             sync_media_usages(session, course_id)
+            version_note = _mcp_version_note(session, user, "script_section", int(section.id))
             return _json({
                 "id": section.id,
                 "title": section.title,
                 "changed": (
                     "kompletter Content-Ersatz" if full_rewrite
                     else f"{applied} Edit(s) angewendet" if partial
-                    else "nur Metadaten geändert"
+                    else "nur Metadaten ge\u00e4ndert"
                 ),
                 "content": section.content,
                 "warnings": warnings,
-                "note": "Vor dem Edit wurde automatisch eine Version des alten Zustands angelegt (Rückgängig: list_versions + restore_version).",
+                "note": version_note,
             })
         material = _resolve(session, CourseMaterial, course_id, ref, "Slide-Deck")
         if material.material_type != MaterialType.SLIDES:
@@ -1440,8 +1552,7 @@ async def edit_content(
             else:  # nur Metadaten
                 new_content = None
         except SlideError as e:
-            raise McpToolError(f"Kein gültiges Slide-Deck: {e}")
-        version_service.snapshot_current(session, user, "slide_deck", int(material.id), name="Vor MCP-Edit")
+            raise McpToolError(f"Kein g\u00fcltiges Slide-Deck: {e}")
         if new_content is not None:
             material.content = new_content
         if title is not None:
@@ -1452,16 +1563,17 @@ async def edit_content(
         session.add(material)
         session.commit()
         sync_media_usages(session, course_id)
+        version_note = _mcp_version_note(session, user, "slide_deck", int(material.id))
         return _json({
             "id": material.id,
             "title": material.title,
             "changed": (
                 "kompletter Content-Ersatz" if full_rewrite
                 else f"{len(edits)} Edit(s) angewendet" if partial
-                else "nur Metadaten geändert"
+                else "nur Metadaten ge\u00e4ndert"
             ),
             "content": material.content,
-            "note": "Vor dem Edit wurde automatisch eine Version des alten Zustands angelegt (Rückgängig: list_versions + restore_version).",
+            "note": version_note,
         })
 
 
@@ -1487,7 +1599,8 @@ async def edit_applet(
     title: neuer Applet-Titel (optional). description: neue Kurzbeschreibung,
     was das Applet zeigt (optional; "" = zurücksetzen).
 
-    Vor dem Edit wird automatisch eine Version des alten Zustands angelegt
+    Nach dem Edit wird automatisch die Version „MCP Edit“ (neuer Zustand)
+    angelegt — der Zustand vorher ist die Version davor
     (Rückgängig: list_versions + restore_version). Syntax/Sandbox-Regeln:
     markdown_manual("applet")."""
     with Session(engine) as session:
@@ -1530,23 +1643,21 @@ async def edit_applet(
                 media_service.validate_applet_html(new_html)
             except HTTPException as e:
                 raise McpToolError(str(e.detail))
-            version_service.snapshot_current(session, user, "applet", int(media.id), name="Vor MCP-Edit")
             rel_path, mime, size = media_service.replace_applet(media.file_path, new_html)
             media.file_path = rel_path
             media.mime_type = mime
             media.file_size = size
-        else:
-            version_service.snapshot_current(session, user, "applet", int(media.id), name="Vor MCP-Edit")
         session.add(media)
         session.commit()
         sync_media_usages(session, course_id)
+        version_note = _mcp_version_note(session, user, "applet", int(media.id))
         return _json({
             "id": media.id,
             "title": media.title,
             "url": media_service.media_url(media),
             "changed": changed,
             **({"hint": "Die Markdown-Referenz im Kursinhalt zeigt weiter auf das Applet (Pfad unverändert) — bei Titelwechsel den Alt-Text der Referenz ggf. per edit_content anpassen."} if title is not None else {}),
-            "note": "Vor dem Edit wurde automatisch eine Version des alten Zustands angelegt (Rückgängig: list_versions + restore_version).",
+            "note": version_note,
         })
 
 
@@ -1586,6 +1697,7 @@ async def create_applet(
         session.commit()
         session.refresh(media)
         sync_media_usages(session, course_id)
+        version_service.mark_created(session, user, "applet", int(media.id))
         return _json({
             "id": media.id,
             "title": media.title,
@@ -1611,9 +1723,13 @@ async def create_image(
     (optional). Der Rückgabewert enthält die fertige Markdown-Referenz zum
     Einbinden in Skript/Folien: ![<Titel>](/media/<course_id>/<datei>).
 
-    HINWEIS: Im Chat selbst generierte Bilder (z. B. DALL·E) sind meist zu
-    groß für die Data-URL-Variante — dann nur die URL-Variante nutzen, wenn
-    eine öffentliche Download-URL vorliegt; andernfalls das Bild in der
+    Wikimedia-URLs (upload.wikimedia.org / thumb.wikimedia.org): die Datei
+    wird AUTOMATISCH über die MediaWiki-API nach Dateiname aufgelöst — der
+    Dateiname in der URL muss stimmen, Hash-Pfad und Thumbnail-Breite dürfen
+    ungenau/ungültig sein (der Server holt die korrekte URL).
+    Im Chat selbst generierte Bilder (z. B. DALL·E) sind meist zu groß für
+    die Data-URL-Variante — dann nur die URL-Variante nutzen, wenn eine
+    öffentliche Download-URL vorliegt; andernfalls das Bild in der
     Kurs-Web-UI hochladen."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="create_image")
@@ -1697,6 +1813,7 @@ async def create_chapter(
         session.commit()
         session.refresh(section)
         sync_media_usages(session, course_id)
+        version_service.mark_created(session, user, "script_section", int(section.id))
         return _json({
             "id": section.id,
             "title": section.title,
@@ -1753,6 +1870,7 @@ async def create_slide_deck(
         session.commit()
         session.refresh(material)
         sync_media_usages(session, course_id)
+        version_service.mark_created(session, user, "slide_deck", int(material.id))
         return _json({
             "id": material.id,
             "title": material.title,
@@ -1893,6 +2011,7 @@ async def create_task(
         session.commit()
         session.refresh(task)
         sync_media_usages(session, course_id)
+        version_service.mark_created(session, user, "task", int(task.id))
         return _json({
             "id": task.id,
             "title": task.title,
@@ -1942,7 +2061,8 @@ async def edit_task(
     - mc_questions: nur für MC-Aufgaben — KOMPLETTER Ersatz der Fragen
       (Format wie bei create_task)
 
-    Vor dem Edit wird automatisch eine Version des alten Zustands angelegt
+    Nach dem Edit wird automatisch die Version „MCP Edit“ (neuer Zustand)
+    angelegt — der Zustand vorher ist die Version davor
     (Rückgängig: list_versions + restore_version)."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="edit_task")
@@ -1976,9 +2096,6 @@ async def edit_task(
                 "Bei MC-Aufgaben wird max_points aus der Punkte-Summe der Fragen "
                 "abgeleitet — mc_questions statt max_points angeben."
             )
-        # Snapshot VOR den Änderungen: _current_snapshot liest aus demselben
-        # (identitäts-map-gepufferten) ORM-Objekt — danach wäre es schon neu.
-        version_service.snapshot_current(session, user, "task", int(task.id), name="Vor MCP-Edit")
         changed: list[str] = []
         if title is not None:
             task.title = title.strip()
@@ -2019,13 +2136,14 @@ async def edit_task(
         session.commit()
         session.refresh(task)
         sync_media_usages(session, course_id)
+        version_note = _mcp_version_note(session, user, "task", int(task.id))
         return _json({
             "id": task.id,
             "title": task.title,
             "type": task.task_type.value,
             "max_points": task.max_points,
             "changed": changed,
-            "note": "Vor dem Edit wurde automatisch eine Version des alten Zustands angelegt (Rückgängig: list_versions + restore_version).",
+            "note": version_note,
         })
 
 
@@ -2041,9 +2159,9 @@ async def list_versions(
 
     type = "script_section" | "slide_deck" | "applet" | "task" | "reference"
     (bei reference: ref = Quellen-Key oder ID; sonst: ID oder exakter Titel).
-    MCP-Edits erzeugen automatisch einen Snapshot „Vor MCP-Edit“ —
-    diesen (oder einen älteren) Eintrag kann man mit restore_version
-    zurücksetzen."""
+    Neues Element → Version „Erstellt“; jedes MCP-Edit → Version „MCP Edit“
+    (neuer Zustand). Zum Zurücksetzen: die Version VOR dem Edit per
+    restore_version wiederherstellen."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="list_versions")
         entity = _resolve_editable(session, course_id, ref, type)
