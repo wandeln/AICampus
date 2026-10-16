@@ -1516,7 +1516,7 @@ async def edit_content(
                     raise McpToolError(str(e))
             else:  # nur Metadaten
                 new_content, applied = section.content or "", 0
-            if full_rewrite:
+            if full_rewrite or partial:
                 section.content = new_content
             if title is not None:
                 section.title = title.strip()
