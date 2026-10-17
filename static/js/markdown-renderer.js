@@ -15,8 +15,9 @@
  *                                                            Reihenfolge) → nummerierte Figur
  *                                                            ("Code N: Caption", Anker code:label);
  *                                                            $$…$$ in Knoten-/Kanten-Texten → KaTeX
- *                                                            (nativ von Mermaid gerendert, Display-Mode;
- *                                                            Text darin via \text{…}; max. 1 Block pro Text)
+ *                                                            (nativ von Mermaid gerendert als MathML,
+ *                                                            Display-Mode; Text darin via \text{…};
+ *                                                            max. 1 Block pro Text)
  * Escaped dollar: \$                              → literal $ (no LaTeX)
  * Nummerierte Figur:  ![caption](src){#fig:label} → "Abb. N: caption" (Anker fig:label)
  * Nummerierte Formel: $$...$$ {#eq:label}         → "(N)" neben der Formel (Anker eq:label)
@@ -3009,8 +3010,16 @@ async function renderMermaid(diagramText) {
     // securityLevel 'loose' rendert HTML in Labels ungefiltert, und die SVG-
     // Einsetzung in renderMarkdown (Schritt 11) erfolgt NACH dem zentralen
     // DOMPurify-Pass (Schritt 10) — hier daher das SVG selbst sanitisieren
-    // (entfernt on*-Handler/javascript:-URIs, behält foreignObject + KaTeX).
-    const svg = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rawSvg) : rawSvg;
+    // (entfernt on*-Handler/javascript:-URIs).
+    // DOMPurify-Default würde Flowchart-Labels komplett verlieren:
+    // Mermaid rendert sie in <foreignObject> (nicht in der Default-
+    // Allow-Liste), und den HTML-Kindern darin (Labels, KaTeX-MathML) wird
+    // der SVG→HTML-Namenraumwechsel verweigert, außer der Elterntag steht
+    // in HTML_INTEGRATION_POINTS (Keys müssen lowercase sein).
+    const svg = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rawSvg, {
+      ADD_TAGS: ['foreignObject'],
+      HTML_INTEGRATION_POINTS: { 'annotation-xml': true, foreignobject: true, desc: true, title: true },
+    }) : rawSvg;
     const temp = document.createElement('div');
     temp.innerHTML = svg;
     const svgEl = temp.querySelector('svg');
