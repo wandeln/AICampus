@@ -146,11 +146,22 @@ def _applet_apply(session: Session, entity: CourseMedia, snapshot: dict) -> None
     title = (snapshot.get("title") or "").strip()
     if not title:
         raise HTTPException(400, "Titel darf nicht leer sein.")
-    html = snapshot.get("html") or ""
-    if not html.strip():
-        raise HTTPException(400, "Der HTML-Code darf nicht leer sein.")
+    # Feld „media“ (früher „html“ — alte Dev-Snapshots ohne Migration); das
+    # Format leitet replace_applet aus der Datei-Extension ab.
+    content = snapshot.get("media") or snapshot.get("html") or ""
+    if not content.strip():
+        raise HTTPException(400, "Der Applet-Code darf nicht leer sein.")
+    fmt = media_service.applet_format_of(entity.file_path)
+    try:
+        media_service.validate_applet_content(content, fmt)
+    except HTTPException:
+        # Rollback über einen Formatwechsel: der Content gehört ins andere
+        # Format → Datei erst umbenennen (Referenzen reparieren), dann schreiben.
+        other = "svg" if fmt == "html" else "html"
+        media_service.validate_applet_content(content, other)  # wirft bei echtem Fehler
+        media_service.switch_applet_format(session, entity.course_id, entity, other)
     # Gleicher Dateipfad → Markdown-Referenzen bleiben gültig.
-    rel_path, mime, size = media_service.replace_applet(entity.file_path, html)
+    rel_path, mime, size = media_service.replace_applet(entity.file_path, content)
     entity.title = title
     entity.file_path = rel_path
     entity.mime_type = mime
@@ -355,7 +366,7 @@ def _current_snapshot(entity_type: str, entity) -> dict:
             raise HTTPException(404, "Applet-Datei fehlt (Element defekt).")
         return {
             "title": entity.title,
-            "html": path.read_text(encoding="utf-8"),
+            "media": path.read_text(encoding="utf-8"),
             "llm_description": entity.llm_description or "",
         }
     if entity_type == "reference":

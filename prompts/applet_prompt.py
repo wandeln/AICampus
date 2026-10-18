@@ -6,8 +6,8 @@ oder einfacher, nicht-interaktiver Skizzen/Figuren (z. B. statisches SVG).
 Das LLM erstellt eine self-contained HTML-Datei (Vanilla JS + Canvas/SVG,
 optional die lokal gespiegelten Libs Chart.js / Plotly / Three.js / KaTeX)
 und antwortet als JSON-Objekt mit einer Untermenge der angeforderten
-Schlüssel („html“ ODER „html_edits“, „title“, „description“) — weggelassene
-Schlüssel = das Feld bleibt unverändert. („html_edits“ = stellenweise
+Schlüssel („media“ ODER „media_edits“, „title“, „description“) — weggelassene
+Schlüssel = das Feld bleibt unverändert. („media_edits“ = stellenweise
 replace_span-Edits am bestehenden HTML, serverseitig angewendet — analog
 zu „content_edits“ im Skript.)
 
@@ -32,15 +32,15 @@ ANFRAGE:
 ZULÄSSIGE FELDER — gib als Antwort ein gültiges JSON-Objekt. Erlaubt sind NUR diese Schlüssel — jeder andere Schlüssel wird vom System IGNORIERT:
 {{ generate_list }}
 Jeder Schlüssel der Liste ist OPTIONAL: Wenn die Anweisung ein Feld inhaltlich NICHT betrifft und das Feld bereits einen Inhalt hat, lass den Schlüssel einfach WEG — der vorhandene Wert bleibt dann unverändert. Wenn das Feld geändert werden soll, liefere den aktualisierten Wert. Für Felder OHNE vorhandenen Inhalt ist der Schlüssel PFLICHT.
-{% if existing_html and '"html"' in generate_list %}
-Außerdem: Bei rein lokalen Änderungen am vorhandenen Code darf der Schlüssel "html" durch "html_edits" ersetzt werden (Format siehe unten).
+{% if existing_media and '"media"' in generate_list %}
+Außerdem: Bei rein lokalen Änderungen am vorhandenen Code darf der Schlüssel "media" durch "media_edits" ersetzt werden (Format siehe unten).
 {% endif %}
-{% if existing_html %}
+{% if existing_media %}
 
 BESTEHENDES APPLET — überarbeite es gemäß der Anfrage (funktionierende Teile
 beibehalten, nicht grundlos neu gestalten):
 ```html
-{{ existing_html }}
+{{ existing_media }}
 ```
 {% endif %}
 {% if has_image %}
@@ -112,8 +112,8 @@ Antwort:
 Antworte NUR mit einem gültigen JSON-Objekt (keine Code-Blöcke, kein zusätzlicher Text). Erlaubt sind NUR die in „ZULÄSSIGE FELDER“ aufgeführten Schlüssel — jeder andere Schlüssel wird vom System IGNORIERT:
 {% if '"title"' in generate_list %}- "title": Kurzer, aussagekräftiger Titel für das Applet (max. 8 Wörter).
 {% endif %}{% if '"description"' in generate_list %}- "description": Kurze Beschreibung (2-4 Sätze), was das Applet zeigt/ermöglicht und für welchen Lehrinhalt es passt.
-{% endif %}{% if '"html"' in generate_list %}- "html" ODER "html_edits" (genau eines davon):
-  - "html": Die komplette HTML-Datei des Applets als String (inkl. <!DOCTYPE html>). Verwende diesen Schlüssel für NEUE Applets und bei größeren Überarbeitungen.
-  - "html_edits": Nur bei BESTEHENDEN Applets und KLEINEN, lokalen Änderungen — eine Liste von Edit-Objekten der Form {"op": "replace_span", "old": "<exakter Text, der EXAKT EINMAL im bestehenden HTML vorkommt>", "new": "<Ersetzung>"}. Nimm für "old" möglichst kurze, eindeutige Snippets (einzelne Zeile oder ein kurzes Fragment, niemals das ganze Dokument).
-Achte in "html" bzw. den Edit-Strings auf korrektes JSON-Escaping (insbesondere Backslashes und Anführungszeichen).
+{% endif %}{% if '"media"' in generate_list %}- "media" ODER "media_edits" (genau eines davon):
+  - "media": Die komplette HTML-Datei des Applets als String (inkl. <!DOCTYPE html>). Verwende diesen Schlüssel für NEUE Applets und bei größeren Überarbeitungen.
+  - "media_edits": Nur bei BESTEHENDEN Applets und KLEINEN, lokalen Änderungen — eine Liste von Edit-Objekten der Form {"op": "replace_span", "old": "<exakter Text, der EXAKT EINMAL im bestehenden HTML vorkommt>", "new": "<Ersetzung>"}. Nimm für "old" möglichst kurze, eindeutige Snippets (einzelne Zeile oder ein kurzes Fragment, niemals das ganze Dokument).
+Achte in "media" bzw. den Edit-Strings auf korrektes JSON-Escaping (insbesondere Backslashes und Anführungszeichen).
 {% endif %}"""

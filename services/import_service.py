@@ -86,6 +86,7 @@ from database.models import (
 )
 from services import bibtex as bib
 from services import media_service, version_service
+from services.media_service import sanitize_svg
 from services.llm_service import LLMService, SLIDES_MAX_TOKENS
 from services.mc_service import McValidationError, mc_total_points, validate_mc_data
 from services.references_service import build_references_text
@@ -2774,67 +2775,6 @@ def _pixmap_to_white_png(pix) -> bytes:
     return buf.getvalue()
 
 
-def sanitize_svg(data: bytes) -> dict:
-    """SVG für Medienbibliothek/Preview sanitisieren (XSS-Schutz).
-
-    Entfernt Skript-/Embed-Elemente (script, foreignObject, iframe, object,
-    embed), <style> mit Skriptinhalten, Event-Handler und skriptbare URL-Attribute.
-    Liefert {"data": <sanitized bytes>, "hint": <Title-/Desc-Text>} oder {"error": ...}.
-    """
-    import io
-    import xml.etree.ElementTree as ET
-
-    text = data.decode("utf-8", errors="replace")
-    text = re.sub(r"<!DOCTYPE[^>]*>", "", text, flags=re.S)  # DTD/Entities brechen ET
-    raw = text.encode("utf-8")
-    try:
-        for _event, (prefix, uri) in ET.iterparse(io.BytesIO(raw), events=("start-ns",)):
-            if re.fullmatch(r"ns\d+", prefix or ""):
-                continue  # ns\d+ ist von ET reserviert — Prefix wird bei der Ausgabe automatisch neu vergeben
-            ET.register_namespace(prefix, uri)  # ursprüngliche Präfixe für saubere Ausgabe
-        root = ET.fromstring(raw)
-    except ET.ParseError as exc:
-        return {"error": f"SVG nicht parsebar: {exc}"}
-
-    def _local(name: Any) -> str:
-        if not isinstance(name, str):
-            return ""
-        return name.rsplit("}", 1)[-1].lower()
-
-    def _strip(el) -> None:
-        for child in list(el):
-            ln = _local(child.tag)
-            if ln in ("script", "foreignobject", "iframe", "object", "embed"):
-                el.remove(child)
-                continue
-            if ln == "style" and child.text and re.search(
-                r"expression|javascript:|@import|url\(\s*['\"]?\s*https?:", child.text, re.I
-            ):
-                el.remove(child)
-                continue
-            _strip(child)
-        for attr in list(el.attrib):
-            if _local(attr).startswith("on"):
-                del el.attrib[attr]
-                continue
-            if _local(attr) in ("href", "src", "srcset", "data") and re.match(
-                r"\s*(javascript:|vbscript:|data:text/|https?://)", el.attrib[attr], re.I
-            ):
-                del el.attrib[attr]
-
-    _strip(root)
-
-    # <title>/<desc> als Beschreibungshinweis für die Medien-Bibliothek
-    hint = ""
-    for el in root.iter():
-        if _local(el.tag) in ("title", "desc") and el.text and el.text.strip():
-            hint = el.text.strip()
-            break
-
-    out = io.BytesIO()
-    ET.ElementTree(root).write(out, encoding="utf-8", xml_declaration=True)
-    return {"data": out.getvalue(), "hint": hint[:500]}
-
 
 def _sniff_image_magic(path: Path) -> Optional[str]:
     """Raster-Dateiendung anhand der Magic Bytes erkennen (z.B. JPEG als .eps getarmt)."""
@@ -2976,12 +2916,13 @@ def _import_one_media(staging: Path, course_id: int, entry: dict, created_by: in
             with Session(engine) as s:
                 media = CourseMedia(
                     course_id=course_id, title=_media_title(entry, src), file_path=rel,
-                    media_type="image", mime_type="image/svg+xml",
+                    media_type="applet", mime_type="image/svg+xml",
                     file_size=len(data), content_hash=src_hash, created_by=created_by,
                 )
                 s.add(media)
                 s.commit()
                 s.refresh(media)
+                _mark_import_created(s, created_by, "applet", media.id)
             return {
                 "media_ids": [media.id], "urls": [media_service.media_url(media)],
                 "url": media_service.media_url(media),
@@ -3128,13 +3069,13 @@ async def _convert_media_to_applet(
         config=llm_cfg,
     )
     data = res.get("data") if res.get("success") else None
-    html = str((data or {}).get("html") or "").strip()
+    html = str((data or {}).get("media") or "").strip()
     if not html:
-        return {"error": str(res.get("error") or "Applet-LLM lieferte kein HTML")[:300]}
+        return {"error": str(res.get("error") or "Applet-LLM lieferte keinen Code")[:300]}
     try:
-        media_service.validate_applet_html(html)
+        media_service.validate_applet_content(html, "html")
     except Exception as exc:
-        return {"error": f"Applet-HTML ungültig: {exc}"[:300]}
+        return {"error": f"Applet-Code ungültig: {exc}"[:300]}
     rel, mime_app, size = media_service.save_applet(course_id, html)
     with Session(engine) as s:
         media = CourseMedia(
@@ -3252,6 +3193,12 @@ async def run_media_job(
                 return
             set_progress(import_id, unit_key=unit_key, unit_total=1, current=f"Medien: {path}")
             tri = normalize_triage(entry.get("triage"))
+            # SVG: immer direkt importieren — die Triage-Empfehlung „applet“
+            # betrifft Rasterbilder (LLM-Konvertierung aus dem Bild); eine
+            # SVG ist bereits ein Applet und kann später im Studio nach HTML
+            # konvertiert werden (Formatwechsel).
+            if tri == "applet" and str(path).lower().endswith(".svg"):
+                tri = "import"
             if tri == "applet":
                 # M3b: Bild → HTML-Applet (LLM-Konvertierung, analog Applet-Studio)
                 async with llm_sem:

@@ -1,9 +1,9 @@
 {% extends "course/base.html" %}
 
-{# ────────────────────────────────────────────────────────────────
-   Applet-Studio: HTML-Applets generieren (LLM) & bearbeiten (manuell per
-   CodeMirror). Applets können interaktiv sein ODER einfache, nicht-
-   interaktive Skizzen/Figuren (z. B. statisches SVG). Nur PROF/Admin.
+{# ──────────────────────────────────────────────────────────────
+   Applet-Studio: Applets generieren (LLM) & bearbeiten (manuell per
+   CodeMirror). Applets sind HTML (interaktiv, JS) ODER SVG (statisch
+   oder animiert, rendert als Bild). Nur PROF/Admin.
    Als Referenzbild für die Generierung kann ein Bild-Medium aus der
    Medienbibliothek gewählt oder ein Foto/Zeichnung hochgeladen werden.
 
@@ -11,13 +11,16 @@
    Edit: GET /courses/{id}/applets/{mid}    (media = CourseMedia, type applet)
 
    API:
-   POST /api/courses/{id}/media/applet-llm   → LLM (HTML+Titel+Beschreibung, speichert NICHT)
-         Body: {prompt, existing_html?, current_title?, current_description?,
-                generate_fields? {title, description, html} (Default: alle),
-                media_id? ODER image_data_url?}
+   POST /api/courses/{id}/media/applet-llm   → LLM (Code+Titel+Beschreibung, speichert NICHT)
+         Body: {prompt, format? (html|svg, Default html), existing_media?,
+                current_title?, current_description?,
+                generate_fields? {title, description, media} (Default: alle),
+                media_id? ODER image_data_url?, console_errors? (nur html)}
    POST /api/courses/{id}/media/applet       → neues Applet-Medium anlegen (Autosave, neu)
-   PUT  /api/courses/{id}/media/{mid}/applet → HTML (+Titel/Beschreibung) ersetzen
+   PUT  /api/courses/{id}/media/{mid}/applet → Code (+Titel/Beschreibung) ersetzen
    GET  /api/courses/{id}/media/{mid}/applet → Quelle laden (Edit-Modus)
+   POST /api/courses/{id}/media/{mid}/applet-format → Format wechseln (html↔svg;
+         Datei-Rename + Referenz-Reparatur, Code wird vom LLM/Nutzer konvertiert)
 
    Speichern/Versions-History laufen über die generische Autosave-/Versions-API
    (autosave-versions.js, entity_type = "applet"): ein Auto-Save speichert
@@ -37,7 +40,7 @@
    Grid-Spalte auf min-content-Breite aufbläst und das Layout in x sprengt #}
 <div class="grid gap-6 lg:grid-cols-5">
 
-  <!-- ═══ Links: LLM + Metadaten + Speichern ═══ -->
+  <!-- ═══ Links: LLM + Format / Metadaten + Speichern ═══ -->
   <div class="lg:col-span-2 min-w-0 space-y-4">
 
     <div data-llm-box class="bg-purple-50 border-2 border-purple-300 rounded-xl p-6">
@@ -173,14 +176,14 @@
           <span id="applet-llm-status-text"></span>
         </div>
         <p class="text-xs text-gray-400">
-          {{ "Der aktuelle HTML-Code wird als Kontext übergeben. " if media }}
+          {{ "Der aktuelle Code wird als Kontext übergeben. " if media }}
           Die Checkboxen wählen aus, welche Felder (Titel, Beschreibung, Code) das
           LLM ändern darf — standardmäßig alle; nicht angehakten Felder bleiben
           unverändert (das LLM muss auch bei angehakten Feldern nicht zwingend
           Änderungen liefern). Bitte das Ergebnis prüfen (wird automatisch gespeichert).
-          Chart.js, Three.js, Plotly &amp; KaTeX (lokal) stehen dem LLM zur
-          Verfügung. Als Referenz: ein Medium aus der Bibliothek oder ein Foto/Zeichnung —
-          auf Wunsch erzeugt das LLM auch eine einfache, nicht-interaktive Skizze (z. B. SVG).
+          Chart.js, Three.js, Plotly &amp; KaTeX (lokal) stehen dem LLM im
+          HTML-Format zur Verfügung. Als Referenz: ein Medium aus der Bibliothek
+          oder ein Foto/Zeichnung.
           Tipp: Strg+Enter startet die Generierung.
         </p>
       </div>
@@ -193,15 +196,30 @@
           <input id="applet-title" type="text" maxlength="300"
                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
         </div>
+
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="applet-format">Format</label>
+            <select id="applet-format"
+                    class="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm bg-white">
+              <option value="html">HTML — interaktives Applet</option>
+              <option value="svg">SVG — statisch oder animiert</option>
+            </select>
+            <p class="text-xs text-gray-400 mt-2">
+              HTML: JavaScript &amp; Libraries (Chart.js, Plotly, …). SVG: Vektorgrafik,
+              optional SMIL/CSS-Animationen — rendert überall als Bild.
+              {% if media %}Der Wechsel benennt die Datei um und repariert alle Referenzen — der Code muss danach angepasst werden (z.&nbsp;B. per LLM: „Bitte konvertiere …“).{% else %}Das Format kann nach dem Speichern im Edit-Modus gewechselt werden.{% endif %}
+            </p>
+        </div>
+
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Beschreibung</label>
           <textarea id="applet-description" rows="3" maxlength="2000"
                     class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"></textarea>
         </div>
         <p class="text-xs text-gray-400">
-          {{ "Wird automatisch als neues Medium (Typ Applet) in der Medienbibliothek angelegt, sobald Titel und HTML-Code vorliegen." if not media else "Änderungen werden automatisch gespeichert — der HTML-Code bleibt am gleichen Pfad, Markdown-Referenzen bleiben gültig." }}
-          Einbetten über <code class="text-[11px] bg-gray-100 rounded px-1">![Titel]({{ media.url if media else '/media/' ~ course.id ~ '/…html' }})</code>
-          → rendert in Skript &amp; Aufgaben als interaktive Vorschau.
+          {{ "Wird automatisch als neues Medium (Typ Applet) in der Medienbibliothek angelegt, sobald Titel und Code vorliegen." if not media else "Änderungen werden automatisch gespeichert — der Code bleibt am gleichen Pfad, Markdown-Referenzen bleiben gültig." }}
+          Einbetten über <code class="text-[11px] bg-gray-100 rounded px-1">![Titel]({{ media.url if media else '/media/' ~ course.id ~ '/…' }})</code>
+          → rendert in Skript &amp; Aufgaben als interaktive Vorschau (HTML) bzw. als Bild (SVG).
         </p>
       </div>
     </div>
@@ -224,15 +242,20 @@
           ⟳ Vorschau aktualisieren
         </button>
       </div>
-      <!-- Auto-Size: Iframe passt sich an die gemeldete Applet-Höhe an (150–600 px) -->
+      <!-- Auto-Size: Iframe passt sich an die gemeldete Applet-Höhe an (150–600 px);
+           SVG rendert statt im Iframe als <img> (SMIL/CSS-Animationen laufen auch dort) -->
       <div style="max-height: 600px">
         <iframe id="applet-preview" class="aicampus-applet" sandbox="allow-scripts"
                 title="Applet-Vorschau"></iframe>
+        <div id="applet-preview-svg" class="hidden flex items-center justify-center bg-gray-50 rounded"
+             style="max-height: 600px">
+          <img id="applet-preview-svg-img" class="max-h-full max-w-full" alt="SVG-Vorschau">
+        </div>
       </div>
     </div>
 
     <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-      <h2 class="font-bold text-gray-800 mb-1">📝 HTML-Code</h2>
+      <h2 id="code-heading" class="font-bold text-gray-800 mb-1">📝 HTML-Code</h2>
       <p class="text-xs text-gray-400 mb-3">
         Kann auch manuell editiert werden — „⟳ Vorschau aktualisieren“ lädt den Code neu.
       </p>
@@ -263,8 +286,13 @@
   const genTitleCb = document.getElementById("applet-gen-title");
   const genDescCb = document.getElementById("applet-gen-desc");
   const genHtmlCb = document.getElementById("applet-gen-html");
+  const formatSelect = document.getElementById("applet-format");
+  const svgPreviewBox = document.getElementById("applet-preview-svg");
+  const svgImg = document.getElementById("applet-preview-svg-img");
+  let appletFormat = "html";  // aktuelles Format (html|svg)
 
-  // CodeMirror (htmlmixed) — Editor-Inhalt in den (versteckten) Textarea schreiben
+  // CodeMirror — Editor-Inhalt in den (versteckten) Textarea schreiben
+  // (Modus htmlmixed/svg: xml; wird in setFormat() beim Formatwechsel gesetzt)
   const codeCM = CodeMirror.fromTextArea(document.getElementById("applet-html"), {
     mode: "htmlmixed",
     theme: "oneDark",
@@ -276,10 +304,54 @@
     matchBrackets: true,
   });
 
+  // ─── Formatwechsel (html↔svg) ────────────────────────────────
+  function setFormat(fmt) {
+    appletFormat = fmt;
+    formatSelect.value = fmt;
+    codeCM.setOption("mode", fmt === "svg" ? "xml" : "htmlmixed");
+    document.getElementById("code-heading").textContent = fmt === "svg" ? "📝 SVG-Code" : "📝 HTML-Code";
+    if (fmt === "svg") clearAppletErrors();  // SVG-Preview hat keine Konsole
+    updatePreview();
+  }
+
+  formatSelect.addEventListener("change", async () => {
+    const fmt = formatSelect.value;
+    if (fmt === appletFormat) return;
+    if (mediaId === null) {
+      // Neu: noch nichts gespeichert — einfach wechseln.
+      setFormat(fmt);
+      return;
+    }
+    const old = appletFormat;
+    const target = fmt === "svg" ? "ein SVG" : "ein HTML-Applet";
+    const ok = confirm(`Format von „${old}“ auf „${fmt}“ wechseln?\n\nDie Datei wird umbenannt und alle Markdown-Referenzen werden repariert. Der Code bleibt unverändert — bitte anschließend anpassen (z. B. per LLM: „Bitte konvertiere das folgende ${old} möglichst getreu in ${target}“).`);
+    if (!ok) { formatSelect.value = old; return; }
+    const flush = await av.finish();
+    if (!flush.ok) {
+      showToast("Das letzte Auto-Save ist noch nicht abgeschlossen – bitte kurz warten.", "warning");
+      formatSelect.value = old;
+      return;
+    }
+    try {
+      const res = await fetch(`/api/courses/${courseId}/media/${mediaId}/applet-format`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ format: fmt }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Fehler beim Formatwechsel.");
+      location.href = `${location.pathname}?switched=${fmt}`;
+    } catch (err) {
+      showToast(err.message, "error");
+      formatSelect.value = old;
+    }
+  });
+
   // ─── Autosave + Versions-History (generische AV-Logik) ────────
   const avPayload = () => ({
     title: titleInput.value,
-    html: codeCM.getValue(),
+    media: codeCM.getValue(),
     llm_description: descInput.value,
   });
 
@@ -303,7 +375,8 @@
         body: JSON.stringify({
           title: p.title.trim(),
           llm_description: p.llm_description.trim(),
-          html: p.html,
+          media: p.media,
+          format: appletFormat,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -314,10 +387,10 @@
     applyPayload: (p) => {
       titleInput.value = p.title || "";
       descInput.value = p.llm_description || "";
-      codeCM.setValue(p.html || "");
+      codeCM.setValue(p.media || p.html || "");  // html: alte Dev-Snapshots
       syncAppletTitle();
     },
-    shouldSave: (p) => !!p.title.trim() && !!p.html.trim(),
+    shouldSave: (p) => !!p.title.trim() && !!p.media.trim(),
     onRestored: () => updatePreview(),
     hostEl: document.getElementById("av-applet-slot"),
   });
@@ -396,9 +469,28 @@
     updateErrorBadge();
   }
 
+  let svgObjUrl = null;
+
   function updatePreview() {
     clearAppletErrors();
-    let html = codeCM.getValue();
+    const code = codeCM.getValue();
+    if (appletFormat === "svg") {
+      // SVG: als <img> rendern (SMIL/CSS-Animationen laufen auch dort);
+      // kein Iframe, keine Konsole.
+      previewFrame.classList.add("hidden");
+      svgPreviewBox.classList.remove("hidden");
+      if (svgObjUrl) { URL.revokeObjectURL(svgObjUrl); svgObjUrl = null; }
+      if (code.trim()) {
+        svgObjUrl = URL.createObjectURL(new Blob([code], { type: "image/svg+xml" }));
+        svgImg.src = svgObjUrl;
+      } else {
+        svgImg.removeAttribute("src");
+      }
+      return;
+    }
+    svgPreviewBox.classList.add("hidden");
+    previewFrame.classList.remove("hidden");
+    let html = code;
     if (html.trim() && !html.includes("aicampus-applet")) {
       const m = html.match(/<\/body\s*>/i);
       html = m
@@ -789,7 +881,8 @@
       const res = await fetch(`/api/courses/${courseId}/media/${mediaId}/applet`, { credentials: "same-origin" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "Fehler beim Laden des Applets.");
-      codeCM.setValue(data.html);
+      setFormat(data.format || "html");
+      codeCM.setValue(data.media);
       titleInput.value = data.title;
       syncAppletTitle();
       descInput.value = data.llm_description || "";
@@ -813,9 +906,9 @@
     const generateFields = {
       title: genTitleCb.checked,
       description: genDescCb.checked,
-      html: genHtmlCb.checked,
+      media: genHtmlCb.checked,
     };
-    if (!generateFields.title && !generateFields.description && !generateFields.html) {
+    if (!generateFields.title && !generateFields.description && !generateFields.media) {
       showToast("Wähle mindestens ein Feld aus.", "error");
       return;
     }
@@ -823,7 +916,8 @@
     try {
       const genBody = {
         prompt: prompt,
-        existing_html: codeCM.getValue(),
+        format: appletFormat,
+        existing_media: codeCM.getValue(),
         current_title: titleInput.value,
         current_description: descInput.value,
         generate_fields: generateFields,
@@ -832,7 +926,7 @@
         if (appletImage.source === "media") genBody.media_id = appletImage.mediaId;
         else genBody.image_data_url = appletImage.dataUrl;
       }
-      if (appletErrors.length > 0) genBody.console_errors = appletErrors.slice();
+      if (appletFormat === "html" && appletErrors.length > 0) genBody.console_errors = appletErrors.slice();
       const res = await fetch(`/api/courses/${courseId}/media/applet-llm`, {
         method: "POST",
         credentials: "same-origin",
@@ -852,9 +946,9 @@
         if (data.description) { descInput.value = data.description; changed.push("Beschreibung"); }
         else unchanged.push("Beschreibung");
       }
-      if (generateFields.html) {
-        if (data.html) {
-          codeCM.setValue(data.html);
+      if (generateFields.media) {
+        if (data.media) {
+          codeCM.setValue(data.media);
           updatePreview();
           changed.push("Code");
         } else unchanged.push("Code");
@@ -880,9 +974,9 @@
   async function finishApplet() {
     const res = await av.finish();
     if (mediaId === null && res.id == null) {
-      // Neues Applet wurde nie gespeichert (z. B. Titel/HTML fehlt)
+      // Neues Applet wurde nie gespeichert (z. B. Titel/Code fehlt)
       const hasContent = codeCM.getValue().trim() || titleInput.value.trim();
-      if (!hasContent || confirm("Das Applet wurde nicht gespeichert (Titel oder HTML fehlt). Verwerfen?")) {
+      if (!hasContent || confirm("Das Applet wurde nicht gespeichert (Titel oder Code fehlt). Verwerfen?")) {
         window.location.href = `/courses/${courseId}/media`;
       }
       return;
@@ -898,6 +992,18 @@
   document.getElementById("applet-finish").addEventListener("click", finishApplet);
   document.getElementById("applet-preview-refresh").addEventListener("click", updatePreview);
   loadMediaOptions();
+
+  // Nach einem Formatwechsel (Reload mit ?switched=…): Konvertierungshinweis
+  // in den Prompt legen — das LLM übernimmt die eigentliche Umwandlung.
+  const switchedTo = new URLSearchParams(location.search).get("switched");
+  if (switchedTo === "html" || switchedTo === "svg") {
+    const from = switchedTo === "svg" ? "html" : "svg";
+    const target = switchedTo === "svg" ? "ein SVG" : "ein HTML-Applet";
+    promptInput.placeholder = `z. B. „Bitte konvertiere das folgende ${from} möglichst getreu in ${target}“`;
+    showToast("Format gewechselt — bitte passe den Code entsprechend an (manuell oder per LLM).", "info");
+    history.replaceState(null, "", location.pathname);  // Param nur einmalig wirksam
+  }
+
   loadApplet();
 })();
 </script>

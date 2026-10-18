@@ -49,6 +49,7 @@ from prompts.hint_prompt import SOCRATIC_HINT_PROMPT_TEMPLATE
 from prompts.script_question_prompt import SCRIPT_FOLLOW_UP_PROMPT_TEMPLATE, SCRIPT_QUESTION_PROMPT_TEMPLATE
 from prompts.report_prompt import COURSE_REPORT_PROMPT_TEMPLATE, STUDENT_REPORT_PROMPT_TEMPLATE
 from prompts.applet_prompt import APPLET_PROMPT_TEMPLATE
+from prompts.svg_prompt import SVG_PROMPT_TEMPLATE
 from prompts.import_prompt import (
     FILE_SUMMARY_PROMPT_TEMPLATE,
     SCRIPT_PLANNER_PROMPT_TEMPLATE,
@@ -810,44 +811,48 @@ class LLMService:
         self,
         prompt: str,
         generate_fields: Optional[list[str]] = None,
-        existing_html: str = "",
+        existing_media: str = "",
         current_title: str = "",
         current_description: str = "",
         image_data_url: Optional[str] = None,
         console_errors: Optional[list[str]] = None,
         config: Optional[dict] = None,
+        format: str = "html",
     ):
-        """Generiert/überarbeitet ein HTML-Applet via LLM.
+        """Generiert/überarbeitet ein Applet (HTML oder SVG) via LLM.
 
         prompt: Was das Applet zeigen/ermöglichen soll (bzw. Änderungswunsch
-        bei existing_html).
-        generate_fields: Untermenge von ["title", "description", "html"],
+        bei existing_media).
+        generate_fields: Untermenge von ["title", "description", "media"],
         die das LLM in seiner JSON-Antwort liefern darf (Default: alle) —
         nicht angeforderte Felder bleiben unverändert. Das LLM MUSS sie aber
         nicht alle ändern, wenn die Anweisung sie nicht betrifft (Schlüssel
         weglassen = unverändert).
-        existing_html: aktueller HTML-Code (Refinement).
+        existing_media: aktueller Applet-Code, HTML ODER SVG (Refinement).
         current_title/current_description: vorhandene Metadaten (Kontext für
         das LLM, z. B. für „nur Titel ändern“).
         image_data_url: optionales Referenzbild (Data-URL, z. B. Medium aus
         der Bibliothek oder hochgeladen/gezeichnet) — wird multimodal
         angehängt; das LLM nutzt es als Basis (Umwandlung/Skizze).
         console_errors: optionale Web-Konsole-Fehler aus der Applet-Preview
-        (Fehlermeldung + Stack) — dienen dem LLM als Diagnose-Hinweis.
+        (Fehlermeldung + Stack) — dienen dem LLM als Diagnose-Hinweis
+        (nur HTML-Applets, die in der Preview laufen).
+        format: "html" (Default) ODER "svg" — wählt das Prompt-Template.
         Das LLM liefert JSON mit einer Untermenge der angeforderten Schlüssel
-        ({"html" ODER "html_edits", "title", "description"}) — wird hier
+        ({"media" ODER "media_edits", "title", "description"}) — wird hier
         NICHT gespeichert (Preview-first im Applet-Studio).
 
         Applets enthalten keine Studentendaten — nutzt den Public Endpoint,
         falls konfiguriert.
         """
         generate_list = ", ".join(
-            f'"{f}"' for f in (generate_fields or ["title", "description", "html"])
+            f'"{f}"' for f in (generate_fields or ["title", "description", "media"])
         )
-        tpl = Template(APPLET_PROMPT_TEMPLATE).render(
+        template = SVG_PROMPT_TEMPLATE if format == "svg" else APPLET_PROMPT_TEMPLATE
+        tpl = Template(template).render(
             prompt=prompt,
             generate_list=generate_list,
-            existing_html=existing_html,
+            existing_media=existing_media,
             current_title=current_title,
             current_description=current_description,
             has_image=bool(image_data_url),

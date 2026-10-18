@@ -1560,8 +1560,8 @@ async def serve_media(
         raise HTTPException(404, "Datei nicht gefunden.")
     # no-cache: Browser müssen nach Datei-Ersatz revalidieren (304 = kein Datentransfer)
     headers = {"Cache-Control": "no-cache"}
-    if media.media_type == "applet":
-        # Applets (text/html) explizit als HTML markieren — kein MIME-Guessing.
+    if media.media_type == "applet" and not filename.lower().endswith(".svg"):
+        # HTML-Applets explizit als HTML markieren — kein MIME-Guessing.
         # Auto-Size-Boilerplate wird serverseitig injiziert (wirkt auch für manuelle Edits).
         headers["X-Content-Type-Options"] = "nosniff"
         raw = path.read_text(encoding="utf-8")

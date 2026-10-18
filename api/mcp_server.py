@@ -291,8 +291,11 @@ server = MCPServer(
         " Default NICHT für Studenten sichtbar — is_visible=True zum "
         "Freischalten), edit_content (stellenweise Edits ODER kompletter "
         "Content-Ersatz, plus Titel/Kurzfassung), edit_applet (inkl. "
-        "Titel/Beschreibung), create_applet (HTML-Applets) und create_image "
-        "(Bilder per Data-URL oder öffentlicher URL). Übungsaufgaben: "
+        "Formatwechsel html↔svg, Titel/Beschreibung), create_applet "
+        "(HTML-/SVG-Applets) und create_image "
+        "(Bilder per Data-URL oder öffentlicher URL; SVG-Dateien werden "
+        "nicht rasterisiert, sondern als SVG-Applet gespeichert). "
+        "Übungsaufgaben: "
         "create_task (type 'text' oder 'mc' — Workspace-Aufgaben nur in der "
         "Kurs-Web-UI) "
         "und edit_task (bestehende Aufgaben, inkl. MC-Fragen-Ersatz). "
@@ -1124,7 +1127,8 @@ def _decode_data_url(source: str) -> bytes:
 # Wikimedia-Datei-URLs (Pfad /wikipedia/<lang>/… oder /wikimedia/<projekt>/…):
 # LLMs raten die Hash-Pfade und Thumbnail-Breiten häufig falsch (→ 404/400),
 # daher wird die Datei NACH NAME über die MediaWiki-API aufgelöst (kanonische
-# URL; große Bilder/SVGs kommen als Thumbnail mit erlaubter Breite zurück).
+# URL; große Bilder kommen als Thumbnail mit erlaubter Breite zurück, SVGs
+# als ORIGINALE Vektor-Quelle — die thumburl wäre eine rasterisierte PNG).
 _WIKIMEDIA_PROJECTS = {
     "commons", "meta", "species", "wikibooks", "wikinews",
     "wikiquote", "wikisource", "wikiversity", "wikidata",
@@ -1186,7 +1190,11 @@ async def _resolve_wikimedia_url(client: httpx.AsyncClient, api_host: str, filen
     pages = data.get("query", {}).get("pages") or {}
     page = next(iter(pages.values()), {})
     info = (page.get("imageinfo") or [{}])[0]
-    target = info.get("thumburl") or info.get("url")
+    # SVG: Original-Vektor-Quelle (die thumburl wäre eine rasterisierte PNG).
+    if info.get("mime") == "image/svg+xml":
+        target = info.get("url")
+    else:
+        target = info.get("thumburl") or info.get("url")
     if not target:
         raise McpToolError(
             f"Datei 'File:{filename}' existiert nicht auf {api_host} — Dateiname prüfen."
@@ -1288,16 +1296,18 @@ async def read_image(course_id: int, ref: Union[int, str], ctx: Context) -> list
 # ─── Markdown-Manual + Write-Tools (Tutor/Prof) ────────────
 
 APPLET_MANUAL = """\
-Interaktive Applets = SELF-CONTAINED-HTML-Dokumente, die im Kurs-Markdown
+Applets = SELF-CONTAINED-HTML- oder SVG-Dokumente, die im Kurs-Markdown
 wie Bilder eingebunden werden:
 
-    ![Titel](/media/<course_id>/<datei>)   (z. B. ![](…/course_3/ab12.html))
+    ![Titel](/media/<course_id>/<datei>)   (z. B. ![](…/course_3/ab12.html)
+                                           oder ![](…/course_3/ab12.svg))
 
-Größe steuern direkt nach dem Snippet: {height=X} = Max-Höhe in Pixeln,
-{zoom=X} = Zoom-Faktor des Applet-Inhalts.
+Größe steuern direkt nach dem Snippet: {height=X} = Max-Höhe in Pixeln
+(HTML und SVG), {zoom=X} = Zoom-Faktor des Applet-Inhalts (nur HTML).
 
-Harte Regeln (das Applet läuft in einem sandboxed Iframe, nur allow-scripts):
-- KOMPLETTES HTML-Dokument: <!DOCTYPE html> … </html>, ALLES CSS in einem
+Format "html" — interaktives Applet, läuft in einem sandboxed Iframe
+(nur allow-scripts):
+- KOMPLETTES HTML-DOKUMENT: <!DOCTYPE html> … </html>, ALLES CSS in einem
   <style>-Block im <head>, ALLES JS in <script>-Blöcken im <body>.
   Keine ES-Module (kein type="module"), keine Import-Maps.
 - NUR Vanilla JS, Canvas, SVG, CSS plus die LOKAL gespiegelten Libs (KEIN CDN):
@@ -1315,7 +1325,7 @@ Harte Regeln (das Applet läuft in einem sandboxed Iframe, nur allow-scripts):
 - Mathematische Formeln: KaTeX (katex.renderToString("…", {displayMode: true})),
   niemals rohen LaTeX-Quelltext anzeigen.
 
-Design (Applets werden rahmenlos mit transparentem Hintergrund eingebettet):
+Design (HTML-Applets werden rahmenlos mit transparentem Hintergrund eingebettet):
 - PLATZSPAREND: keine Karten/großes Padding am Root (≤ 8 px), das Haupt-
   Visualisierungsfenster reicht bis an die Ränder; Steuerungen als kompaktes
   Overlay oder schmale Leiste (1–2 Zeilen), keine großen Bedienbereiche.
@@ -1332,17 +1342,37 @@ Design (Applets werden rahmenlos mit transparentem Hintergrund eingebettet):
 - requestAnimationFrame für Animationen (keine Busy-Loops); Chart.js:
   maintainAspectRatio: false, Plotly: {responsive: true}.
 
-Stellenweise Änderungen an BESTEHENDEN Applets: „html_edits“ — Liste von
+Format "svg" — statische ODER animierte Vektorgrafik, rendert als <img>
+(KEIN JavaScript, keine Interaktion — nur SMIL/CSS-Animation):
+- ROTES <svg>-Element als Wurzel (KEIN HTML-Dokument), mit
+  xmlns="http://www.w3.org/2000/svg" und viewBox (z. B. viewBox="0 0 800 600");
+  width/height weglassen (Größe über Seitenverhältnis, responsiv).
+- KEIN <script>, KEINE Event-Handler (onclick="…"), KEIN <foreignObject>,
+  KEIN iframe/object/embed, KEINE externen Referenzen (keine http(s)-URLs,
+  keine data:text/… in href/src).
+- Animation: SMIL (<animate>, <animateTransform>, <set>) oder CSS
+  @keyframes in einem <style>-Block IM SVG.
+- Formeln als <text>/<tspan> (kein LaTeX-Rendering — vereinfacht als Text mit
+  Unicode-Symbolen, z. B. H(X) = −Σ p(x)·log₂ p(x)).
+- Braucht die Figur Interaktion (Slider, Buttons, …)? Dann Format "html"
+  statt "svg" wählen.
+
+Stellenweise Änderungen an BESTEHENDEN Applets: „media_edits“ — Liste von
 Edit-Objekten {"op": "replace_span", "old": "…", "new": "…"}, wobei "old" exakt
-einmal im bestehenden HTML vorkommen muss (s. Tool edit_applet).
+einmal im bestehenden Code vorkommen muss (s. Tool edit_applet).
+
+Formatwechsel (html↔svg): edit_applet mit "format" — die Datei wird
+umbenannt und alle Markdown-Referenzen repariert. Der Code muss im selben
+Aufruf konvertiert werden: "media" mit dem umgewandelten Code im NEUEN
+Format anliefern (z. B. möglichst getreue Umwandlung HTML → SVG).
 """
 
 
 def _apply_html_edits(html: str, edits: object) -> str:
-    """Stellenweise Edits am Applet-HTML — nur replace_span mit eindeutig
-    vorkommendem Anker (Analogie: services/content_edits.py)."""
+    """Stellenweise Edits am Applet-Code (HTML/SVG) — nur replace_span mit
+eindeutig vorkommendem Anker (Analogie: services/content_edits.py)."""
     if not isinstance(edits, list) or not edits:
-        raise McpToolError("'html_edits' muss eine (nicht-leere) Liste von Edit-Objekten sein.")
+        raise McpToolError("'media_edits' muss eine (nicht-leere) Liste von Edit-Objekten sein.")
     spans: list[tuple[int, int, str]] = []
     for i, edit in enumerate(edits):
         if not isinstance(edit, dict) or str(edit.get("op") or "").strip() != "replace_span":
@@ -1404,8 +1434,8 @@ async def markdown_manual(ctx: Context, kind: str = "script") -> str:
     von Skript-, Folien-, Applet- oder Aufgaben-Inhalten aufrufen.
 
     kind: "script" (Skript-Kapitel; GILT AUCH FÜR AUFGABENTEXT: Aufgabe/
-    Template/Musterlösung) | "slides" (Slide-Decks) | "applet" (interaktive
-    HTML-Applets)."""
+    Template/Musterlösung) | "slides" (Slide-Decks) | "applet" (Applets:
+    HTML/SVG)."""
     with Session(engine) as session:
         _auth(ctx, session, None, tool_name="markdown_manual")
         if kind == "slides":
@@ -1419,8 +1449,8 @@ async def markdown_manual(ctx: Context, kind: str = "script") -> str:
 
 @mcp_tool
 async def read_applet(course_id: int, ref: Union[int, str], ctx: Context) -> str:
-    """Interaktives Applet (HTML-Quelle). ref = Applet-ID oder exakter Titel
-    (Liste: course_overview → applets).
+    """Applet-Quelle (HTML oder SVG; "format" sagt welches). ref = Applet-ID
+    oder exakter Titel (Liste: course_overview → applets).
 
     Nur für Tutor/Prof: Applet-Quellen sind kursleiterorientiert.
     Einbindung im Kurs-Markdown s. markdown_manual("applet")."""
@@ -1440,7 +1470,8 @@ async def read_applet(course_id: int, ref: Union[int, str], ctx: Context) -> str
             "title": media.title,
             "llm_description": media.llm_description or "",
             "url": media_service.media_url(media),
-            "html": path.read_text(encoding="utf-8"),
+            "format": media_service.applet_format_of(media.file_path),
+            "media": path.read_text(encoding="utf-8"),
         })
 
 
@@ -1582,80 +1613,101 @@ async def edit_applet(
     course_id: int,
     ref: Union[int, str],
     ctx: Context,
-    html: Optional[str] = None,
-    html_edits: Optional[list[dict]] = None,
+    media: Optional[str] = None,
+    media_edits: Optional[list[dict]] = None,
     title: Optional[str] = None,
     description: Optional[str] = None,
+    format: Optional[str] = None,
 ) -> str:
-    """Ändert HTML, Titel oder Beschreibung eines bestehenden Applets.
+    """Ändert Code, Format, Titel oder Beschreibung eines bestehenden Applets.
     ref = Applet-ID oder exakter Titel (Quelle zuerst mit read_applet lesen).
 
-    HTML: genau EINES angeben (oder weglassen, wenn nur Titel/Beschreibung):
-    - html: komplette neue HTML-Datei (größere Überarbeitungen)
-    - html_edits: stellenweise Edits, nur {"op": "replace_span", "old": "…",
-      "new": "…"} — "old" muss EXAKT EINMAL im bestehenden HTML vorkommen
+    Code: genau EINES angeben (oder weglassen, wenn nur Format/Metadaten):
+    - media: kompletter neuer Code (größere Überarbeitungen)
+    - media_edits: stellenweise Edits, nur {"op": "replace_span", "old": "…",
+      "new": "…"} — "old" muss EXAKT EINMAL im bestehenden Code vorkommen
       (kurze, eindeutige Snippets)
+
+    format: "html" ODER "svg" — Formatwechsel (Datei-Umbenennung mit gleicher
+    UUID + Reparatur aller Markdown-Referenzen). Der Code bleibt dabei
+    UNGEKONVERTIERT, außer im selben Aufruf konvertiert: "media" mit dem
+    Code im NEUEN Format anliefern (empfohlen, z. B. möglichst getreue
+    Umwandlung). Ohne konvertierten Code ist das Applet vorübergehend
+    ungültig — der nächste gültige Code-Ersatz im neuen Format repariert es.
 
     title: neuer Applet-Titel (optional). description: neue Kurzbeschreibung,
     was das Applet zeigt (optional; "" = zurücksetzen).
 
     Nach dem Edit wird automatisch die Version „MCP Edit“ (neuer Zustand)
     angelegt — der Zustand vorher ist die Version davor
-    (Rückgängig: list_versions + restore_version). Syntax/Sandbox-Regeln:
+    (Rückgängig: list_versions + restore_version). Syntax-Regeln:
     markdown_manual("applet")."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="edit_applet")
-        full_html = bool(html)
-        html_partial = isinstance(html_edits, list) and bool(html_edits)
-        if full_html and html_partial:
-            raise McpToolError("Genau eines angeben: 'html' (kompletter Ersatz) ODER 'html_edits' (stellenweise Edits).")
-        if title is None and description is None and not (full_html or html_partial):
-            raise McpToolError("Nichts zu ändern: 'html', 'html_edits', 'title' oder 'description' angeben.")
+        full_media = bool(media)
+        media_partial = isinstance(media_edits, list) and bool(media_edits)
+        if full_media and media_partial:
+            raise McpToolError("Genau eines angeben: 'media' (kompletter Ersatz) ODER 'media_edits' (stellenweise Edits).")
+        if format is not None and format not in ("html", "svg"):
+            raise McpToolError("'format' muss 'html' oder 'svg' sein.")
+        if title is None and description is None and format is None and not (full_media or media_partial):
+            raise McpToolError("Nichts zu ändern: 'media', 'media_edits', 'title', 'description' oder 'format' angeben.")
         if title is not None and not title.strip():
             raise McpToolError("Der Titel darf nicht leer sein.")
-        media = _resolve(session, CourseMedia, course_id, ref, "Applet")
-        if media.media_type != "applet":
-            raise McpToolError(f"Medium '{media.title}' ist kein Applet.")
-        path = media_service.MEDIA_DIR / media.file_path
+        applet = _resolve(session, CourseMedia, course_id, ref, "Applet")
+        if applet.media_type != "applet":
+            raise McpToolError(f"Medium '{applet.title}' ist kein Applet.")
+        parts = []
+        if format is not None and format != media_service.applet_format_of(applet.file_path):
+            # Formatwechsel ERST (Datei wird umbenannt), dann evtl. Content.
+            # Vorher Sicherheits-Snapshot (Rollback über Versions-History) —
+            # analog Studio-Endpoint; ohne Skip, da ein reiner Wechsel
+            # ansonsten spurlos bleibt (Snapshot wäre identisch).
+            version_service.snapshot_current(
+                session, user, "applet", int(applet.id), name=f"Formatwechsel → {format}")
+            media_service.switch_applet_format(session, course_id, applet, format)
+            parts.append(f"Format auf '{format}' gewechselt (Datei umbenannt, Referenzen repariert)")
+        path = media_service.MEDIA_DIR / applet.file_path
         if not path.is_file():
             raise McpToolError("Applet-Datei fehlt (Element defekt).")
-        old_html = path.read_text(encoding="utf-8")
-        if full_html:
-            new_html = html
-            changed = "HTML vollständig ersetzt"
-        elif html_partial:
-            new_html = _apply_html_edits(old_html, html_edits)
-            changed = f"{len(html_edits)} HTML-Edit(s) angewendet"
+        old_content = path.read_text(encoding="utf-8")
+        if full_media:
+            new_content = media
+        elif media_partial:
+            new_content = _apply_html_edits(old_content, media_edits)
         else:
-            new_html = None
-            changed = "nur Metadaten geändert"
-        meta_changed = []
-        if title is not None:
-            media.title = title.strip()
-            meta_changed.append("Titel")
-        if description is not None:
-            media.llm_description = description.strip() or None
-            meta_changed.append("Beschreibung")
-        if meta_changed:
-            changed += "+ " + "/".join(meta_changed)
-        if new_html is not None:
+            new_content = None
+        if new_content is not None:
             try:
-                media_service.validate_applet_html(new_html)
+                rel_path, mime, size = media_service.replace_applet(applet.file_path, new_content)
             except HTTPException as e:
                 raise McpToolError(str(e.detail))
-            rel_path, mime, size = media_service.replace_applet(media.file_path, new_html)
-            media.file_path = rel_path
-            media.mime_type = mime
-            media.file_size = size
-        session.add(media)
+            applet.file_path = rel_path
+            applet.mime_type = mime
+            applet.file_size = size
+            parts.append(
+                f"{len(media_edits)} Edit(s) angewendet" if media_partial
+                else "Code vollständig ersetzt"
+            )
+        if title is not None:
+            applet.title = title.strip()
+        if description is not None:
+            applet.llm_description = description.strip() or None
+        if title is not None or description is not None:
+            parts.append("Metadaten: " + "/".join(
+                n for n, v in (("Titel", title), ("Beschreibung", description)) if v is not None))
+        if not parts:
+            parts.append("nichts geändert")
+        session.add(applet)
         session.commit()
         sync_media_usages(session, course_id)
-        version_note = _mcp_version_note(session, user, "applet", int(media.id))
+        version_note = _mcp_version_note(session, user, "applet", int(applet.id))
         return _json({
-            "id": media.id,
-            "title": media.title,
-            "url": media_service.media_url(media),
-            "changed": changed,
+            "id": applet.id,
+            "title": applet.title,
+            "url": media_service.media_url(applet),
+            "format": media_service.applet_format_of(applet.file_path),
+            "changed": "; ".join(parts),
             **({"hint": "Die Markdown-Referenz im Kursinhalt zeigt weiter auf das Applet (Pfad unverändert) — bei Titelwechsel den Alt-Text der Referenz ggf. per edit_content anpassen."} if title is not None else {}),
             "note": version_note,
         })
@@ -1665,25 +1717,30 @@ async def edit_applet(
 async def create_applet(
     course_id: int,
     title: str,
-    html: str,
+    media: str,
     ctx: Context,
     description: Optional[str] = None,
+    format: Optional[str] = "html",
 ) -> str:
-    """Legt ein neues interaktives HTML-Applet im Kurs an.
+    """Legt ein neues Applet (HTML oder SVG) im Kurs an.
 
-    html = komplettes self-contained HTML-Dokument (Regeln:
-    markdown_manual("applet")). description = 2–4 Sätze, was das Applet
-    zeigt (optional). Der Rückgabewert enthält die fertige Markdown-Referenz
-    zur Einbindung in Skript/Folien: ![<Titel>](/media/<course_id>/<datei>)."""
+    media = kompletter self-contained Code (Regeln: markdown_manual("applet")).
+    format = "html" (Default) ODER "svg". description = 2–4 Sätze, was das
+    Applet zeigt (optional). Der Rückgabewert enthält die fertige
+    Markdown-Referenz zur Einbindung in Skript/Folien:
+    ![<Titel>](/media/<course_id>/<datei>)."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="create_applet")
         if not (title or "").strip():
             raise McpToolError("Der Titel darf nicht leer sein.")
+        fmt = (format or "html").strip().lower()
+        if fmt not in ("html", "svg"):
+            raise McpToolError("'format' muss 'html' oder 'svg' sein.")
         try:
-            rel_path, mime, size = media_service.save_applet(course_id, html or "")
+            rel_path, mime, size = media_service.save_applet(course_id, media or "", fmt)
         except HTTPException as e:
             raise McpToolError(str(e.detail))
-        media = CourseMedia(
+        applet = CourseMedia(
             course_id=course_id,
             title=title.strip(),
             file_path=rel_path,
@@ -1693,18 +1750,56 @@ async def create_applet(
             llm_description=(description or "").strip() or None,
             created_by=user.id,  # type: ignore[arg-type]
         )
-        session.add(media)
+        session.add(applet)
         session.commit()
-        session.refresh(media)
+        session.refresh(applet)
         sync_media_usages(session, course_id)
-        version_service.mark_created(session, user, "applet", int(media.id))
+        version_service.mark_created(session, user, "applet", int(applet.id))
         return _json({
-            "id": media.id,
-            "title": media.title,
-            "url": media_service.media_url(media),
-            "markdown_reference": f"![{media.title}]({media_service.media_url(media)})",
+            "id": applet.id,
+            "title": applet.title,
+            "url": media_service.media_url(applet),
+            "format": fmt,
+            "markdown_reference": f"![{applet.title}]({media_service.media_url(applet)})",
             "note": "Applet anlegen UND im Kurs einbinden: die Markdown-Referenz per edit_content in ein Skript-Kapitel oder Slide-Deck einfügen (Syntax: markdown_manual).",
         })
+
+
+def _create_svg_applet(
+    session: Session, user, course_id: int, title: str, data: bytes,
+    description: Optional[str],
+) -> str:
+    """SVG-Eingang in create_image → SVG-Applet (Vektor, nicht rasterisiert)."""
+    try:
+        rel_path, mime, size = media_service.save_svg_upload(course_id, data)
+    except HTTPException as e:
+        raise McpToolError(str(e.detail))
+    applet = CourseMedia(
+        course_id=course_id,
+        title=title.strip(),
+        file_path=rel_path,
+        media_type="applet",
+        mime_type=mime,
+        file_size=size,
+        llm_description=(description or "").strip() or None,
+        created_by=user.id,  # type: ignore[arg-type]
+    )
+    session.add(applet)
+    session.commit()
+    session.refresh(applet)
+    sync_media_usages(session, course_id)
+    version_service.mark_created(session, user, "applet", int(applet.id))
+    return _json({
+        "id": applet.id,
+        "title": applet.title,
+        "url": media_service.media_url(applet),
+        "format": "svg",
+        "markdown_reference": f"![{applet.title}]({media_service.media_url(applet)})",
+        "note": "SVG-Datei als SVG-Applet gespeichert (Vektor, nicht rasterisiert). "
+                "Einbinden: Markdown-Referenz per edit_content in Skript/Folien "
+                "einfügen (Syntax: markdown_manual). Konvertierung zu "
+                "interaktivem HTML: edit_applet (format='html').",
+    })
 
 
 @mcp_tool
@@ -1722,6 +1817,10 @@ async def create_image(
     lokalen/internen Adressen). description = 2–4 Sätze, was das Bild zeigt
     (optional). Der Rückgabewert enthält die fertige Markdown-Referenz zum
     Einbinden in Skript/Folien: ![<Titel>](/media/<course_id>/<datei>).
+
+    SVG (Data-URL oder URL): wird NICHT rasterisiert, sondern als editierbares
+    SVG-Applet gespeichert (Media-Format „svg“). Konvertierung zu interaktivem
+    HTML: edit_applet (format='html').
 
     Wikimedia-URLs (upload.wikimedia.org / thumb.wikimedia.org): die Datei
     wird AUTOMATISCH über die MediaWiki-API nach Dateiname aufgelöst — der
@@ -1746,7 +1845,12 @@ async def create_image(
             raise McpToolError("Leeres Bild.")
         if len(data) > media_service.MAX_UPLOAD_BYTES:
             raise McpToolError(f"Bild zu groß (max. {media_service.MAX_UPLOAD_BYTES // (1024 * 1024)} MB).")
-        ext, _fmt = _detect_image(data)
+        try:
+            ext, _fmt = _detect_image(data)
+        except McpToolError:
+            # Kein Raster-Format → SVG-Versuch (sanitize_svg validiert hart
+            # und lehnt alles Nicht-SVG mit klarer Fehlermeldung ab).
+            return _create_svg_applet(session, user, course_id, title, data, description)
         try:
             rel_path, mime, size = media_service.save_upload(course_id, f"img{ext}", data)
         except HTTPException as e:

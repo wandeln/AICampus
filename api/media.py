@@ -13,6 +13,7 @@ nicht ohne Kurs-Membership abrufbar sind.
 import base64
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -290,17 +291,22 @@ async def upload_media(
     session: Session = Depends(get_session),
     user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
-    """Medium hochladen (PNG/JPG/WebP/GIF, max. 5 MB)."""
+    """Medium hochladen (PNG/JPG/WebP/GIF, max. 5 MB; SVG → Applet, sanitized)."""
     user, _ = user_and_course
     data = await file.read()
-    rel_path, mime, size = media_service.save_upload(course_id, file.filename or "upload.png", data)
+    if Path(file.filename or "").suffix.lower() == ".svg":
+        rel_path, mime, size = media_service.save_svg_upload(course_id, data)
+        media_type = "applet"
+    else:
+        rel_path, mime, size = media_service.save_upload(course_id, file.filename or "upload.png", data)
+        media_type = "image"
 
     default_title = (file.filename or "Medium").rsplit(".", 1)[0]
     media = CourseMedia(
         course_id=course_id,
         title=(title or "").strip() or default_title,
         file_path=rel_path,
-        media_type="image",
+        media_type=media_type,
         mime_type=mime,
         file_size=size,
         llm_description=(llm_description or "").strip() or None,
@@ -356,28 +362,32 @@ async def generate_applet_llm(
     session: Session = Depends(get_session),
     _user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
-    """LLM erzeugt/ändert Applet-HTML + Titel + Beschreibung (speichert NICHT).
+    """LLM erzeugt/ändert Applet-Code (HTML oder SVG) + Titel + Beschreibung (speichert NICHT).
 
-    Body: {"prompt": str, "existing_html": str (optional, für Refinement),
+    Body: {"prompt": str, "format": "html"|"svg" (optional, Default html),
+           "existing_media": str (optional, für Refinement),
            "current_title": str (optional — vorhandener Titel, Kontext für das LLM),
            "current_description": str (optional — vorhandene Beschreibung, Kontext für das LLM),
-           "generate_fields": {"title": true, "description": true, "html": true}
+           "generate_fields": {"title": true, "description": true, "media": true}
            (optional — Default: alle; das LLM darf nur die aktivierten
            Felder ändern, nicht aktivierte bleiben unverändert),
            "media_id": int (optional — Bild-Medium aus der Bibliothek als Referenz),
            "image_data_url": str (optional — hochgeladenes/gezeichnetes Bild),
-           "console_errors": list[str] (optional — Konsole-Fehler aus der Preview)}
+           "console_errors": list[str] (optional — Konsole-Fehler aus der Preview, nur HTML)}
     media_id und image_data_url sind gegenseitig exklusiv.
     """
     body = await request.json()
     prompt = (body.get("prompt") or "").strip()
     if not prompt:
         raise HTTPException(400, "Bitte gib an, was das Applet zeigen soll.")
+    fmt = (body.get("format") or "html").strip().lower()
+    if fmt not in ("html", "svg"):
+        raise HTTPException(400, "„format“ muss „html“ oder „svg“ sein.")
     gen = body.get("generate_fields", {}) or {}
-    generate_fields = [f for f in ("title", "description", "html") if gen.get(f)]
+    generate_fields = [f for f in ("title", "description", "media") if gen.get(f)]
     if not generate_fields:
         raise HTTPException(400, "Keine Felder angefordert.")
-    existing_html = (body.get("existing_html") or "").strip()
+    existing_media = (body.get("existing_media") or "").strip()
     current_title = (body.get("current_title") or "").strip()
     current_description = (body.get("current_description") or "").strip()
     raw_media_id = body.get("media_id")
@@ -425,12 +435,13 @@ async def generate_applet_llm(
     result = await llm_service.generate_applet(
         prompt=prompt,
         generate_fields=generate_fields,
-        existing_html=existing_html,
+        existing_media=existing_media,
         current_title=current_title,
         current_description=current_description,
         image_data_url=image_url,
         console_errors=console_errors,
         config=llm_cfg,
+        format=fmt,
     )
     if not result.get("success"):
         raise HTTPException(502, f"LLM-Fehler: {result.get('error', 'Unbekannter Fehler')}")
@@ -441,23 +452,25 @@ async def generate_applet_llm(
         response["title"] = (data.get("title") or "").strip()
     if "description" in generate_fields:
         response["description"] = (data.get("description") or "").strip()
-    if "html" in generate_fields:
-        html = (data.get("html") or "").strip()
-        html_edits = data.get("html_edits")
-        if not html and html_edits:
-            if not existing_html:
-                raise HTTPException(400, "LLM lieferte stellenweise Edits („html_edits“), aber es existiert noch kein Applet zum Editieren. Bitte erneut versuchen.")
-            html = _apply_html_edits(existing_html, html_edits)
-            response["edits_applied"] = len(html_edits)
-        if html:
+    if "media" in generate_fields:
+        media_content = (data.get("media") or "").strip()
+        media_edits = data.get("media_edits")
+        if not media_content and media_edits:
+            if not existing_media:
+                raise HTTPException(400, "LLM lieferte stellenweise Edits („media_edits“), aber es existiert noch kein Applet zum Editieren. Bitte erneut versuchen.")
+            media_content = _apply_html_edits(existing_media, media_edits)
+            response["edits_applied"] = len(media_edits)
+        if media_content:
+            if len(media_content.encode("utf-8")) > media_service.MAX_APPLET_BYTES:
+                raise HTTPException(502, f"Das LLM hat einen Applet-Code geliefert, der das Limit von {media_service.MAX_APPLET_BYTES // 1024} KB überschreitet. Bitte mit einer präziseren Anfrage erneut versuchen.")
             try:
-                media_service.validate_applet_html(html)
+                media_service.validate_applet_content(media_content, fmt)
             except HTTPException as e:
-                raise HTTPException(502, f"Das LLM hat kein gültiges Applet-HTML geliefert: {e.detail}")
-            response["html"] = html
-        elif not existing_html:
-            # Neues Applet: ohne HTML wäre nichts da — Code ist Pflicht.
-            raise HTTPException(502, "Das LLM hat weder „html“ noch „html_edits“ geliefert.")
+                raise HTTPException(502, f"Das LLM hat keinen gültigen Applet-Code geliefert: {e.detail}")
+            response["media"] = media_content
+        elif not existing_media:
+            # Neues Applet: ohne Code wäre nichts da — Code ist Pflicht.
+            raise HTTPException(502, "Das LLM hat weder „media“ noch „media_edits“ geliefert.")
         # sonst: LLM hat den Code-Schlüssel weggelassen → Code bleibt unverändert
     return response
 
@@ -469,9 +482,10 @@ async def create_applet_media(
     session: Session = Depends(get_session),
     user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
-    """Neues Applet-Medium anlegen (HTML aus dem Applet-Studio).
+    """Neues Applet-Medium anlegen (HTML oder SVG aus dem Applet-Studio).
 
-    Body: {"title": str, "llm_description": str, "html": str}
+    Body: {"title": str, "llm_description": str, "media": str,
+           "format": "html"|"svg" (optional, Default html)}
     """
     user, _ = user_and_course
     body = await request.json()
@@ -479,8 +493,11 @@ async def create_applet_media(
     if not title:
         raise HTTPException(400, "Titel darf nicht leer sein.")
     description = (body.get("llm_description") or "").strip()
+    fmt = (body.get("format") or "html").strip().lower()
+    if fmt not in ("html", "svg"):
+        raise HTTPException(400, "„format“ muss „html“ oder „svg“ sein.")
 
-    rel_path, mime, size = media_service.save_applet(course_id, body.get("html") or "")
+    rel_path, mime, size = media_service.save_applet(course_id, body.get("media") or "", fmt)
 
     media = CourseMedia(
         course_id=course_id,
@@ -509,17 +526,18 @@ async def update_applet_media(
     session: Session = Depends(get_session),
     _user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
-    """Ersetzt das HTML eines Applets (gleicher Pfad → Markdown-Referenzen bleiben gültig).
+    """Ersetzt den Code eines Applets (gleicher Pfad → Markdown-Referenzen
+    bleiben gültig). Das Format leitet sich aus der Datei-Extension ab.
 
-    Body: {"html": str, "title": str (optional), "llm_description": str (optional)}
+    Body: {"media": str (optional), "title": str (optional), "llm_description": str (optional)}
     """
     media = _get_media(session, course_id, media_id)
     if media.media_type != "applet":
         raise HTTPException(400, "Dieses Medium ist kein Applet.")
     body = await request.json()
 
-    if body.get("html"):
-        rel_path, mime, size = media_service.replace_applet(media.file_path, body["html"])
+    if body.get("media"):
+        rel_path, mime, size = media_service.replace_applet(media.file_path, body["media"])
         media.file_path = rel_path
         media.mime_type = mime
         media.file_size = size
@@ -546,7 +564,7 @@ async def get_applet_media(
     session: Session = Depends(get_session),
     _user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
-    """Applet-Quelle (HTML + Metadaten) für das Applet-Studio."""
+    """Applet-Quelle (HTML oder SVG + Metadaten) für das Applet-Studio."""
     media = _get_media(session, course_id, media_id)
     if media.media_type != "applet":
         raise HTTPException(400, "Dieses Medium ist kein Applet.")
@@ -557,8 +575,50 @@ async def get_applet_media(
         "id": media.id,
         "title": media.title,
         "llm_description": media.llm_description or "",
-        "html": path.read_text(encoding="utf-8"),
+        "media": path.read_text(encoding="utf-8"),
+        "format": media_service.applet_format_of(media.file_path),
         "url": media_service.media_url(media),
+    }
+
+
+@router.post("/courses/{course_id}/media/{media_id}/applet-format")
+async def switch_applet_format_endpoint(
+    course_id: int,
+    media_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
+):
+    """Format eines Applets wechseln (html↔svg).
+
+    Benennt die Datei um (gleiche UUID, andere Extension) und repariert die
+    Markdown-Referenzen in Skript/Folien/Aufgaben. Der Code bleibt
+    unverändert — die eigentliche Umwandlung macht das LLM (Prompt im
+    Applet-Studio). Vorher wird eine Version „Formatwechsel“ angelegt
+    (Rückgängig: list_versions + restore_version).
+
+    Body: {"format": "html"|"svg"}
+    """
+    user, _ = user_and_course
+    media = _get_media(session, course_id, media_id)
+    if media.media_type != "applet":
+        raise HTTPException(400, "Dieses Medium ist kein Applet.")
+    body = await request.json()
+    fmt = (body.get("format") or "").strip().lower()
+    if fmt not in ("html", "svg"):
+        raise HTTPException(400, "„format“ muss „html“ oder „svg“ sein.")
+    old_format = media_service.applet_format_of(media.file_path)
+    if old_format == fmt:
+        raise HTTPException(400, f"Das Applet hat bereits das Format „{fmt}“.")
+    # Sicherheits-Snapshot des alten Zustands (Rollback über die Versions-History)
+    version_service.snapshot_current(session, user, "applet", media.id, name=f"Formatwechsel → {fmt}")
+    media_service.switch_applet_format(session, course_id, media, fmt)
+
+    target = "ein HTML-Applet" if fmt == "html" else "ein SVG"
+    counts = media_service.reference_counts(session, course_id)
+    return {
+        "message": f"Format auf „{fmt}“ gewechselt — bitte passe den Code entsprechend an (manuell oder per LLM, z. B. „Bitte konvertiere das folgende {old_format} möglichst getreu in {target}“).",
+        "media": _media_to_dict(media, [], counts),
     }
 
 
@@ -575,17 +635,24 @@ async def generate_media_metadata(
     if not path.is_file():
         raise HTTPException(404, "Datei nicht gefunden.")
 
-    image_base64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    # SVG (Vektor) zuerst rasterisieren — die Vision-API kann kein rohes SVG.
+    if media.mime_type == "image/svg+xml":
+        png = media_service.svg_to_png(path.read_bytes())
+        image_base64 = base64.b64encode(png).decode("ascii")
+        vision_mime = "image/png"
+    else:
+        image_base64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        vision_mime = media.mime_type or "image/png"
     llm_cfg = get_effective_llm_config(session, course_id)
 
     # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
-    # Session sie die gesamte Generierung; s. database/base.py). Der
+    # Session die DB-Connection die gesamte Generierung; s. database/base.py). Der
     # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
     session.rollback()
 
     result = await llm_service.describe_media_image(
         image_base64=image_base64,
-        mime_type=media.mime_type or "image/png",
+        mime_type=vision_mime,
         config=llm_cfg,
     )
     if not result.get("success"):
@@ -685,7 +752,10 @@ async def duplicate_applet_media(
     path = media_service.MEDIA_DIR / media.file_path
     if not path.is_file():
         raise HTTPException(404, "Datei nicht gefunden.")
-    rel_path, mime, size = media_service.save_applet(course_id, path.read_text(encoding="utf-8"))
+    rel_path, mime, size = media_service.save_applet(
+        course_id, path.read_text(encoding="utf-8"),
+        media_service.applet_format_of(media.file_path),
+    )
 
     new_media = CourseMedia(
         course_id=course_id,
