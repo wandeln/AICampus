@@ -1,0 +1,34 @@
+# SSH-Tunnel vom AICampus-Server zu venusberg.informatik.uni-bonn.de (LLM #2)
+#
+# Fördert den vLLM-Server (localhost:8000 auf venusberg, Modell
+# Qwen/Qwen3.8-27B-FP8) auf 0.0.0.0:8002 des AICampus-Servers.
+# Ergänzt aicampus-llm-tunnel.service (8001 -> venusberg:8001).
+#
+# Voraussetzungen:
+# - Key-Auth mit dem Default-Key /home/wandel/.ssh/id_ed25519
+# - UFW auf dem Host: Docker-Subnetze für Port 8002 freigeben (wie für
+#   8001, docs/installation.md §5)
+#
+# Installation:
+#   sudo cp aicampus-llm-tunnel.venusberg-qwen.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now aicampus-llm-tunnel.venusberg-qwen.service
+#   ss -tln | grep 8002
+#
+# Hinweis: War vorher ein manueller ssh-Prozess (nicht reboot-fest) —
+# vor dem Start der Unit den alten Prozess killen (Port-Konflikt).
+
+[Unit]
+Description=AICampus LLM SSH-Tunnel (0.0.0.0:8002 -> venusberg:8000)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wandel
+ExecStart=/usr/bin/ssh -N -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -L 0.0.0.0:8002:localhost:8000 wandel@venusberg.informatik.uni-bonn.de
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

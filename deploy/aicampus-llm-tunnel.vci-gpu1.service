@@ -1,0 +1,35 @@
+# SSH-Tunnel vom AICampus-Server zu vci-gpu1.informatik.uni-bonn.de (LLM)
+#
+# Fördert den vLLM-Server (localhost:8003 auf vci-gpu1, Modell
+# qwen3.8-27B) auf 0.0.0.0:8003 des AICampus-Servers. AICampus läuft
+# in einem Docker-Container und erreicht den Tunnel über
+# host.docker.internal — wie die venusberg-Tunnels (8001/8002).
+#
+# Voraussetzungen:
+# - Key-Auth: /home/wandel/.ssh/vci_gpu1_key (in vci-gpu1:authorized_keys)
+# - UFW auf dem Host: Docker-Subnetze für Port 8003 freigeben (wie für
+#   8001/8002, docs/installation.md §5), sonst droppt UFW den
+#   Container-Traffic auf den nicht-published Port:
+#     sudo ufw allow from 172.17.0.0/16 to any port 8003 proto tcp
+#     sudo ufw allow from 172.18.0.0/16 to any port 8003 proto tcp
+#
+# Installation:
+#   sudo cp aicampus-llm-tunnel.vci-gpu1.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now aicampus-llm-tunnel.vci-gpu1.service
+#   ss -tln | grep 8003
+
+[Unit]
+Description=AICampus LLM SSH-Tunnel (0.0.0.0:8003 -> vci-gpu1:8003)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wandel
+ExecStart=/usr/bin/ssh -N -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -i /home/wandel/.ssh/vci_gpu1_key -L 0.0.0.0:8003:localhost:8003 wandel@vci-gpu1.informatik.uni-bonn.de
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
