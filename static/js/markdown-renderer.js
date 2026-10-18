@@ -420,6 +420,12 @@ function isAppletSrc(src) {
   return /\.html?$/i.test(src) ||
     (/^https?:\/\//i.test(src) && !APPLET_IMAGE_EXT.test(src));
 }
+// Internes mp4-Video (eigene /media-URL) → natives <video>-Element mit
+// Controls (Play/Seek). Externe http(s)-Videos laufen über die Applet-Logik
+// (Iframe, s. isAppletSrc — mp4 ist keine Bild-Endung).
+function isVideoSrc(src) {
+  return !/^https?:\/\//i.test(src) && /\.(mp4|webm)$/i.test(src);
+}
 function appletSandboxAttr(src) {
   if (!/^https?:\/\//i.test(src)) return "allow-scripts";
   // YouTube-Player: der „Zu YouTube“-Link braucht allow-popups. Vollbild ist
@@ -1178,10 +1184,11 @@ async function renderMarkdown(text, targetElement, options = {}) {
           appletFigures.push({ alt, src, zoom: a.zoom, height: a.height });
           repl = `%%APPLETFIG_${appletFigures.length - 1}%%`;
         } else if (!isAppletSrc(src) && !a.frag && a.zoom === null &&
-                   (a.height !== null || alt.trim() !== '')) {
+                   (a.height !== null || alt.trim() !== '' || isVideoSrc(src))) {
           // Bild mit Max-Höhe und/oder Caption (= Alt-Text, ohne Nummer).
           // Ohne Attribut UND ohne Alt-Text bleibt das Bild literal
-          // (normales marked-<img>), wie bisher.
+          // (normales marked-<img>), wie bisher — Videos brauchen immer
+          // einen Render-Pfad (<video>, kein <img>).
           plainFigures.push({ alt, src, height: a.height });
           repl = `%%PLAINFIG_${plainFigures.length - 1}%%`;
         }
@@ -1715,6 +1722,8 @@ async function renderMarkdown(text, targetElement, options = {}) {
     const dataMaxH = isApplet && !isExternalApplet && f.height != null ? ` data-max-h="${f.height}"` : '';
     const mediaTag = isApplet
       ? `<iframe src="${escapeHtml(effSrc)}" class="aicampus-applet${isVideo ? ' aicampus-video' : ''}" sandbox="${appletSandboxAttr(effSrc)}" loading="lazy" title="${safeAlt}"${dataZoom}${dataMaxH}${mediaStyle}></iframe>`
+      : isVideoSrc(f.src)
+      ? `<video src="${escapeHtml(f.src)}" controls preload="metadata"${mediaStyle}></video>`
       : `<img src="${escapeHtml(f.src)}" alt="${safeAlt}"${mediaStyle}>`;
     // Gezoomte Applets in einen overflow:hidden-Wrapper (sichtbare =
     // geskalte Höhe; transform ändert die Iframe-Layout-Box nicht). Initiale
@@ -1821,9 +1830,14 @@ async function renderMarkdown(text, targetElement, options = {}) {
   //      und/oder Caption (= Alt-Text, ohne Nummer) → <figure>;
   //      sonst simples <img> (wie ein normales marked-Bild).
   plainFigures.forEach((f, idx) => {
+    const isVid = isVideoSrc(f.src);
     const imgStyle = f.height != null ? ` style="max-height: ${f.height}px !important"` : '';
-    const imgTag = `<img src="${escapeHtml(f.src)}" alt="${escapeHtml(f.alt)}"${imgStyle}>`;
-    const imgHtml = (f.height != null || f.alt.trim())
+    const imgTag = isVid
+      ? `<video src="${escapeHtml(f.src)}" controls preload="metadata"${imgStyle}></video>`
+      : `<img src="${escapeHtml(f.src)}" alt="${escapeHtml(f.alt)}"${imgStyle}>`;
+    // Videos immer im <figure>-Wrapper (zentrierung/Margen), auch ohne
+    // Caption/Height.
+    const imgHtml = (isVid || f.height != null || f.alt.trim())
       ? `<figure class="aicampus-figure">${imgTag}` +
         (f.alt.trim() ? `<figcaption>${renderCaptionRef(f.alt.trim(), captionCtx)}</figcaption>` : '') +
         `</figure>`
@@ -1846,7 +1860,9 @@ async function renderMarkdown(text, targetElement, options = {}) {
       const safeAlt = escapeHtml(inner.alt);
       const style = inner.height != null ? ` style="max-height: ${inner.height}px !important"` : '';
       const mediaTag = isAppletSrc(inner.src)
-        ? `<iframe src="${safeAlt}" class="aicampus-applet" sandbox="${appletSandboxAttr(inner.src)}" loading="lazy" title="${safeAlt}"${style}></iframe>`
+        ? `<iframe src="${escapeHtml(inner.src)}" class="aicampus-applet" sandbox="${appletSandboxAttr(inner.src)}" loading="lazy" title="${safeAlt}"${style}></iframe>`
+        : isVideoSrc(inner.src)
+        ? `<video src="${escapeHtml(inner.src)}" controls preload="metadata"${style}></video>`
         : `<img src="${escapeHtml(inner.src)}" alt="${safeAlt}"${style}>`;
       const innerId = inner.label ? ` id="fig:${inner.label}"` : '';
       const letterPrefix = hasInnerLabel ? `${String.fromCharCode(97 + i)}) ` : '';

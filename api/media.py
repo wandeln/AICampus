@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import func
 from sqlmodel import Session, delete, select
 
@@ -291,14 +292,21 @@ async def upload_media(
     session: Session = Depends(get_session),
     user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
-    """Medium hochladen (PNG/JPG/WebP/GIF, max. 5 MB; SVG → Applet, sanitized)."""
+    """Medium hochladen (PNG/JPG/WebP/GIF, max. 5 MB; SVG → Applet, sanitized;
+    Video mp4/webm, max. 500 MB — chunkweise auf Disk, ohne RAM-Peak)."""
     user, _ = user_and_course
-    data = await file.read()
-    if Path(file.filename or "").suffix.lower() == ".svg":
-        rel_path, mime, size = media_service.save_svg_upload(course_id, data)
+    ext = Path(file.filename or "").suffix.lower()
+    if ext == ".svg":
+        rel_path, mime, size = media_service.save_svg_upload(course_id, await file.read())
         media_type = "applet"
+    elif ext in media_service.ALLOWED_VIDEO:
+        # run_in_threadpool: die Chunk-Reads laufen blockierend von der Spool-Datei
+        rel_path, mime, size = await run_in_threadpool(
+            media_service.save_video_upload, course_id, file.filename or "upload.mp4", file.file, file.size
+        )
+        media_type = "video"
     else:
-        rel_path, mime, size = media_service.save_upload(course_id, file.filename or "upload.png", data)
+        rel_path, mime, size = media_service.save_upload(course_id, file.filename or "upload.png", await file.read())
         media_type = "image"
 
     default_title = (file.filename or "Medium").rsplit(".", 1)[0]
@@ -331,10 +339,19 @@ async def replace_media_file(
     session: Session = Depends(get_session),
     _user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
-    """Ersetzt die Datei eines Mediums (gleicher Pfad → Markdown-Referenzen bleiben gültig)."""
+    """Ersetzt die Datei eines Mediums (gleicher Pfad → Markdown-Referenzen bleiben gültig).
+
+    Der Dateityp muss zum Mediumstyp passen (Video ← mp4/webm, Bild ← Raster).
+    """
     media = _get_media(session, course_id, media_id)
-    data = await file.read()
-    rel_path, mime, size = media_service.replace_file(media.file_path, file.filename or "upload.png", data)
+    if media.media_type == "video":
+        rel_path, mime, size = await run_in_threadpool(
+            media_service.replace_video_file, media.file_path, file.filename or "upload.mp4", file.file, file.size
+        )
+    else:
+        rel_path, mime, size = media_service.replace_file(
+            media.file_path, file.filename or "upload.png", await file.read()
+        )
 
     media.file_path = rel_path
     media.mime_type = mime
@@ -629,20 +646,36 @@ async def generate_media_metadata(
     session: Session = Depends(get_session),
     _user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
-    """Erzeugt per LLM Titel + Beschreibung für ein vorhandenes Medium und speichert sie."""
+    """Erzeugt per LLM Titel + Beschreibung für ein vorhandenes Medium und speichert sie.
+
+    Video (mp4): multimodale Analyse (Bilder + Tonspur) — nur bis
+    MAX_VIDEO_LLM_BYTES, darüber 400 (Titel/Beschreibung dann manuell).
+    """
     media = _get_media(session, course_id, media_id)
     path = media_service.MEDIA_DIR / media.file_path
     if not path.is_file():
         raise HTTPException(404, "Datei nicht gefunden.")
 
-    # SVG (Vektor) zuerst rasterisieren — die Vision-API kann kein rohes SVG.
-    if media.mime_type == "image/svg+xml":
-        png = media_service.svg_to_png(path.read_bytes())
-        image_base64 = base64.b64encode(png).decode("ascii")
-        vision_mime = "image/png"
+    is_video = (media.mime_type or "").startswith("video/")
+    vision_mime = "image/png"
+    if is_video:
+        if media.file_size > media_service.MAX_VIDEO_LLM_BYTES:
+            raise HTTPException(
+                400,
+                f"Video zu groß für die automatische Generierung "
+                f"(max. {media_service.MAX_VIDEO_LLM_BYTES // (1024 * 1024)} MB) — "
+                f"bitte Titel und Beschreibung manuell eingeben.",
+            )
+        media_base64 = base64.b64encode(path.read_bytes()).decode("ascii")
     else:
-        image_base64 = base64.b64encode(path.read_bytes()).decode("ascii")
-        vision_mime = media.mime_type or "image/png"
+        # SVG (Vektor) zuerst rasterisieren — die Vision-API kann kein rohes SVG.
+        if media.mime_type == "image/svg+xml":
+            png = media_service.svg_to_png(path.read_bytes())
+            media_base64 = base64.b64encode(png).decode("ascii")
+            vision_mime = "image/png"
+        else:
+            media_base64 = base64.b64encode(path.read_bytes()).decode("ascii")
+            vision_mime = media.mime_type or "image/png"
     llm_cfg = get_effective_llm_config(session, course_id)
 
     # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
@@ -650,11 +683,12 @@ async def generate_media_metadata(
     # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
     session.rollback()
 
-    result = await llm_service.describe_media_image(
-        image_base64=image_base64,
-        mime_type=vision_mime,
-        config=llm_cfg,
-    )
+    if is_video:
+        result = await llm_service.describe_media_video(video_base64=media_base64, config=llm_cfg)
+    else:
+        result = await llm_service.describe_media_image(
+            image_base64=media_base64, mime_type=vision_mime, config=llm_cfg
+        )
     if not result.get("success"):
         raise HTTPException(502, f"LLM-Fehler: {result.get('error', 'Unbekannter Fehler')}")
 

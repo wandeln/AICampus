@@ -27,6 +27,7 @@ Datenschutz (bewusste Tool-Whitelist, keine generischen Read-Tools):
 import base64
 import contextvars
 import functools
+import io
 import ipaddress
 import json
 import logging
@@ -293,8 +294,9 @@ server = MCPServer(
         "Content-Ersatz, plus Titel/Kurzfassung), edit_applet (inkl. "
         "Formatwechsel html↔svg, Titel/Beschreibung), create_applet "
         "(HTML-/SVG-Applets) und create_image "
-        "(Bilder per Data-URL oder öffentlicher URL; SVG-Dateien werden "
-        "nicht rasterisiert, sondern als SVG-Applet gespeichert). "
+        "(Bilder und Videos (mp4/WebM) per Data-URL oder öffentlicher URL; "
+        "SVG-Dateien werden nicht rasterisiert, sondern als SVG-Applet "
+        "gespeichert, Video-Dateien als Video-Medium). "
         "Übungsaufgaben: "
         "create_task (type 'text' oder 'mc' — Workspace-Aufgaben nur in der "
         "Kurs-Web-UI) "
@@ -477,8 +479,8 @@ async def course_overview(course_id: int, ctx: Context) -> str:
             "hint": (
                 "Details: read_script_section / read_material / read_task; "
                 "Volltextsuche: search_course; Quellen: list_references / "
-                "search_references; Medien (Bilder/Applets) zur Einbindung: "
-                "list_media."
+                "search_references; Medien (Bilder/Videos/Applets) zur "
+                "Einbindung: list_media."
             ),
         }
         if tutor:
@@ -1040,7 +1042,7 @@ async def import_bibtex(course_id: int, bibtex: str, ctx: Context) -> str:
 
 @mcp_tool
 async def list_media(course_id: int, ctx: Context, kind: Optional[str] = None, limit: int = 50) -> str:
-    """Alle Medien (Bilder + Applets) des Kurses — mit FERTIGER
+    """Alle Medien (Bilder + Videos + Applets) des Kurses — mit FERTIGER
     Markdown-Referenz zum Einbinden in Skript/Folien:
 
         ![<Titel>](<url>)   (Applets zusätzlich: {height=X} / {zoom=X})
@@ -1081,8 +1083,8 @@ async def list_media(course_id: int, ctx: Context, kind: Optional[str] = None, l
             "hint": (
                 "Zum Einbinden den 'reference'-Wert in den Inhalt kopieren "
                 "(Größe/Zoom: {height=X} / {zoom=X} danach). Bild ansehen: "
-                "read_image. Neue Applets: create_applet, neue Bilder: "
-                "create_image. Einbettungsregeln: markdown_manual."
+                "read_image. Neue Applets: create_applet, neue "
+                "Bilder/Videos: create_image. Einbettungsregeln: markdown_manual."
             ) if entries else None,
         })
 
@@ -1190,8 +1192,10 @@ async def _resolve_wikimedia_url(client: httpx.AsyncClient, api_host: str, filen
     pages = data.get("query", {}).get("pages") or {}
     page = next(iter(pages.values()), {})
     info = (page.get("imageinfo") or [{}])[0]
-    # SVG: Original-Vektor-Quelle (die thumburl wäre eine rasterisierte PNG).
-    if info.get("mime") == "image/svg+xml":
+    # SVG: Original-Vektor-Quelle (die thumburl wäre eine rasterisierte PNG);
+    # Videos: Original-Datei (die thumburl wäre nur ein JPEG-Frame).
+    wm_mime = info.get("mime") or ""
+    if wm_mime == "image/svg+xml" or wm_mime.startswith("video/"):
         target = info.get("url")
     else:
         target = info.get("thumburl") or info.get("url")
@@ -1205,7 +1209,7 @@ async def _resolve_wikimedia_url(client: httpx.AsyncClient, api_host: str, filen
     return parsed
 
 
-async def _download_image_bytes(client: httpx.AsyncClient, url: httpx.URL) -> bytes:
+async def _download_image_bytes(client: httpx.AsyncClient, url: httpx.URL, max_bytes: int) -> bytes:
     """Stream-Download mit Größen-Limit (keine Redirects)."""
     chunks: list[bytes] = []
     total = 0
@@ -1215,16 +1219,15 @@ async def _download_image_bytes(client: httpx.AsyncClient, url: httpx.URL) -> by
             raise McpToolError(f"Download fehlgeschlagen (HTTP {resp.status_code}){extra}.")
         async for chunk in resp.aiter_bytes(64 * 1024):
             total += len(chunk)
-            if total > media_service.MAX_UPLOAD_BYTES:
-                raise McpToolError(
-                    f"Bild zu groß (max. {media_service.MAX_UPLOAD_BYTES // (1024 * 1024)} MB)."
-                )
+            if total > max_bytes:
+                raise McpToolError(f"Datei zu groß (max. {max_bytes // (1024 * 1024)} MB).")
             chunks.append(chunk)
     return b"".join(chunks)
 
 
-async def _fetch_image_bytes(url_str: str) -> bytes:
-    """Lädt ein Bild von einer öffentlichen http(s)-URL (max. 5 MB).
+async def _fetch_image_bytes(url_str: str, max_bytes: int = media_service.MAX_UPLOAD_BYTES,
+                             timeout: float = 20.0) -> bytes:
+    """Lädt eine Datei (Bild/Video) von einer öffentlichen http(s)-URL.
 
     Sicherheit: keine Redirects, keine lokalen/internen Ziel-Adressen
     (SSRF-Schutz via DNS-Auflösung vor dem Download).
@@ -1247,13 +1250,13 @@ async def _fetch_image_bytes(url_str: str) -> bytes:
     try:
         async with httpx.AsyncClient(
             follow_redirects=False,
-            timeout=20.0,
+            timeout=timeout,
             headers={"User-Agent": _UA_IMAGE_DOWNLOAD},
         ) as client:
             wm = _wikimedia_file_ref(url)
             if wm:
                 url = await _resolve_wikimedia_url(client, *wm)
-            return await _download_image_bytes(client, url)
+            return await _download_image_bytes(client, url, max_bytes)
     except McpToolError:
         raise
     except (httpx.HTTPError, OSError):
@@ -1802,6 +1805,55 @@ def _create_svg_applet(
     })
 
 
+def _video_ext(data: bytes) -> Optional[str]:
+    """Video-Format per Magic-Bytes erkennen → Extension, sonst None.
+
+    mp4: Bytes 4–8 = b"ftyp" (nach 4-Byte-Size-Header);
+    webm/Matroska: EBML-Header (die ersten 4 Bytes)."""
+    if len(data) >= 8 and data[4:8] == b"ftyp":
+        return ".mp4"
+    if data[:4] == b"\x1a\x45\xdf\xa3":
+        return ".webm"
+    return None
+
+
+def _create_video(
+    session: Session, user, course_id: int, title: str, data: bytes,
+    description: Optional[str], ext: str,
+) -> str:
+    """Video-Eingang in create_image → Video-Medium (media_type='video')."""
+    try:
+        rel_path, mime, size = media_service.save_video_upload(
+            course_id, f"video{ext}", io.BytesIO(data), len(data)
+        )
+    except HTTPException as e:
+        raise McpToolError(str(e.detail))
+    media = CourseMedia(
+        course_id=course_id,
+        title=title.strip(),
+        file_path=rel_path,
+        media_type="video",
+        mime_type=mime,
+        file_size=size,
+        llm_description=(description or "").strip() or None,
+        created_by=user.id,  # type: ignore[arg-type]
+    )
+    session.add(media)
+    session.commit()
+    session.refresh(media)
+    sync_media_usages(session, course_id)
+    return _json({
+        "id": media.id,
+        "title": media.title,
+        "url": media_service.media_url(media),
+        "format": ext.lstrip("."),
+        "markdown_reference": f"![{media.title}]({media_service.media_url(media)})",
+        "note": "Video anlegen UND im Kurs einbinden: die Markdown-Referenz per "
+                "edit_content in ein Skript-Kapitel oder Slide-Deck einfügen "
+                "(Syntax: markdown_manual). Höhe steuern: {.height=<px>}.",
+    })
+
+
 @mcp_tool
 async def create_image(
     course_id: int,
@@ -1810,11 +1862,15 @@ async def create_image(
     ctx: Context,
     description: Optional[str] = None,
 ) -> str:
-    """Legt ein neues Bild-Medium im Kurs an (PNG/JPEG/WebP/GIF, max. 5 MB).
+    """Legt ein neues Bild- ODER Video-Medium im Kurs an.
 
-    source = Data-URL (data:image/png;base64,…) für kleine Bilder ODER eine
+    Bilder: PNG/JPEG/WebP/GIF, max. 5 MB. Videos: mp4/WebM, max. 500 MB —
+    werden erkannt und als Video-Medium gespeichert (kein Bild; Einbindung
+    wie bei Bildern, Höhe via {.height=<px>}).
+
+    source = Data-URL (data:image/png;base64,…) für kleine Dateien ODER eine
     öffentliche http(s)-URL, die der Server lädt (keine Redirects, keine
-    lokalen/internen Adressen). description = 2–4 Sätze, was das Bild zeigt
+    lokalen/internen Adressen). description = 2–4 Sätze, was das Medium zeigt
     (optional). Der Rückgabewert enthält die fertige Markdown-Referenz zum
     Einbinden in Skript/Folien: ![<Titel>](/media/<course_id>/<datei>).
 
@@ -1840,9 +1896,14 @@ async def create_image(
         if src.lower().startswith("data:"):
             data = _decode_data_url(src)
         else:
-            data = await _fetch_image_bytes(src)
+            data = await _fetch_image_bytes(
+                src, max_bytes=media_service.MAX_VIDEO_BYTES, timeout=120.0
+            )
         if not data:
-            raise McpToolError("Leeres Bild.")
+            raise McpToolError("Leere Datei.")
+        vext = _video_ext(data)
+        if vext:
+            return _create_video(session, user, course_id, title, data, description, vext)
         if len(data) > media_service.MAX_UPLOAD_BYTES:
             raise McpToolError(f"Bild zu groß (max. {media_service.MAX_UPLOAD_BYTES // (1024 * 1024)} MB).")
         try:

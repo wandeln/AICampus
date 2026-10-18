@@ -573,6 +573,16 @@ html.print-pdf .reveal .slides .markdown-preview pre {
   border-radius: 0.3em !important;
 }
 
+/* mp4-Videos: eigenes (größerer als das Bild-Cap) Default-Cap — ohne
+   {.height=X} bleibt das Video auf max. 16em Höhe (Breite proportional,
+   bei 16:9 ≈ 28em). Explizite {.height=X} gewinnt (Inline-!important). */
+:is(.reveal .slides, .slides-canvas) .markdown-preview video {
+  max-width: 100% !important;
+  height: auto !important;
+  max-height: 16em !important;
+  border-radius: 0.3em !important;
+}
+
 /* Figure-/Applet-/Code-/Tabellen-Captions: in Slides größer als im Skript
    (0.875rem) — em-basiert, damit sie mit dem Textgrößen-Slider
    (--slides-font-scale, Basis 28px) skalieren; 0.7em = 19.6px bei 1.0×

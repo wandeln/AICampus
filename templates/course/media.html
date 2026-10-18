@@ -22,19 +22,20 @@
       <div class="space-y-3">
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Datei hochladen</label>
-          <input type="file" id="media-file" accept=".png,.jpg,.jpeg,.webp,.gif,.svg"
+          <input type="file" id="media-file" accept=".png,.jpg,.jpeg,.webp,.gif,.svg,.mp4,.webm"
                  class="block w-full text-sm text-gray-600
                         file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0
                         file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700
                         hover:file:bg-blue-100">
           <p class="text-xs text-gray-400 mt-1">
-            PNG, JPG, WebP, GIF, SVG — max. 5 MB. (SVG wird als Applet gespeichert)
+            PNG, JPG, WebP, GIF, SVG — max. 5 MB (SVG wird als Applet gespeichert) · Video (MP4/WebM) — max. 500 MB
           </p>
         </div>
 
         <div id="upload-preview" class="hidden">
           <img id="upload-preview-img" alt="Vorschau"
                class="w-full max-h-44 object-contain bg-gray-100 rounded-lg border border-gray-200">
+          <video id="upload-preview-video" controls preload="metadata" class="hidden w-full max-h-44 bg-black rounded-lg border border-gray-200"></video>
         </div>
 
         <div id="upload-progress" class="hidden space-y-1.5">
@@ -109,6 +110,9 @@
       <div class="relative">
         <img id="edit-preview-img" alt="Vorschau" title="Klicken, um die Datei zu ersetzen"
              class="w-full max-h-48 object-contain bg-gray-100 rounded-lg border border-gray-200 cursor-pointer hover:opacity-90">
+        <!-- Video-Vorschau: Klick auf den Player würde mit „Datei ersetzen“ kollidieren
+             → für Videos gibt es stattdessen den Button unter der Vorschau. -->
+        <video id="edit-preview-video" controls preload="metadata" class="hidden w-full max-h-48 bg-black rounded-lg border border-gray-200"></video>
         <button id="edit-crop-btn" type="button" title="Bild zuschneiden"
                 class="hidden absolute bottom-2 right-2 w-9 h-9 items-center justify-center rounded-lg
                        bg-white/60 backdrop-blur-sm text-lg opacity-50 hover:opacity-100
@@ -116,6 +120,11 @@
           ✂️
         </button>
       </div>
+
+      <button id="edit-replace-file-btn" type="button"
+              class="hidden w-full text-sm text-gray-600 border border-gray-300 hover:bg-gray-50 rounded-lg px-3 py-2 transition">
+        📁 Datei ersetzen
+      </button>
 
 
       <div id="edit-progress" class="hidden space-y-1.5">
@@ -287,7 +296,7 @@
       if (mediaList.length === 0) {
         grid.innerHTML = filtersActive()
           ? '<p class="text-gray-400 text-sm col-span-2">Keine Medien für die aktuelle Filterung/Suche.</p>'
-          : '<p class="text-gray-400 text-sm col-span-2">Noch keine Medien. Lade links ein Bild hoch oder generiere ein Applet mit dem LLM.</p>';
+          : '<p class="text-gray-400 text-sm col-span-2">Noch keine Medien. Lade links ein Bild oder Video hoch oder generiere ein Applet mit dem LLM.</p>';
       }
       sentinelText.textContent = hasMore
         ? ""
@@ -317,10 +326,17 @@
 
     // Preview: Bild → <img>; SVG-Applet → <img> (SMIL/CSS-Animationen laufen
     // auch im <img>); HTML-Applet → lebendes Mini-Iframe (sandboxed,
-    // pointer-events: none, damit die Karten-Buttons bedienbar bleiben).
+    // pointer-events: none, damit die Karten-Buttons bedienbar bleiben);
+    // Video → <video> mit nativen Controls (Play direkt in der Karte).
     let preview;
     const isSvg = m.mime_type === "image/svg+xml";
-    if (m.media_type === "applet" && !isSvg) {
+    if (m.media_type === "video") {
+      preview = document.createElement("video");
+      preview.src = m.url;
+      preview.controls = true;
+      preview.preload = "metadata";
+      preview.className = "w-full h-36 bg-black object-contain";
+    } else if (m.media_type === "applet" && !isSvg) {
       preview = document.createElement("div");
       preview.className = "relative w-full h-36 bg-white cursor-pointer";
       preview.title = "Klick zum Vergrößern";
@@ -476,7 +492,26 @@
     editingId = id;
     document.getElementById("edit-media-title").value = m.title;
     document.getElementById("edit-media-description").value = m.llm_description || "";
-    document.getElementById("edit-preview-img").src = m.url + "?t=" + Date.now();
+    // Vorschau: Bild → <img> (Klick = Datei ersetzen); Video → <video>
+    // (Klick = Play, daher separater „Datei ersetzen“-Button).
+    const isVideo = m.media_type === "video";
+    const editImg = document.getElementById("edit-preview-img");
+    const editVid = document.getElementById("edit-preview-video");
+    if (isVideo) {
+      editImg.classList.add("hidden");
+      editVid.classList.remove("hidden");
+      editVid.src = m.url + "?t=" + Date.now();
+    } else {
+      editVid.pause();
+      editVid.removeAttribute("src");
+      editVid.load();
+      editVid.classList.add("hidden");
+      editImg.classList.remove("hidden");
+      editImg.src = m.url + "?t=" + Date.now();
+    }
+    document.getElementById("edit-replace-file-btn").classList.toggle("hidden", !isVideo);
+    // Ersatz-Dateityp muss zum Mediumstyp passen (accept hint only; gehärtet via Change-Handler)
+    editFileInput.accept = isVideo ? ".mp4,.webm" : ".png,.jpg,.jpeg,.webp,.gif";
     // Crop-Button nur für stillbilder (GIF verliert Animation beim Crop → ausblenden)
     const cropBtn = document.getElementById("edit-crop-btn");
     const cropOk = ["image/png", "image/jpeg", "image/webp"].includes(m.mime_type);
@@ -603,11 +638,13 @@
 
   const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"];
   const MAX_SIZE = 5 * 1024 * 1024;
+  const MAX_SIZE_VIDEO = 500 * 1024 * 1024;
   let objectUrl = null;
 
   const uploadUI = {
     preview: document.getElementById("upload-preview"),
     previewImg: document.getElementById("upload-preview-img"),
+    previewVideo: document.getElementById("upload-preview-video"),
     progress: document.getElementById("upload-progress"),
     bar: document.getElementById("upload-bar"),
     status: document.getElementById("upload-status"),
@@ -615,10 +652,33 @@
   const editUI = {
     preview: null,
     previewImg: document.getElementById("edit-preview-img"),
+    previewVideo: document.getElementById("edit-preview-video"),
     progress: document.getElementById("edit-progress"),
     bar: document.getElementById("edit-bar"),
     status: document.getElementById("edit-status"),
   };
+
+  function isVideoFile(file) {
+    return file.type === "video/mp4" || file.name.toLowerCase().endsWith(".mp4")
+        || file.type === "video/webm" || file.name.toLowerCase().endsWith(".webm");
+  }
+
+  // Vorschau-Element passend zum Dateityp anzeigen (<img> bzw. <video>).
+  function setPreviewElement(ui, url, video) {
+    const img = ui.previewImg, vid = ui.previewVideo;
+    if (video) {
+      img.classList.add("hidden");
+      vid.classList.remove("hidden");
+      vid.src = url;
+    } else {
+      vid.pause();
+      vid.removeAttribute("src");
+      vid.load();
+      vid.classList.add("hidden");
+      img.classList.remove("hidden");
+      img.src = url;
+    }
+  }
 
   let stageTimer = null;
 
@@ -657,13 +717,15 @@
   }
 
   function validateFile(file) {
-    // Extension-Fallback: manche Systeme melden für .svg keinen MIME-Type
-    const typeOk = ALLOWED_TYPES.includes(file.type) || file.name.toLowerCase().endsWith(".svg");
+    const video = isVideoFile(file);
+    // Extension-Fallback: manche Systeme melden für .svg/.mp4/.webm keinen MIME-Type
+    const typeOk = video || ALLOWED_TYPES.includes(file.type) || file.name.toLowerCase().endsWith(".svg");
     if (!typeOk) {
-      return "Dateityp nicht erlaubt. Erlaubt: PNG, JPG, WebP, GIF, SVG.";
+      return "Dateityp nicht erlaubt. Erlaubt: PNG, JPG, WebP, GIF, SVG, MP4, WebM.";
     }
-    if (file.size > MAX_SIZE) {
-      return "Datei zu groß (max. 5 MB).";
+    const maxSize = video ? MAX_SIZE_VIDEO : MAX_SIZE;
+    if (file.size > maxSize) {
+      return video ? "Video zu groß (max. 500 MB)." : "Datei zu groß (max. 5 MB).";
     }
     return null;
   }
@@ -696,7 +758,7 @@
 
     if (objectUrl) URL.revokeObjectURL(objectUrl);
     objectUrl = URL.createObjectURL(file);
-    ui.previewImg.src = objectUrl;
+    setPreviewElement(ui, objectUrl, isVideoFile(file));
     if (ui.preview) ui.preview.classList.remove("hidden");
     showStage(ui, 0, "Lade Datei hoch…");
 
@@ -746,7 +808,7 @@
 
     // Beim Ersatz: Vorschau im Modal aktualisieren (Cache-Buster, da URL gleich bleibt)
     if (mediaId !== null) {
-      ui.previewImg.src = res.body.media.url + "?t=" + Date.now();
+      setPreviewElement(ui, res.body.media.url + "?t=" + Date.now(), isVideoFile(file));
     }
 
     finishStage(ui);
@@ -767,14 +829,25 @@
     const file = editFileInput.files[0];
     editFileInput.value = "";
     if (!file || editingId === null) return;
+    // Der Dateityp muss zum Mediumstyp passen (Video ← mp4/webm, Bild ← Raster/SVG).
+    const m = mediaList.find(x => x.id === editingId);
+    const mediaIsVideo = m && m.media_type === "video";
+    if (mediaIsVideo !== isVideoFile(file)) {
+      showToast(mediaIsVideo ? "Nur Videos erlaubt (MP4/WebM)." : "Nur Bilder erlaubt (PNG, JPG, WebP, GIF, SVG).", "error");
+      return;
+    }
     const err = validateFile(file);
     if (err) { showToast(err, "error"); return; }
     if (!confirm("Aktuelle Datei ersetzen? Die bisherige Datei wird überschrieben.")) return;
     await uploadAndGenerate(file, editingId, editUI, false);
   });
 
-  // Klick auf die Modal-Vorschau öffnet ebenfalls den Datei-Dialog
+  // Klick auf die Modal-Vorschau öffnet den Datei-Dialog (Bilder;
+  // Videos über den Button, da Klick auf den Player = Play).
   document.getElementById("edit-preview-img").addEventListener("click", () => {
+    if (editingId !== null) editFileInput.click();
+  });
+  document.getElementById("edit-replace-file-btn").addEventListener("click", () => {
     if (editingId !== null) editFileInput.click();
   });
 

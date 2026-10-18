@@ -12,9 +12,10 @@ sync_media_usages() baut die MediaUsage-Tabelle daraus neu auf.
 """
 
 import re
+import shutil
 import uuid
 from pathlib import Path
-from typing import Any, Optional, TypedDict
+from typing import Any, BinaryIO, Optional, TypedDict
 
 from fastapi import HTTPException
 from sqlmodel import Session, select
@@ -42,6 +43,13 @@ ALLOWED_MEDIA: dict[str, str] = {
 }
 # SVG ist kein Bild, sondern ein Applet (save_svg_upload, sanitized) —
 # Raster bleibt die einzige erlaubte Bild-Form.
+
+MAX_VIDEO_BYTES = 500 * 1024 * 1024  # 500 MB (mp4/webm)
+MAX_VIDEO_LLM_BYTES = 20 * 1024 * 1024  # 20 MB — Cap für die LLM-Metadaten-Generierung (Base64-Versand)
+ALLOWED_VIDEO: dict[str, str] = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+}
 
 _FILENAME_RE = re.compile(r"[A-Za-z0-9._\-]+\Z")
 
@@ -116,6 +124,82 @@ def replace_file(rel_path: str, filename: str, data: bytes) -> tuple[str, str, i
         raise HTTPException(404, "Bestehende Datei nicht gefunden.")
     p.write_bytes(data)
     return rel_path, ALLOWED_MEDIA[ext], len(data)
+
+
+# ─── Video (mp4/webm) ─────────────────────────────────────────────────
+# Videos werden chunkweise (1 MB) auf Disk gestreamt — kein RAM-Peak bei
+# 500 MB. Range-Requests für das <video>-Seeking kommen von der
+# FileResponse (serve_media, main.py).
+
+def _write_video_file(source: BinaryIO, target: Path, expected_size: Optional[int]) -> int:
+    """Streamt eine Video-Datei auf Disk (1-MB-Chunks) mit Größen-/Platz-/Format-Checks.
+
+    expected_size: bekannte Upload-Größe (Content-Length) für den freien-Platz-Check;
+    unbekannt → konservativ MAX_VIDEO_BYTES ansetzen.
+    Bei Fehlern wird die Teil-Datei gelöscht. Returns: size.
+    """
+    free = shutil.disk_usage(target.parent).free
+    if free < 1.5 * (expected_size or MAX_VIDEO_BYTES):
+        raise HTTPException(507, "Nicht genug freier Speicherplatz für das Video.")
+    size = 0
+    try:
+        with target.open("wb") as out:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_VIDEO_BYTES:
+                    raise HTTPException(413, f"Video zu groß (max. {MAX_VIDEO_BYTES // (1024 * 1024)} MB).")
+                out.write(chunk)
+    except HTTPException:
+        target.unlink(missing_ok=True)
+        raise
+    if size == 0:
+        target.unlink(missing_ok=True)
+        raise HTTPException(400, "Datei ist leer.")
+    # Magic-Bytes: mp4 → Bytes 4-8 = b"ftyp" (nach 4-Byte-Size-Header);
+    # webm/Matroska → EBML-Header (die ersten 4 Bytes).
+    with target.open("rb") as f:
+        head = f.read(12)
+    is_mp4 = len(head) >= 8 and head[4:8] == b"ftyp"
+    is_webm = head[:4] == b"\x1a\x45\xdf\xa3"
+    if not (is_mp4 or is_webm):
+        target.unlink(missing_ok=True)
+        raise HTTPException(400, "Ungültiges Video (erwartet mp4 oder webm).")
+    return size
+
+
+def save_video_upload(course_id: int, filename: str, source: BinaryIO, expected_size: Optional[int] = None) -> tuple[str, str, int]:
+    """Validiert + speichert einen Video-Upload (mp4/webm, chunkweise, s. _write_video_file).
+
+    Returns: (relativer file_path, mime_type, size)
+    """
+    ext = Path(filename or "").suffix.lower()
+    if ext not in ALLOWED_VIDEO:
+        allowed = ", ".join(sorted(ALLOWED_VIDEO))
+        raise HTTPException(400, f"Dateityp nicht erlaubt. Erlaubt: {allowed}")
+    course_dir = media_dir_for_course(course_id)
+    stored_name = f"{uuid.uuid4().hex}{ext}"
+    size = _write_video_file(source, course_dir / stored_name, expected_size)
+    return f"course_{course_id}/{stored_name}", ALLOWED_VIDEO[ext], size
+
+
+def replace_video_file(rel_path: str, filename: str, source: BinaryIO, expected_size: Optional[int] = None) -> tuple[str, str, int]:
+    """Überschreibt eine bestehende Video-Datei am selben Pfad (Name bleibt →
+    Markdown-Referenzen funktionieren weiter).
+
+    Returns: (relativer file_path, mime_type, size)
+    """
+    ext = Path(filename or "").suffix.lower()
+    if ext not in ALLOWED_VIDEO:
+        allowed = ", ".join(sorted(ALLOWED_VIDEO))
+        raise HTTPException(400, f"Dateityp nicht erlaubt. Erlaubt: {allowed}")
+    p = (MEDIA_DIR / rel_path).resolve()
+    if not p.is_relative_to(MEDIA_DIR.resolve()) or not p.is_file() or p.suffix.lower() not in ALLOWED_VIDEO:
+        raise HTTPException(404, "Bestehende Video-Datei nicht gefunden.")
+    size = _write_video_file(source, p, expected_size)
+    return rel_path, ALLOWED_VIDEO[ext], size
 
 
 # ─── Applets (LLM-generierte self-contained Dateien: HTML oder SVG) ────

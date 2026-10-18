@@ -36,6 +36,8 @@ MARKDOWN_MANUAL = """\
   und {zoom=X} setzt den Zoom-Faktor des Applet-Inhalts (z. B. {zoom=1.5} = 150 %, Default: 1.0).
   Interaktive Applets/Websites: ![Titel](/media/…/datei.html) bzw. ![Titel](https://…)
   (werden als Iframe gerendert und im Markdown genauso eingebunden wie Bilder).
+  Videos (mp4/webm): ![Titel](/media/…/datei.mp4) — werden als Player gerendert (Play/Seek);
+  {height=X} wie bei Bildern.
 - Verwandte Medien (z. B. Teilabbildungen) als SUBFIGUREN in EINE Abbildung fassen (ein gemeinsames
   „Abb. N: Gesamt-Caption“, Medien nebeneinander, je eigenes kleines Caption — „a)“/„b)“-Prefixe NICHT manuell in die
   Captions schreiben, das wird automatisch ergänzt; die Inners dürfen nur {height=X} und ein optionales

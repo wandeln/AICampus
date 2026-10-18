@@ -1041,18 +1041,19 @@ class LLMService:
             "raw_response": "",
         }
 
-    async def describe_media_image(
+    async def _describe_media(
         self,
-        image_base64: str,
-        mime_type: str = "image/png",
+        media_part: dict,
+        log_hint: str,
+        prompt_text: str,
+        system_prompt: str,
+        label: str,
         config: Optional[dict] = None,
     ):
-        """Erstellt per LLM einen Titel und eine kurze Beschreibung für ein Kurs-Medium.
+        """Gemeinsamer LLM-Call für die Beschreibung von Kurs-Medien (Bild/Video).
 
-        Nutzt die multimodalen Faehigkeiten des LLM, um das Bild zu analysieren.
-
-        Returns JSON mit:
-            title, description
+        media_part: fertiger OpenAI-Content-Part (image_url bzw. video_url) mit
+        data:...-URL — das Base64 wird NICHT geloggt (Speicher + Datenschutz).
         """
         client = self._get_client(config)
         model = config.get("model", self.model) if config else self.model
@@ -1066,24 +1067,7 @@ class LLMService:
         last_content = ""
         last_thinking = ""
 
-        image_prompt_text = (
-            "Beschreibe dieses Medium fuer eine Kurs-Medienbibliothek. "
-            "Der Titel wird in Markdown-Referenzen verwendet, die "
-            "Beschreibung hilft, das Medium korrekt in Skript, "
-            "Slides oder Aufgaben einzubinden."
-        )
-        # Bild-Base64 wird NICHT geloggt (Speicher + Datenschutz)
-        log_prompt = f"[BILD: {mime_type}, {len(image_base64)} Zeichen Base64] {image_prompt_text}"
-
-        system_prompt = (
-            "Du bist ein Experte fuer die Beschreibung von Kurs-Medien (Abbildungen, Diagramme, "
-            "Plots, Fotos) in Lehrmaterialien. Analysiere das Bild und erstelle "
-            "(1) einen kurzen, aussagekraeftigen Titel (max. 8 Woerter, kein voelliger Satz) und "
-            "(2) eine praezise Beschreibung (2-4 Saetze), die erklaert, was das Medium zeigt und "
-            "welchen Lehrinhalt es illustriert. "
-            'Antworte NUR mit einem JSON-Objekt der Form {"title": "...", "description": "..."} '
-            "ohne Code-Bloecke oder Erklaerungen."
-        )
+        log_prompt = f"{log_hint} {prompt_text}"
 
         deadline = time.monotonic() + timeout
 
@@ -1091,7 +1075,7 @@ class LLMService:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 last_error = f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten"
-                logger.warning("describe_media_image total timeout")
+                logger.warning(f"{label} total timeout")
                 break
 
             try:
@@ -1107,18 +1091,7 @@ class LLMService:
                             },
                             {
                                 "role": "user",
-                                "content": [
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": f"data:{mime_type};base64,{image_base64}"
-                                        },
-                                    },
-                                    {
-                                        "type": "text",
-                                        "text": image_prompt_text,
-                                    },
-                                ],
+                                "content": [media_part, {"type": "text", "text": prompt_text}],
                             },
                         ],
                         temperature=0.0,
@@ -1140,7 +1113,7 @@ class LLMService:
                         result = self._extract_json(content)
                 if result is None or not isinstance(result.get("description"), str):
                     last_error = "LLM hat kein gultiges JSON geliefert"
-                    logger.warning(f"describe_media_image JSON extraction failed (attempt {attempt+1}/{max_retries})")
+                    logger.warning(f"{label} JSON extraction failed (attempt {attempt+1}/{max_retries})")
                     if attempt < max_retries - 1:
                         await asyncio.sleep(1 * (attempt + 1))
                     continue
@@ -1149,7 +1122,7 @@ class LLMService:
                     await client.close()
 
                 record_llm_debug_entry(
-                    label="DESCRIBE_MEDIA_IMAGE", model=model, url=url, is_public=is_public,
+                    label=label, model=model, url=url, is_public=is_public,
                     system_prompt=system_prompt, prompt=log_prompt,
                     response=content, thinking=last_thinking,
                     success=True, latency_ms=total_ms, attempts=attempt + 1,
@@ -1166,13 +1139,13 @@ class LLMService:
 
             except asyncio.TimeoutError:
                 last_error = f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten"
-                logger.warning(f"describe_media_image timeout (attempt {attempt+1}/{max_retries})")
+                logger.warning(f"{label} timeout (attempt {attempt+1}/{max_retries})")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(1 * (attempt + 1))
 
             except Exception as e:
                 last_error = str(e)
-                logger.error(f"describe_media_image error: {e}")
+                logger.error(f"{label} error: {e}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(1 * (attempt + 1))
 
@@ -1180,7 +1153,7 @@ class LLMService:
             await client.close()
 
         record_llm_debug_entry(
-            label="DESCRIBE_MEDIA_IMAGE", model=model, url=url, is_public=is_public,
+            label=label, model=model, url=url, is_public=is_public,
             system_prompt=system_prompt, prompt=log_prompt,
             response=last_content, thinking=last_thinking,
             success=False, error=last_error, latency_ms=total_ms, attempts=max_retries,
@@ -1192,6 +1165,74 @@ class LLMService:
             "latency_ms": 0,
             "raw_response": "",
         }
+
+    _MEDIA_DESCRIBE_PROMPT = (
+        "Beschreibe dieses Medium fuer eine Kurs-Medienbibliothek. "
+        "Der Titel wird in Markdown-Referenzen verwendet, die "
+        "Beschreibung hilft, das Medium korrekt in Skript, "
+        "Slides oder Aufgaben einzubinden."
+    )
+    _MEDIA_DESCRIBE_JSON_RULE = (
+        'Antworte NUR mit einem JSON-Objekt der Form {"title": "...", "description": "..."} '
+        "ohne Code-Bloecke oder Erklaerungen."
+    )
+
+    async def describe_media_image(
+        self,
+        image_base64: str,
+        mime_type: str = "image/png",
+        config: Optional[dict] = None,
+    ):
+        """Erstellt per LLM einen Titel und eine kurze Beschreibung für ein Kurs-Medium.
+
+        Nutzt die multimodalen Faehigkeiten des LLM, um das Bild zu analysieren.
+
+        Returns JSON mit:
+            title, description
+        """
+        system_prompt = (
+            "Du bist ein Experte fuer die Beschreibung von Kurs-Medien (Abbildungen, Diagramme, "
+            "Plots, Fotos) in Lehrmaterialien. Analysiere das Bild und erstelle "
+            "(1) einen kurzen, aussagekraeftigen Titel (max. 8 Woerter, kein voelliger Satz) und "
+            "(2) eine praezise Beschreibung (2-4 Saetze), die erklaert, was das Medium zeigt und "
+            f"welchen Lehrinhalt es illustriert. {self._MEDIA_DESCRIBE_JSON_RULE}"
+        )
+        return await self._describe_media(
+            media_part={"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}},
+            log_hint=f"[BILD: {mime_type}, {len(image_base64)} Zeichen Base64]",
+            prompt_text=self._MEDIA_DESCRIBE_PROMPT,
+            system_prompt=system_prompt,
+            label="DESCRIBE_MEDIA_IMAGE",
+            config=config,
+        )
+
+    async def describe_media_video(
+        self,
+        video_base64: str,
+        config: Optional[dict] = None,
+    ):
+        """Erstellt per LLM einen Titel und eine kurze Beschreibung für ein Kurs-Video (mp4).
+
+        Das LLM analysiert das Video (visuelle Abfolge + Tonspur, falls vorhanden).
+
+        Returns JSON mit:
+            title, description
+        """
+        system_prompt = (
+            "Du bist ein Experte fuer die Beschreibung von Kurs-Medien (Videos) in Lehrmaterialien. "
+            "Analysiere das VIDEO (visuelle Abfolge und Tonspur, falls vorhanden) und erstelle "
+            "(1) einen kurzen, aussagekraeftigen Titel (max. 8 Woerter, kein voelliger Satz) und "
+            "(2) eine praezise Beschreibung (2-4 Saetze), die erklaert, was das Video zeigt und "
+            f"welchen Lehrinhalt es illustriert. {self._MEDIA_DESCRIBE_JSON_RULE}"
+        )
+        return await self._describe_media(
+            media_part={"type": "video_url", "video_url": {"url": f"data:video/mp4;base64,{video_base64}"}},
+            log_hint=f"[VIDEO: {len(video_base64)} Zeichen Base64]",
+            prompt_text=self._MEDIA_DESCRIBE_PROMPT,
+            system_prompt=system_prompt,
+            label="DESCRIBE_MEDIA_VIDEO",
+            config=config,
+        )
 
     async def generate_course_report(
         self,
