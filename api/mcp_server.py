@@ -864,6 +864,7 @@ async def create_reference(
     url: Optional[str] = None,
     note: Optional[str] = None,
     description: Optional[str] = None,
+    version_label: Optional[str] = None,
 ) -> str:
     """Legt eine neue Quelle in der Kurs-Quellen-Bibliothek an (Write).
 
@@ -876,7 +877,8 @@ async def create_reference(
     venue: Zeitschrift / Konferenz / Verlag. detail: Band(Heft), Seiten,
     Edition. description (empfohlen): 1–2 Sätze zum Inhalt der Quelle —
     Skript/Aufgaben nutzen sie, um die Quelle korrekt zu zitieren.
-    Die neue Quelle erhält die nächste Zitations-Nummer."""
+    Die neue Quelle erhält die nächste Zitations-Nummer. version_label:
+    optionales kurzes Label für die Initial-Version (Default „Erstellt")."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="create_reference")
         k = (key or "").strip()
@@ -907,7 +909,7 @@ async def create_reference(
         session.add(ref)
         session.commit()
         session.refresh(ref)
-        version_service.mark_created(session, user, "reference", int(ref.id))
+        version_service.mark_created(session, user, "reference", int(ref.id), name=version_label)
         return _json(_ref_dict(ref) | {
             "note": (
                 f"Quelle angelegt (Zitations-Nummer {ref.display_order + 1}). "
@@ -989,14 +991,17 @@ async def edit_reference(
 
 
 @mcp_tool
-async def import_bibtex(course_id: int, bibtex: str, ctx: Context) -> str:
+async def import_bibtex(course_id: int, bibtex: str, ctx: Context,
+                        version_label: Optional[str] = None) -> str:
     """Importiert mehrere Quellen auf einmal aus rohem BibTeX (Write).
 
     bibtex = BibTeX-Text mit einem oder mehreren @-Entries (z. B.
     '@article{smith2021deep, author = {Smith, J.}, title = {…}, …}').
     Vorhandene Keys werden übersprungen (NICHT überschrieben). description
     (Inhalt/Kernpunkte) bleibt leer — bei Bedarf danach per edit_reference
-    ergänzen. Einzelne Quelle: create_reference."""
+    ergänzen. Einzelne Quelle: create_reference. version_label: optionales
+    kurzes Label für die Initial-Version aller neu angelegten Quellen
+    (Default „Erstellt")."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="import_bibtex")
         entries = bib.parse_bibtex(bibtex or "")
@@ -1036,7 +1041,7 @@ async def import_bibtex(course_id: int, bibtex: str, ctx: Context) -> str:
             order += 1
         session.commit()
         for r in created_refs:
-            version_service.mark_created(session, user, "reference", int(r.id))
+            version_service.mark_created(session, user, "reference", int(r.id), name=version_label)
         return _json({
             "imported": imported,
             "skipped": skipped,
@@ -1738,6 +1743,7 @@ async def create_applet(
     ctx: Context,
     description: Optional[str] = None,
     format: Optional[str] = "html",
+    version_label: Optional[str] = None,
 ) -> str:
     """Legt ein neues Applet (HTML oder SVG) im Kurs an.
 
@@ -1745,7 +1751,8 @@ async def create_applet(
     format = "html" (Default) ODER "svg". description = 2–4 Sätze, was das
     Applet zeigt (optional). Der Rückgabewert enthält die fertige
     Markdown-Referenz zur Einbindung in Skript/Folien:
-    ![<Titel>](/media/<course_id>/<datei>)."""
+    ![<Titel>](/media/<course_id>/<datei>). version_label: optionales kurzes
+    Label für die Initial-Version (Default „Erstellt")."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="create_applet")
         if not (title or "").strip():
@@ -1771,7 +1778,7 @@ async def create_applet(
         session.commit()
         session.refresh(applet)
         sync_media_usages(session, course_id)
-        version_service.mark_created(session, user, "applet", int(applet.id))
+        version_service.mark_created(session, user, "applet", int(applet.id), name=version_label)
         return _json({
             "id": applet.id,
             "title": applet.title,
@@ -1784,7 +1791,7 @@ async def create_applet(
 
 def _create_svg_applet(
     session: Session, user, course_id: int, title: str, data: bytes,
-    description: Optional[str],
+    description: Optional[str], label: Optional[str] = None,
 ) -> str:
     """SVG-Eingang in create_image → SVG-Applet (Vektor, nicht rasterisiert)."""
     try:
@@ -1805,7 +1812,7 @@ def _create_svg_applet(
     session.commit()
     session.refresh(applet)
     sync_media_usages(session, course_id)
-    version_service.mark_created(session, user, "applet", int(applet.id))
+    version_service.mark_created(session, user, "applet", int(applet.id), name=label)
     return _json({
         "id": applet.id,
         "title": applet.title,
@@ -1875,6 +1882,7 @@ async def create_image(
     source: str,
     ctx: Context,
     description: Optional[str] = None,
+    version_label: Optional[str] = None,
 ) -> str:
     """Legt ein neues Bild- ODER Video-Medium im Kurs an.
 
@@ -1899,7 +1907,9 @@ async def create_image(
     Im Chat selbst generierte Bilder (z. B. DALL·E) sind meist zu groß für
     die Data-URL-Variante — dann nur die URL-Variante nutzen, wenn eine
     öffentliche Download-URL vorliegt; andernfalls das Bild in der
-    Kurs-Web-UI hochladen."""
+    Kurs-Web-UI hochladen. version_label: optionales kurzes Label für die
+    Initial-Version — greift NUR bei SVG-Eingang (SVG-Applet); Raster-Bilder
+    und Videos haben keine Versions-History (Default „Erstellt")."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="create_image")
         if not (title or "").strip():
@@ -1925,7 +1935,7 @@ async def create_image(
         except McpToolError:
             # Kein Raster-Format → SVG-Versuch (sanitize_svg validiert hart
             # und lehnt alles Nicht-SVG mit klarer Fehlermeldung ab).
-            return _create_svg_applet(session, user, course_id, title, data, description)
+            return _create_svg_applet(session, user, course_id, title, data, description, version_label)
         try:
             rel_path, mime, size = media_service.save_upload(course_id, f"img{ext}", data)
         except HTTPException as e:
@@ -1961,6 +1971,7 @@ async def create_chapter(
     content: str = "",
     summary: Optional[str] = None,
     is_visible: bool = False,
+    version_label: Optional[str] = None,
 ) -> str:
     """Legt ein neues Skript-Kapitel am ENDE des Kurs-Skripts an.
 
@@ -1970,7 +1981,9 @@ async def create_chapter(
     read_script_section lesen) und passende Übungsaufgaben per @task:{id}
     (IDs: course_overview). summary = Kurzfassung (optional, intern —
     NICHT für Studenten sichtbar). is_visible = für Studenten sichtbar
-    (Default: False = Entwurf; erst bei fertigen Inhalt auf True setzen)."""
+    (Default: False = Entwurf; erst bei fertigen Inhalt auf True setzen).
+    version_label: optionales kurzes Label für die Initial-Version
+    (Default „Erstellt")."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="create_chapter")
         if not (title or "").strip():
@@ -1992,7 +2005,7 @@ async def create_chapter(
         session.commit()
         session.refresh(section)
         sync_media_usages(session, course_id)
-        version_service.mark_created(session, user, "script_section", int(section.id))
+        version_service.mark_created(session, user, "script_section", int(section.id), name=version_label)
         return _json({
             "id": section.id,
             "title": section.title,
@@ -2014,6 +2027,7 @@ async def create_slide_deck(
     content: str = "",
     summary: Optional[str] = None,
     is_visible: bool = False,
+    version_label: Optional[str] = None,
 ) -> str:
     """Legt ein neues Slide-Deck am ENDE der Deck-Liste des Kurses an.
 
@@ -2022,7 +2036,8 @@ async def create_slide_deck(
     validiert. Querverweise einbauen, wo sinnvoll: @sec:/@eq:/@fig:/… auf
     das Skript (bestehende Labels) und passende Übungsaufgaben per
     @task:{id} (IDs: course_overview). summary / is_visible wie bei
-    create_chapter."""
+    create_chapter. version_label: optionales kurzes Label für die
+    Initial-Version (Default „Erstellt")."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="create_slide_deck")
         if not (title or "").strip():
@@ -2049,7 +2064,7 @@ async def create_slide_deck(
         session.commit()
         session.refresh(material)
         sync_media_usages(session, course_id)
-        version_service.mark_created(session, user, "slide_deck", int(material.id))
+        version_service.mark_created(session, user, "slide_deck", int(material.id), name=version_label)
         return _json({
             "id": material.id,
             "title": material.title,
@@ -2105,6 +2120,7 @@ async def create_task(
     text_template: Optional[str] = None,
     mc_questions: Optional[list[dict]] = None,
     is_visible: bool = False,
+    version_label: Optional[str] = None,
 ) -> str:
     """Legt eine neue Übungsaufgabe am ENDE der Aufgaben-Liste des Kurses an.
 
@@ -2138,7 +2154,8 @@ async def create_task(
     max_attempts: max. Versuchszahl (optional, weggelassen =
     unlimitiert). deadline: "2025-02-15T23:59" (optional).
     is_visible: für Studenten sichtbar (Default: False = Entwurf — erst bei
-    fertiger Aufgabe auf True setzen)."""
+    fertiger Aufgabe auf True setzen). version_label: optionales kurzes
+    Label für die Initial-Version (Default „Erstellt")."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="create_task")
         if type not in ("text", "mc"):
@@ -2190,7 +2207,7 @@ async def create_task(
         session.commit()
         session.refresh(task)
         sync_media_usages(session, course_id)
-        version_service.mark_created(session, user, "task", int(task.id))
+        version_service.mark_created(session, user, "task", int(task.id), name=version_label)
         return _json({
             "id": task.id,
             "title": task.title,

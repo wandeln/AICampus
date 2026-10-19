@@ -455,14 +455,17 @@ def snapshot_current(
     return _version_to_dict(v)
 
 
-def mark_created(session: Session, user: User, entity_type: str, entity_id: int) -> Optional[dict]:
-    """Initial-Version „Erstellt“ für neu angelegte Elemente (Web-UI, LLM,
-    MCP, Duplikate). Fehler dürfen die Element-Anlage nicht blockieren."""
+def mark_created(session: Session, user: User, entity_type: str, entity_id: int,
+                 name: Optional[str] = None) -> Optional[dict]:
+    """Initial-Version (Default „Erstellt“) für neu angelegte Elemente
+    (Web-UI, LLM, MCP, Duplikate). Fehler dürfen die Element-Anlage nicht
+    blockieren."""
+    label = (name or "").strip()[:200] or "Erstellt"
     try:
-        return snapshot_current(session, user, entity_type, entity_id, name="Erstellt")
+        return snapshot_current(session, user, entity_type, entity_id, name=label)
     except Exception as e:  # noqa: BLE001
-        logger.warning("Initial-Version 'Erstellt' fehlgeschlagen (%s %s): %s",
-                       entity_type, entity_id, e)
+        logger.warning("Initial-Version '%s' fehlgeschlagen (%s %s): %s",
+                       label, entity_type, entity_id, e)
         return None
 
 
