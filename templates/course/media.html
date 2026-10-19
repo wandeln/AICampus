@@ -22,13 +22,13 @@
       <div class="space-y-3">
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Datei hochladen</label>
-          <input type="file" id="media-file" accept=".png,.jpg,.jpeg,.webp,.gif,.svg,.mp4,.webm"
+          <input type="file" id="media-file" multiple accept=".png,.jpg,.jpeg,.webp,.gif,.svg,.mp4,.webm"
                  class="block w-full text-sm text-gray-600
                         file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0
                         file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700
                         hover:file:bg-blue-100">
           <p class="text-xs text-gray-400 mt-1">
-            PNG, JPG, WebP, GIF, SVG — max. 5 MB (SVG wird als Applet gespeichert) · Video (MP4/WebM) — max. 500 MB
+            PNG, JPG, WebP, GIF, SVG — max. 5 MB (SVG wird als Applet gespeichert) · Video (MP4/WebM) — max. 500 MB · Mehrere Dateien möglich
           </p>
         </div>
 
@@ -44,6 +44,8 @@
             <div id="upload-bar" class="bg-blue-600 h-2 rounded-full transition-all duration-150" style="width: 0%"></div>
           </div>
         </div>
+
+        <ul id="upload-queue" class="hidden mt-2 space-y-1 text-xs max-h-40 overflow-y-auto"></ul>
 
         <button id="media-llm-generate" type="button"
                 class="w-full bg-purple-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-purple-700 transition font-semibold">
@@ -751,7 +753,9 @@
   // Bei regenerate=true wird danach zusätzlich Titel & Beschreibung per LLM
   // generiert (nur bei neuem Upload). Beim Ersatz bleiben Titel & Beschreibung
   // erhalten — optional per „🤖 Titel & Beschreibung generieren" im Modal aktualisierbar.
-  async function uploadAndGenerate(file, mediaId, ui, regenerate) {
+  // label: Präfix für die Statuszeile (Mehrfach-Upload: "[2/5] ").
+  // report: Stage-Callback ("upload" | "llm" | "done" | "error") für die Batch-Statusliste.
+  async function uploadAndGenerate(file, mediaId, ui, regenerate, label = "", report = null) {
     // Upload-Phase: 0–60 % der Bar (wenn danach noch die LLM-Phase folgt)
     // bzw. 0–100 % (bei Ersatz ohne LLM-Phase).
     const uploadMax = regenerate ? 0.6 : 1.0;
@@ -760,7 +764,8 @@
     objectUrl = URL.createObjectURL(file);
     setPreviewElement(ui, objectUrl, isVideoFile(file));
     if (ui.preview) ui.preview.classList.remove("hidden");
-    showStage(ui, 0, "Lade Datei hoch…");
+    showStage(ui, 0, label + "Lade Datei hoch…");
+    if (report) report("upload");
 
     const fd = new FormData();
     fd.append("file", file);
@@ -769,12 +774,13 @@
     try {
       res = mediaId !== null
         ? await xhrUpload("PUT", `/api/courses/${courseId}/media/${mediaId}/file`, fd,
-            (p) => showStage(ui, p * uploadMax, "Lade Datei hoch…"))
+            (p) => showStage(ui, p * uploadMax, label + "Lade Datei hoch…"))
         : await xhrUpload("POST", `/api/courses/${courseId}/media`, fd,
-            (p) => showStage(ui, p * uploadMax, "Lade Datei hoch…"));
+            (p) => showStage(ui, p * uploadMax, label + "Lade Datei hoch…"));
     } catch (err) {
       hideStage(ui);
       if (ui.preview) ui.preview.classList.add("hidden");
+      if (report) report("error");
       showToast(err.message, "error");
       return;
     }
@@ -786,12 +792,14 @@
       const msg = detail && detail !== "Not Found"
         ? detail
         : `Upload/Ersatz fehlgeschlagen (HTTP ${res.status}) — ggf. Server neu starten.`;
+      if (report) report("error");
       showToast(msg, "error");
       return;
     }
 
     if (regenerate) {
-      showStage(ui, 0.6, "Erzeuge Titel & Beschreibung (LLM)…", true);
+      showStage(ui, 0.6, label + "Erzeuge Titel & Beschreibung (LLM)…", true);
+      if (report) report("llm");
       try {
         const r = await fetch(`/api/courses/${courseId}/media/${res.body.media.id}/generate-metadata`, {
           method: "POST",
@@ -812,6 +820,7 @@
     }
 
     finishStage(ui);
+    if (report) report("done");
     if (ui.preview) ui.preview.classList.add("hidden");
     showToast(mediaId !== null ? "Datei ersetzt." : "Medium hochgeladen.", "success");
     loadMedia();
@@ -1071,13 +1080,66 @@
   // ─── Upload (automatisch nach Dateiauswahl) ───────────────────
 
   const fileInput = document.getElementById("media-file");
+  const queueList = document.getElementById("upload-queue");
+  let batchRunning = false;
+  const QUEUE_STAGES = {
+    wait: { text: "wartend…", cls: "text-gray-400" },
+    upload: { text: "lädt hoch…", cls: "text-blue-600" },
+    llm: { text: "Titel & Beschreibung…", cls: "text-purple-600" },
+    done: { text: "✓", cls: "text-green-600" },
+    error: { text: "✗", cls: "text-red-600" },
+  };
   fileInput.addEventListener("change", async () => {
-    const file = fileInput.files[0];
+    const files = Array.from(fileInput.files);
     fileInput.value = "";
-    if (!file) return;
-    const err = validateFile(file);
-    if (err) { showToast(err, "error"); return; }
-    await uploadAndGenerate(file, null, uploadUI, true);
+    if (!files.length || batchRunning) return;
+    // Ungültige Dateien vorab melden und überspringen (Batch läuft weiter).
+    const queue = [];
+    for (const f of files) {
+      const err = validateFile(f);
+      if (err) showToast(`${f.name}: ${err}`, "error");
+      else queue.push(f);
+    }
+    if (!queue.length) return;
+    batchRunning = true;
+
+    // Pro-Datei-Statusliste (nur ab 2 Dateien: bei 1 reicht die Fortschritts-Bar).
+    const rows = [];
+    if (queue.length > 1) {
+      queueList.innerHTML = "";
+      for (const f of queue) {
+        const li = document.createElement("li");
+        li.className = "flex items-center gap-2 min-w-0";
+        const name = document.createElement("span");
+        name.className = "truncate flex-1 text-gray-700";
+        name.textContent = f.name;
+        const status = document.createElement("span");
+        status.className = "shrink-0 " + QUEUE_STAGES.wait.cls;
+        status.textContent = QUEUE_STAGES.wait.text;
+        li.append(name, status);
+        queueList.appendChild(li);
+        rows.push(status);
+      }
+      queueList.classList.remove("hidden");
+    }
+
+    // Sequenziell (kein paralleles Uploaden: große Videos + LLM-Phasen
+    // würden sonst Server und LLM-Endpoint überlasten).
+    try {
+      for (let i = 0; i < queue.length; i++) {
+        const report = (stage) => {
+          if (!rows.length) return;
+          const s = QUEUE_STAGES[stage];
+          rows[i].textContent = s.text;
+          rows[i].className = "shrink-0 " + s.cls;
+        };
+        await uploadAndGenerate(queue[i], null, uploadUI, true,
+          queue.length > 1 ? `[${i + 1}/${queue.length}] ` : "", report);
+      }
+    } finally {
+      batchRunning = false;
+      if (rows.length) setTimeout(() => queueList.classList.add("hidden"), 2000);
+    }
   });
 
   // ─── Filter & Sortierung (server-seitig) ────────────────────────
