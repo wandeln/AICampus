@@ -89,20 +89,25 @@ from services.slides_service import SlideError, apply_slide_edits, parse_slides
 
 logger = logging.getLogger(__name__)
 
-_MCP_EDIT_VERSION_NOTE = (
-    "Automatisch angelegt: Version \u201eMCP Edit\u201c (neuer Zustand). Zustand vorher = "
-    "die Version davor (R\u00fcckg\u00e4ngig: list_versions + restore_version)."
-)
 _MCP_NOOP_VERSION_NOTE = "Keine neue Version angelegt: Inhalt blieb unverändert."
 
 
 # ─── Versionierung ───────────────────────────────────────────────
-def _mcp_version_note(session: Session, user: User, entity_type: str, entity_id: int) -> str:
-    """„MCP Edit“-Version aus dem aktuellen Zustand anlegen — aber nur,
-    wenn sich wirklich etwas geändert hat (sonst: Hinweis ohne Version)."""
+def _mcp_version_note(
+    session: Session, user: User, entity_type: str, entity_id: int, label: Optional[str] = None
+) -> str:
+    """Version aus dem aktuellen Zustand nach einem MCP-Edit anlegen —
+    Name: optionales version_label, sonst „MCP Edit“. Aber nur, wenn sich
+    wirklich etwas geändert hat (sonst: Hinweis ohne Version)."""
+    name = (label or "").strip()[:200] or "MCP Edit"
     v = version_service.snapshot_current(
-        session, user, entity_type, entity_id, name="MCP Edit", skip_if_same_as_latest=True)
-    return _MCP_EDIT_VERSION_NOTE if v else _MCP_NOOP_VERSION_NOTE
+        session, user, entity_type, entity_id, name=name, skip_if_same_as_latest=True)
+    if not v:
+        return _MCP_NOOP_VERSION_NOTE
+    return (
+        f"Automatisch angelegt: Version „{name}“ (neuer Zustand). Zustand vorher = "
+        "die Version davor (Rückgängig: list_versions + restore_version)."
+    )
 
 
 ROLE_LABELS = {
@@ -928,6 +933,7 @@ async def edit_reference(
     url: Optional[str] = None,
     note: Optional[str] = None,
     description: Optional[str] = None,
+    version_label: Optional[str] = None,
 ) -> str:
     """Bearbeitet eine bestehende Quelle (Write). ref = Quellen-Key
     (z. B. 'smith2021deep') oder ID (Liste: list_references).
@@ -940,7 +946,9 @@ async def edit_reference(
 
     Nach dem Edit wird automatisch die Version „MCP Edit“ (neuer Zustand)
     angelegt — der Zustand vorher ist die Version davor
-    (Rückgängig: list_versions + restore_version)."""
+    (Rückgängig: list_versions + restore_version). version_label: optionales
+    kurzes Label für die angelegte Version (z. B. "DOI korrigiert");
+    Default „MCP Edit“."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="edit_reference")
         existing = _resolve_reference(session, course_id, ref)
@@ -973,7 +981,7 @@ async def edit_reference(
         session.add(existing)
         session.commit()
         session.refresh(existing)
-        version_note = _mcp_version_note(session, user, "reference", int(existing.id))
+        version_note = _mcp_version_note(session, user, "reference", int(existing.id), version_label)
         return _json(_ref_dict(existing) | {
             "changed": changed,
             "note": version_note,
@@ -1488,6 +1496,7 @@ async def edit_content(
     content: Optional[str] = None,
     title: Optional[str] = None,
     summary: Optional[str] = None,
+    version_label: Optional[str] = None,
 ) -> str:
     """Bearbeitet ein Skript-Kapitel (type="script_section") oder Slide-Deck
     (type="slide_deck"). ref = ID oder exakter Titel (Liste: course_overview).
@@ -1507,8 +1516,11 @@ async def edit_content(
     "" leeren String = zurücksetzen). Diese interne LLM-Zusammenfassung ist
     NICHT für Studenten sichtbar (Dienlich: Konsistenz zwischen Kapiteln).
 
-    Vor dem Edit wird automatisch eine Version des alten Zustands angelegt
-    (Rückgängig: list_versions + restore_version).
+    Nach dem Edit wird automatisch die Version „MCP Edit“ (neuer Zustand)
+    angelegt — der Zustand vorher ist die Version davor
+    (Rückgängig: list_versions + restore_version). version_label: optionales
+    kurzes Label für die angelegte Version (z. B. "Gleichung 3 korrigiert");
+    Default „MCP Edit“.
 
     Edits (script_section) — "heading" = EXISTIERENDE Heading, wortgleich:
     - {"op": "replace_section", "heading": "### 3.2 Beispiel", "content": "…"}
@@ -1560,7 +1572,7 @@ async def edit_content(
             session.add(section)
             session.commit()
             sync_media_usages(session, course_id)
-            version_note = _mcp_version_note(session, user, "script_section", int(section.id))
+            version_note = _mcp_version_note(session, user, "script_section", int(section.id), version_label)
             return _json({
                 "id": section.id,
                 "title": section.title,
@@ -1597,7 +1609,7 @@ async def edit_content(
         session.add(material)
         session.commit()
         sync_media_usages(session, course_id)
-        version_note = _mcp_version_note(session, user, "slide_deck", int(material.id))
+        version_note = _mcp_version_note(session, user, "slide_deck", int(material.id), version_label)
         return _json({
             "id": material.id,
             "title": material.title,
@@ -1621,6 +1633,7 @@ async def edit_applet(
     title: Optional[str] = None,
     description: Optional[str] = None,
     format: Optional[str] = None,
+    version_label: Optional[str] = None,
 ) -> str:
     """Ändert Code, Format, Titel oder Beschreibung eines bestehenden Applets.
     ref = Applet-ID oder exakter Titel (Quelle zuerst mit read_applet lesen).
@@ -1643,8 +1656,9 @@ async def edit_applet(
 
     Nach dem Edit wird automatisch die Version „MCP Edit“ (neuer Zustand)
     angelegt — der Zustand vorher ist die Version davor
-    (Rückgängig: list_versions + restore_version). Syntax-Regeln:
-    markdown_manual("applet")."""
+    (Rückgängig: list_versions + restore_version). version_label: optionales
+    kurzes Label für die angelegte Version (z. B. "Slider für Lernrate");
+    Default „MCP Edit“. Syntax-Regeln: markdown_manual("applet")."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="edit_applet")
         full_media = bool(media)
@@ -1704,7 +1718,7 @@ async def edit_applet(
         session.add(applet)
         session.commit()
         sync_media_usages(session, course_id)
-        version_note = _mcp_version_note(session, user, "applet", int(applet.id))
+        version_note = _mcp_version_note(session, user, "applet", int(applet.id), version_label)
         return _json({
             "id": applet.id,
             "title": applet.title,
@@ -2207,6 +2221,7 @@ async def edit_task(
     is_visible: Optional[bool] = None,
     text_template: Optional[str] = None,
     mc_questions: Optional[list[dict]] = None,
+    version_label: Optional[str] = None,
 ) -> str:
     """Bearbeitet eine bestehende Übungsaufgabe. ref = Aufgabe-ID oder
     exakter Titel (Liste: course_overview); Aufgabe zuerst mit read_task
@@ -2228,7 +2243,9 @@ async def edit_task(
 
     Nach dem Edit wird automatisch die Version „MCP Edit“ (neuer Zustand)
     angelegt — der Zustand vorher ist die Version davor
-    (Rückgängig: list_versions + restore_version)."""
+    (Rückgängig: list_versions + restore_version). version_label: optionales
+    kurzes Label für die angelegte Version (z. B. "Frage 2 hinzugefügt");
+    Default „MCP Edit“."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="edit_task")
         task = _resolve(session, Task, course_id, ref, "Aufgabe")
@@ -2301,7 +2318,7 @@ async def edit_task(
         session.commit()
         session.refresh(task)
         sync_media_usages(session, course_id)
-        version_note = _mcp_version_note(session, user, "task", int(task.id))
+        version_note = _mcp_version_note(session, user, "task", int(task.id), version_label)
         return _json({
             "id": task.id,
             "title": task.title,
