@@ -93,6 +93,27 @@ def push_forum_message(session: Session, course_id: int, channel_id: int, messag
         logger.exception("[Notifications] Forum-Live-Event (Kurs %s, Kanal %s) fehlgeschlagen.", course_id, channel_id)
 
 
+def push_content_updated(session: Session, course_id: int, entity_type: str, entity_id: int) -> None:
+    """Live-Event (SSE): Kurs-Inhalt geändert (MCP) → offene Seiten updaten.
+
+    Ergänzt die Versionierung: alle Kurs-Mitglieder bekommen das Event in
+    ihren Streams (wie push_forum_message). Payload ohne Inhalt — die
+    Seite holt sich das Element über die normale API, d. h. Rechte bleiben
+    enforced (Student sieht bei unsichtbarem Inhalt schlicht nichts Neues).
+    """
+    try:
+        payload = {
+            "event": "content_updated",
+            "course_id": course_id,
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+        }
+        for uid in course_member_ids(session, course_id):
+            _push(uid, payload)
+    except Exception:
+        logger.exception("[Notifications] Content-Live-Event (Kurs %s, %s %s) fehlgeschlagen.", course_id, entity_type, entity_id)
+
+
 # ─── Helpers ────────────────────────────────────────────────────────
 
 

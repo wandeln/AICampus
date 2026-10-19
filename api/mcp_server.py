@@ -81,6 +81,7 @@ from services import analytics
 from services import bibtex as bib
 from services import mcp_oauth_service
 from services import mcp_token_service
+from services import notifications as notify
 from services import media_service, version_service
 from services.auth_service import set_current_user_id
 from services.content_edits import ContentEditError, _resolve_span, apply_content_edits
@@ -1068,6 +1069,7 @@ async def create_reference(
         session.commit()
         session.refresh(ref)
         version_service.mark_created(session, user, "reference", int(ref.id), name=version_label)
+        notify.push_content_updated(session, course_id, "reference", int(ref.id))
         return _json(_ref_dict(ref) | {
             "note": (
                 f"Quelle angelegt (Zitations-Nummer {ref.display_order + 1}). "
@@ -1142,6 +1144,7 @@ async def edit_reference(
         session.commit()
         session.refresh(existing)
         version_note = _mcp_version_note(session, user, "reference", int(existing.id), version_label)
+        notify.push_content_updated(session, course_id, "reference", int(existing.id))
         return _json(_ref_dict(existing) | {
             "changed": changed,
             "note": version_note,
@@ -1200,6 +1203,7 @@ async def import_bibtex(course_id: int, bibtex: str, ctx: Context,
         session.commit()
         for r in created_refs:
             version_service.mark_created(session, user, "reference", int(r.id), name=version_label)
+            notify.push_content_updated(session, course_id, "reference", int(r.id))
         return _json({
             "imported": imported,
             "skipped": skipped,
@@ -1739,6 +1743,7 @@ async def edit_content(
             session.commit()
             sync_media_usages(session, course_id)
             version_note = _mcp_version_note(session, user, "script_section", int(section.id), version_label)
+            notify.push_content_updated(session, course_id, "script_section", int(section.id))
             return _json({
                 "id": section.id,
                 "title": section.title,
@@ -1776,6 +1781,7 @@ async def edit_content(
         session.commit()
         sync_media_usages(session, course_id)
         version_note = _mcp_version_note(session, user, "slide_deck", int(material.id), version_label)
+        notify.push_content_updated(session, course_id, "slide_deck", int(material.id))
         return _json({
             "id": material.id,
             "title": material.title,
@@ -1885,6 +1891,7 @@ async def edit_applet(
         session.commit()
         sync_media_usages(session, course_id)
         version_note = _mcp_version_note(session, user, "applet", int(applet.id), version_label)
+        notify.push_content_updated(session, course_id, "applet", int(applet.id))
         return _json({
             "id": applet.id,
             "title": applet.title,
@@ -1940,6 +1947,7 @@ async def create_applet(
         session.refresh(applet)
         sync_media_usages(session, course_id)
         version_service.mark_created(session, user, "applet", int(applet.id), name=version_label)
+        notify.push_content_updated(session, course_id, "applet", int(applet.id))
         return _json({
             "id": applet.id,
             "title": applet.title,
@@ -1974,6 +1982,7 @@ def _create_svg_applet(
     session.refresh(applet)
     sync_media_usages(session, course_id)
     version_service.mark_created(session, user, "applet", int(applet.id), name=label)
+    notify.push_content_updated(session, course_id, "applet", int(applet.id))
     return _json({
         "id": applet.id,
         "title": applet.title,
@@ -2024,6 +2033,7 @@ def _create_video(
     session.commit()
     session.refresh(media)
     sync_media_usages(session, course_id)
+    notify.push_content_updated(session, course_id, "media", int(media.id))
     return _json({
         "id": media.id,
         "title": media.title,
@@ -2115,6 +2125,7 @@ async def create_image(
         session.commit()
         session.refresh(media)
         sync_media_usages(session, course_id)
+        notify.push_content_updated(session, course_id, "media", int(media.id))
         return _json({
             "id": media.id,
             "title": media.title,
@@ -2168,6 +2179,7 @@ async def create_chapter(
         session.refresh(section)
         sync_media_usages(session, course_id)
         version_service.mark_created(session, user, "script_section", int(section.id), name=version_label)
+        notify.push_content_updated(session, course_id, "script_section", int(section.id))
         return _json({
             "id": section.id,
             "title": section.title,
@@ -2228,6 +2240,7 @@ async def create_slide_deck(
         session.refresh(material)
         sync_media_usages(session, course_id)
         version_service.mark_created(session, user, "slide_deck", int(material.id), name=version_label)
+        notify.push_content_updated(session, course_id, "slide_deck", int(material.id))
         return _json({
             "id": material.id,
             "title": material.title,
@@ -2371,6 +2384,7 @@ async def create_task(
         session.refresh(task)
         sync_media_usages(session, course_id)
         version_service.mark_created(session, user, "task", int(task.id), name=version_label)
+        notify.push_content_updated(session, course_id, "task", int(task.id))
         return _json({
             "id": task.id,
             "title": task.title,
@@ -2499,6 +2513,7 @@ async def edit_task(
         session.refresh(task)
         sync_media_usages(session, course_id)
         version_note = _mcp_version_note(session, user, "task", int(task.id), version_label)
+        notify.push_content_updated(session, course_id, "task", int(task.id))
         return _json({
             "id": task.id,
             "title": task.title,
@@ -2556,6 +2571,7 @@ async def restore_version(
         if not v or v.entity_type != type or v.entity_id != entity.id:
             raise McpToolError(f"Version {version_id} gehört nicht zu diesem Element (siehe list_versions).")
         result = version_service.restore_version(session, user, version_id)
+        notify.push_content_updated(session, course_id, type, int(entity.id))
         return _json({
             "message": f"Element '{entity.title}' wurde auf Version {version_id} zurückgesetzt.",
             "new_version_id": result["id"],
