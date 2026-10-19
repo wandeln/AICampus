@@ -62,6 +62,7 @@ from database.models import (
     CourseRole,
     GlobalUserRole,
     MaterialType,
+    McpClientContext,
     McpToken,
     McpTokenCourse,
     ScriptSection,
@@ -407,6 +408,163 @@ async def list_courses(ctx: Context) -> str:
             "courses": courses,
             "hint": "Nutze das course_id aus dieser Liste für alle anderen Tools.",
         })
+
+
+# ─── User-Fokus (welche Seite/Markierung hat der User gerade offen?) ──
+
+_FOCUS_STALE_SECONDS = 600  # > 10 min → „keine aktuelle Seite“
+
+
+def _parse_focus_url(url: str):
+    """/courses/{id}/… → (course_id, page, entity_type, entity_id) —
+    Seite + Entity kommen aus der URL, die das Frontend meldet."""
+    m = re.fullmatch(r"/courses/(\d+)(?:/(.*))?", url or "")
+    if not m:
+        return None
+    course_id = int(m.group(1))
+    parts = [p for p in (m.group(2) or "").split("/") if p]
+    if not parts:
+        return course_id, "course", None, None
+    if parts[0] == "script":
+        return course_id, "script", None, None
+    if parts[0] == "slides":
+        if len(parts) >= 2 and parts[1].isdigit():
+            deck = int(parts[1])
+            if len(parts) >= 3 and parts[2] == "present":
+                return course_id, "slides_present", "slide_deck", deck
+            return course_id, "slides", "slide_deck", deck
+        return course_id, "slides", None, None
+    if parts[0] == "tasks":
+        if len(parts) >= 2 and parts[1].isdigit():
+            return course_id, "task", "task", int(parts[1])
+        return course_id, "tasks", None, None
+    if parts[0] == "applets":
+        if len(parts) >= 2 and parts[1].isdigit():
+            return course_id, "applet", "applet", int(parts[1])
+        return course_id, "applets", None, None
+    return course_id, "other", None, None
+
+
+def _focus_entity_title(session: Session, entity_type: Optional[str], entity_id: Optional[int]) -> Optional[str]:
+    if not entity_id:
+        return None
+    model = {"slide_deck": CourseMaterial, "task": Task, "applet": CourseMedia}.get(entity_type or "")
+    if not model:
+        return None
+    obj = session.get(model, entity_id)
+    return getattr(obj, "title", None)
+
+
+def _focus_hint(page: str, entity_id: Optional[int], section: Optional[dict], can_write: bool) -> str:
+    if not can_write:
+        return ("Dieses Token hat hier nur Lesezugriff — zum Bearbeiten bitte "
+                "den User um einen Client/Token mit Schreibrecht bitten.")
+    if page == "script" and section:
+        return (f"Aktuelles Kapitel: „{section['title']}“ (ID {section['id']}). "
+                f"Bearbeiten: edit_content (type='script_section', ref={section['id']}, "
+                "edits=[{\"op\": \"replace_span\", …}] für die markierte Stelle, "
+                "content für ein Neuschreiben) — selection/selection_context "
+                "identifiziert die exakte Stelle.")
+    if page in ("slides", "slides_present") and entity_id:
+        return (f"Bearbeiten: edit_content (type='slide_deck', ref={entity_id}, …) — "
+                "Folien sind mit '---' getrennt; selection bzw. slide identifizieren "
+                "die Stelle.")
+    if page == "task" and entity_id:
+        return f"Bearbeiten: edit_task (ref={entity_id})."
+    if page == "applet" and entity_id:
+        return f"Quelle ansehen: read_applet; bearbeiten: edit_applet (ref={entity_id})."
+    return "Details: course_overview / read_…-Tools; Bearbeiten: die Write-Tools."
+
+
+@mcp_tool
+async def get_user_focus(ctx: Context) -> str:
+    """Was schaut sich der User gerade in AICampus an?
+
+    ZUERST AUFRUFEN, wenn der User auf das Bezug nimmt, was er gerade
+    sieht/öffnet/gemacht hat („das hier“, „diesen Absatz“, „diese Folie“,
+    „bitte kürze das“, „bitte formuliere das ein bisschen aus“): Liefert
+    die offene Seite (Skript/Slides/Aufgabe/Applet), das aktuelle Kapitel
+    (Skript) bzw. die aktuelle Folie (Slides inkl. Präsentationsmodus)
+    und — falls der User Text markiert hat — die Markierung inkl.
+    Umgebung. Danach bearbeiten: edit_content / edit_applet / edit_task
+    (ref kommt aus diesem Rückgabewert)."""
+    with Session(engine) as session:
+        user, _token, _ = _auth(ctx, session, None, tool_name="get_user_focus")
+        row = session.get(McpClientContext, user.id)
+        if not row:
+            return _json({"focus": None,
+                          "note": "Der User hat gerade keine AICampus-Seite geöffnet (oder noch keine gemeldet). "
+                                  "Bitte den User bitten, die Seite zu öffnen und ggf. Text zu markieren."})
+        age = (datetime.now() - row.updated_at).total_seconds()
+        if age > _FOCUS_STALE_SECONDS:
+            return _json({"focus": None,
+                          "note": f"Kein aktueller Zustand (zuletzt vor {int(age // 60)} min gemeldet — "
+                                  "Browser ggf. geschlossen). Bitte den User bitten, die Seite zu öffnen "
+                                  "und ggf. Text zu markieren."})
+        parsed = _parse_focus_url(row.url)
+        if not parsed:
+            return _json({"focus": None,
+                          "note": f"Der User ist auf einer Seite, aus der sich der Kurs nicht ableiten lässt ({row.url}). "
+                                  "Bitte den User fragen, welchen Kurs er meint."})
+        course_id, page, entity_type, entity_id = parsed
+        course = session.get(Course, course_id)
+        course_name = course.name if course else f"Kurs {course_id}"
+        # Zugriffs-Check: derselbe Pfad wie alle anderen Kurs-Tools.
+        try:
+            _u, token, role = _auth(ctx, session, course_id, tool_name="get_user_focus")
+        except McpToolError as e:
+            reason = str(e)
+            note = (f"Der User hat gerade offen: {course_name} – Seite „{page}“ — aber "
+                    f"dieses Token hat dort keinen Zugriff. Ursache: {reason}")
+            if "nicht freigegeben" in reason:
+                note += (" Bitte den User bitten, den Kurs unter Einstellungen → MCP "
+                         "für diesen Token/Client freizugeben.")
+            return _json({
+                "focus": page,
+                "course_id": course_id,
+                "course": course_name,
+                "access": "denied",
+                "note": note,
+            })
+        allow_write = (token.allow_write is not False) if isinstance(token, McpToken) else bool(token.allow_write)
+        can_write = bool(allow_write and _is_tutor(role))
+        result = {
+            "focus": page,
+            "course_id": course_id,
+            "course": course_name,
+            "role": ROLE_LABELS[role],
+            "can_write": can_write,
+            "updated_seconds_ago": int(age),
+        }
+        if entity_type:
+            result["entity"] = {
+                "type": entity_type,
+                "id": entity_id,
+                "title": _focus_entity_title(session, entity_type, entity_id),
+            }
+        section = None
+        if page == "script" and row.section_id:
+            s = session.get(ScriptSection, row.section_id)
+            if s and s.course_id == course_id:
+                section = {"id": s.id, "title": s.title}
+                result["section"] = section
+        if page in ("slides", "slides_present") and (row.slide_index is not None or row.slide_text):
+            slide: dict = {}
+            if row.slide_index is not None:
+                slide["index"] = row.slide_index
+            if row.slide_count:
+                slide["count"] = row.slide_count
+            if row.slide_text:
+                slide["text"] = row.slide_text
+            result["slide"] = slide
+        if row.selection:
+            result["selection"] = row.selection
+            if row.selection_context:
+                result["selection_context"] = row.selection_context
+                if row.selection_offset is not None:
+                    result["selection_offset"] = row.selection_offset
+        result["hint"] = _focus_hint(page, entity_id, section, can_write)
+        return _json(result)
 
 
 @mcp_tool

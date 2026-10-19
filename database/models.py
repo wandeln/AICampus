@@ -1433,3 +1433,28 @@ class McpEvent(SQLModel, table=True):
     is_write: bool = Field(default=False)
     ok: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.now, index=True)
+
+
+class McpClientContext(SQLModel, table=True):
+    """Aktueller UI-Zustand des Users für das MCP-Tool get_user_focus
+    (welche Seite/Kapitel/Folie offen, welcher Text markiert).
+
+    Eine Zeile pro User; der Browser meldet ihn via POST
+    /api/mcp/client-context (Session-Auth), last-write-wins — bei mehreren
+    Tabs zählt der zuletzt aktive (versteckte Tabs melden nicht).
+    Nur nicht-sensible UI-Zustände (keine Studierenden-Daten); kein
+    Logging des Inhalts (s. docs/LLM-plans/mcp-client-context.md).
+    """
+
+    __tablename__ = "mcp_client_context"
+
+    user_id: int = Field(foreign_key="users.id", primary_key=True)
+    url: str = Field(max_length=500)  # pathname der letzten gemeldeten Seite
+    selection: Optional[str] = Field(default=None, max_length=1000)
+    selection_context: Optional[str] = Field(default=None, max_length=2000)
+    selection_offset: Optional[int] = Field(default=None)
+    section_id: Optional[int] = Field(default=None)  # Skript: aktuelles Kapitel
+    slide_index: Optional[int] = Field(default=None)
+    slide_count: Optional[int] = Field(default=None)
+    slide_text: Optional[str] = Field(default=None, max_length=2000)
+    updated_at: datetime = Field(default_factory=datetime.now, index=True)

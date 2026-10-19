@@ -74,7 +74,7 @@ from services.slides_service import (
     slide_count,
 )
 
-from api import admin, analytics as analytics_api, auth, forum, importer, image_specs, media as media_api, materials as materials_api, mcp_oauth, mcp_server as mcp_server_api, mcp_tokens, notifications as notifications_api, push as push_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
+from api import admin, analytics as analytics_api, auth, forum, importer, image_specs, media as media_api, materials as materials_api, mcp_context, mcp_oauth, mcp_server as mcp_server_api, mcp_tokens, notifications as notifications_api, push as push_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
 
 
 def _calculate_percentile(my_score: float, other_scores: list[float]) -> int:
@@ -390,6 +390,7 @@ app.include_router(versions_api.router)  # /api/versions/… (Versions-History +
 app.include_router(importer.router)
 app.include_router(mcp_tokens.router)  # /api/mcp-tokens/… (MCP-Token verwalten)
 app.include_router(mcp_oauth.router)  # /api/mcp-oauth/… (MCP-OAuth-Grants verwalten)
+app.include_router(mcp_context.router)  # /api/mcp/client-context (UI-Zustand für get_user_focus)
 app.include_router(preview_proxy.router)  # /preview/{task}/{port}/… (same-origin)
 
 # MCP-Consent-Seite: Route muss VOR dem Mount gematcht werden

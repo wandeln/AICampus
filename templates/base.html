@@ -637,6 +637,12 @@
   <!-- Autosave + Versions-History (Skript, Slides, Applets, Aufgaben) -->
   <script src="{{ asset('js/autosave-versions.js') }}"></script>
 
+  <!-- MCP-Client-Kontext (get_user_focus): meldet aktuelle Kurs-Seite/
+       Auswahl an das Backend. Wirkt nur auf /courses/…-Seiten (das Script
+       selbst checkt die URL), damit auch die Präsentation (slides_present)
+       mitkommt. s. docs/LLM-plans/mcp-client-context.md -->
+  <script src="{{ asset('js/mcp-context.js') }}"></script>
+
   <!-- LLM-Boxen: Strg+Enter (Mac: Cmd+Enter) startet die Generierung,
        solange der Fokus in einer LLM-Box liegt (z. B. im Thema-Textarea).
        Die Box trägt data-llm-box, der Start-Button data-llm-generate-btn. -->

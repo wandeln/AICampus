@@ -648,6 +648,8 @@
       await inst.initialize();
       // Zitations-Links → auto-Quellen-Folie (Click-Handler in slides.js)
       aicampusRegisterSlideReveal(revealRootEl, inst);
+      // MCP (get_user_focus): aktuelle Folie bei Folien-Wechsel melden
+      if (window.aicMcpWireReveal) aicMcpWireReveal(inst, previewSlidesEl);
       // Slide-Wechsel in der Vorschau (Pfeile/Pointer) → Editor springt zur
       // passenden Stelle im Markdown (Slide-Anfang an den oberen Rand).
       // Das initiale slidechanged feuert während initialize() — VOR dieser
