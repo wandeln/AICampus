@@ -309,15 +309,15 @@ server = MCPServer(
         "und edit_task (bestehende Aufgaben, inkl. MC-Fragen-Ersatz). "
         "Quellen-Bibliothek: create_reference / edit_reference (einzelne) und "
         "import_bibtex (mehrere auf einmal aus BibTeX) — zitierbar mit "
-        "@cite:{key} (Liste: list_references). "
+        "@cite:shannon1948 (key der Quelle, OHNE Klammern; Liste: list_references). "
         "Alle Inhalte (inkl. Aufgabenstellung/Template/Musterlösung) in "
         "AICampus-Markdown (markdown_manual); Musterlösungen IMMER mit "
         "Bewertungskriterien (max. max_points Punkte, nur aus der "
         "Aufgabenstellung ersichtliche). Querverweise einbauen, wo sinnvoll: "
         "@sec:/@eq:/@fig:/@code:/@box:/@tab:/@cite: als normaler Fließtext "
         "(NUR tatsächlich vorhandene Labels — Inhalte vorher lesen, NIEMALS "
-        "in Backticks) sowie Aufgaben aus Skript/Folien per @task:{id} "
-        "(IDs: course_overview). "
+        "in Backticks) sowie Aufgaben aus Skript/Folien per @task:243 "
+        "(Aufgaben-ID OHNE Klammern; IDs: course_overview). "
         "Vor JEDEM Edit wird "
         "automatisch eine Version des alten Zustands angelegt — Historie: "
         "list_versions, Rückgängig: restore_version. Bevor du Inhalte anlegst"
@@ -865,7 +865,7 @@ async def search_references(course_id: int, query: str, ctx: Context) -> str:
             "course": course.name,
             "query": query,
             "hits": hits,
-            "hint": "Zitieren im Kurs-Markdown mit @cite:{key}." if hits else None,
+            "hint": "Zitieren im Kurs-Markdown mit @cite:shannon1948 (key ohne Klammern)." if hits else None,
         })
 
 
@@ -981,8 +981,8 @@ def _set_ref_fields(
 async def list_references(course_id: int, ctx: Context) -> str:
     """Alle Quellen (Quellen-Bibliothek) des Kurses in Zitations-Reihenfolge.
 
-    key = BibTeX-Schlüssel — Zitieren im Kurs-Markdown mit @cite:{key}
-    (Varianten @citet:/@citep: — Details: markdown_manual). description =
+    key = BibTeX-Schlüssel — Zitieren im Kurs-Markdown mit @cite:shannon1948
+    (key ohne Klammern; Varianten @citet:/@citep: — Details: markdown_manual). description =
     Inhalt/Kernpunkte der Quelle (wichtig für korrekte Zitation). Anlegen:
     create_reference / import_bibtex; durchsuchen: search_references."""
     with Session(engine) as session:
@@ -996,7 +996,7 @@ async def list_references(course_id: int, ctx: Context) -> str:
         refs.sort(key=lambda r: (r.display_order, r.id))
         hint = None
         if refs:
-            hint = "Zitieren im Kurs-Markdown mit @cite:{key}."
+            hint = "Zitieren im Kurs-Markdown mit @cite:shannon1948 (key ohne Klammern)."
             if _is_tutor(role):
                 hint += " Anlegen: create_reference / import_bibtex; ändern: edit_reference."
         return _json({
@@ -1027,8 +1027,8 @@ async def create_reference(
     """Legt eine neue Quelle in der Kurs-Quellen-Bibliothek an (Write).
 
     key = BibTeX-Schlüssel (Pflicht; nur Buchstaben, Ziffern, '_' und '-',
-    z. B. 'smith2021deep'), einzig pro Kurs — danach mit @cite:{key} in
-    Skript/Folien/Aufgaben zitierbar. Mehrere Quellen auf einmal:
+    z. B. 'smith2021deep'), einzig pro Kurs — danach mit @cite:smith2021deep
+    (key ohne Klammern) in Skript/Folien/Aufgaben zitierbar. Mehrere Quellen auf einmal:
     import_bibtex (rohes BibTeX). authors: Liste von Namen ODER String mit
     ' and ' als Trenner (BibTeX-Konvention, z. B. 'Smith, J. and Doe, A.').
     entry_type: article/book/inproceedings/… (Default 'misc').
@@ -1100,7 +1100,7 @@ async def edit_reference(
 
     Alle Parameter optional — nur angegebene Felder werden geändert
     ('' = Feld leeren). ACHTUNG: key ist der Zitier-Schlüssel — ein
-    Schlüssel-Wechsel bricht @cite:{key}-Referenzen in Skript/Folien,
+    Schlüssel-Wechsel bricht @cite:-Referenzen in Skript/Folien,
     bis der Inhalt angepasst ist. description = Inhalt/Kernpunkte der
     Quelle (wichtig, dass Skript/Aufgaben sie korrekt zitieren).
 
@@ -1205,8 +1205,9 @@ async def import_bibtex(course_id: int, bibtex: str, ctx: Context,
             "skipped": skipped,
             "errors": errors,
             "note": (
-                "Neue Quellen sind mit @cite:{key} zitierbar; description (Inhalt) "
-                "fehlt — bei Bedarf per edit_reference ergänzen."
+                "Neue Quellen sind per @cite: zitierbar (key ohne Klammern, z. B. "
+                "@cite:smith2021deep); description (Inhalt) fehlt — bei Bedarf per "
+                "edit_reference ergänzen."
             ),
         })
 
@@ -1666,8 +1667,8 @@ async def edit_content(
     Inhalte zuerst mit read_script_section / read_material lesen; Syntax des
     neuen Contents: markdown_manual("script"|"slides"). Neue/änderte
     Querverweise: NUR Labels/IDs, die tatsächlich existieren (@fig:/@eq:/
-    @sec:/…, Aufgaben: @task:{id}) — aus dem gelesenen Inhalt bzw.
-    course_overview.
+    @sec:/…, Aufgaben: @task:243 = ID ohne Klammern) — aus dem gelesenen
+    Inhalt bzw. course_overview.
 
     Genau EINE Content-Änderung angeben:
     - edits: stellenweise Edits (unabhängig angewendet; fehlgeschlagene
@@ -1685,9 +1686,11 @@ async def edit_content(
     kurzes Label für die angelegte Version (z. B. "Gleichung 3 korrigiert");
     Default „MCP Edit“.
 
-    Edits (script_section) — "heading" = EXISTIERENDE Heading, wortgleich:
-    - {"op": "replace_section", "heading": "### 3.2 Beispiel", "content": "…"}
-    - {"op": "insert_after", "heading": "## 3.1 Grundlagen", "content": "…"}
+    Edits (script_section) — "heading" = EXISTIERENDE Heading, wortgleich
+    (Überschriften tragen im Quelltext KEINE Nummern — die werden beim
+    Rendern automatisch vorangestellt):
+    - {"op": "replace_section", "heading": "### Beispiel", "content": "…"}
+    - {"op": "insert_after", "heading": "## Grundlagen", "content": "…"}
     - {"op": "delete_section", "heading": "### Altes Beispiel"}
     - {"op": "replace_span", "old": "…", "new": "…"}
 
@@ -2136,8 +2139,9 @@ async def create_chapter(
     content = Kapitel-Inhalt in der AICampus-Markdown-Syntax
     (markdown_manual("script")). Querverweise einbauen, wo sinnvoll:
     @sec:/@eq:/@fig:/… auf bestehende Labels (vorher z. B. per
-    read_script_section lesen) und passende Übungsaufgaben per @task:{id}
-    (IDs: course_overview). summary = Kurzfassung (optional, intern —
+    read_script_section lesen) und passende Übungsaufgaben per @task:243
+    (Aufgaben-ID ohne Klammern; IDs: course_overview). summary = Kurzfassung
+    (optional, intern —
     NICHT für Studenten sichtbar). is_visible = für Studenten sichtbar
     (Default: False = Entwurf; erst bei fertigen Inhalt auf True setzen).
     version_label: optionales kurzes Label für die Initial-Version
@@ -2193,7 +2197,8 @@ async def create_slide_deck(
     "---" (Syntax: markdown_manual("slides")); der Inhalt wird strikt
     validiert. Querverweise einbauen, wo sinnvoll: @sec:/@eq:/@fig:/… auf
     das Skript (bestehende Labels) und passende Übungsaufgaben per
-    @task:{id} (IDs: course_overview). summary / is_visible wie bei
+    @task:243 (Aufgaben-ID ohne Klammern; IDs: course_overview). summary /
+    is_visible wie bei
     create_chapter. version_label: optionales kurzes Label für die
     Initial-Version (Default „Erstellt")."""
     with Session(engine) as session:

@@ -19,7 +19,15 @@ Aufbau:
 """
 
 MARKDOWN_MANUAL = """\
-- Reines Markdown (Vorlesungsinhalt). Keine manuellen Nummern in Überschriften und keine manuellen Nummern bei nummerierten Objekten (Abbildungen/Gleichungen/Code/Tabellen/Boxen) — die Nummerierung wird AUTOMATISCH berechnet.
+- Reines Markdown (Vorlesungsinhalt).
+- KEINE MANUELLEN NUMMERN — AICampus nummeriert alles AUTOMATISCH: Kapitel („Kap. N“),
+  Abschnitte („N.M“), Abbildungen („Abb. N:“), Gleichungen („(N)“), Code-Blöcke („Code N:“),
+  Tabellen („Tab. N“), Boxen („Theorem N:“), Foliennummern. Manuell gesetzte Nummern würden
+  DOPPELT angezeigt und nach jeder Änderung/Umsortierung falsch sein:
+  - Überschriften: „## Grundlagen“ NICHT „## 3.2 Grundlagen“ — und keine „Kapitel 3“-/„Folie 2“-Texte.
+  - Abbildungen: Caption ohne „Abb. N“-Präfix: „![Verteilungsfunktion](/media/…){#fig:cdf}“
+    NICHT „![Abb. 3: Verteilungsfunktion](/media/…)“.
+  - Gleichungen: keine Nummer als Text nach der $$…$$-Zeile (z. B. „(3)“).
 - Math: $...$ (inline) und $$...$$ (Display), KaTeX-Syntax.
   NUR STANDARD-KATEX: keine LaTeX-Pakete, keine \\newcommand/\\def oder sonstigen eigenen Makros —
   im Quelltext definierte Makros müssen an JEDEM Vorkommen durch ihre Definition ersetzt/ausexpandiert
@@ -62,6 +70,10 @@ MARKDOWN_MANUAL = """\
   @fig:label / @eq:label / @code:label / @box:label / @tab:label / @sec:label
   → werden durch klickbare Referenzen ersetzt („Abb. N“ / „Gl. N“ / „Code N“ / „Satz N“ / „Tab. N“ / „Abs. N.M“).
   Richtig: „wie in @eq:shannon gezeigt“ — Falsch: „wie in `@eq:shannon` gezeigt“.
+  @task:ID (z. B. @task:243, ID aus der Aufgaben-Liste) rendert eine Aufgaben-Box.
+  @-Referenzen IMMER mit dem TATSÄCHLICHEN Label bzw. der TATSÄCHLICHEN ID und OHNE geschweifte
+  Klammern schreiben: @task:243 NICHT @task:{243}, @cite:shannon1948 NICHT @cite:{key} —
+  geschweifte Klammern gehören NUR zu den Label-Markern ({#fig:label}, {#eq:label}, …), nie zu @-Referenzen.
   Auch IN Formeln ($...$ / $$...$$) sind @eq:label und @cite:key / @citet:key / @citep:key erlaubt
   (am besten innerhalb von \\text{…}) → klickbarer aufrechter Text („Gl. N“ / „[N]“ / „Autor (Jahr)“ /
   „(Autor, Jahr)“), z. B. \\text{siehe @eq:shannon} bzw. \\text{vgl. @cite:shannon1948}.
@@ -187,11 +199,11 @@ SLIDES_MARKDOWN_MANUAL = MARKDOWN_MANUAL + """\
 
 SCRIPT_CONTENT_EDITS_SPEC = """\
 Jedes Edit-Objekt enthält einen Schlüssel "op" mit genau einem dieser Werte:
-- {"op": "replace_section", "heading": "### 3.2 Beispiel", "content": "..."}
+- {"op": "replace_section", "heading": "### Beispiel", "content": "..."}
   Ersetzt den Inhalt des Abschnitts (alles ab der Heading-Zeile bis zur nächsten Heading — Unterabschnitte darunter bleiben davon unberührt) durch den neuen "content".
   "heading" = die EXISTIERENDE Heading-Zeile des Abschnitts, WORTGLEICH (inkl. #-Zeichen, exakt wie im bestehenden Inhalt).
   "content" = kompletter NEUER Abschnittsinhalt OHNE die Heading-Zeile selbst (die bleibt erhalten).
-- {"op": "insert_after", "heading": "## 3.1 Grundlagen", "content": "..."}
+- {"op": "insert_after", "heading": "## Grundlagen", "content": "..."}
   Fügt den "content" direkt NACH dem angegebenen Abschnitt ein. Der content darf eigene Headings enthalten (z. B. ein neuer "###"-Abschnitt).
 - {"op": "delete_section", "heading": "### Altes Beispiel"}
   Löscht den gesamten Abschnitt (Heading + Inhalt).
