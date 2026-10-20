@@ -106,6 +106,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ asset('js/content-live.js') }}"></script>
 <script>
   // ─── Load Data ──────────────────────────────────────────────
   async function loadData(filterText = '', typeFilter = '') {
@@ -439,5 +440,12 @@
 
   // ─── Initial Load ───────────────────────────────────────────
   loadData();
+
+  // ─── Live-Update (MCP): Aufgabe extern bearbeitet → Liste neu laden ──
+  // Mit aktuellem Filter re-rendern (kein Page-Reload).
+  aicampusWatchContent(courseId, (data) => {
+    if (data.entity_type !== "task") return;
+    loadData(document.getElementById('filter-input').value, document.getElementById('type-filter').value);
+  });
 </script>
 {% endblock %}

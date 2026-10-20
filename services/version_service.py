@@ -51,6 +51,7 @@ from database.models import (
     UserCourse,
 )
 from services import media_service
+from services import notifications
 from services.mc_service import (
     McValidationError,
     mc_total_points,
@@ -411,6 +412,16 @@ def _current_snapshot(entity_type: str, entity) -> dict:
     raise HTTPException(400, "Zustands-Snapshots sind für diesen Elementtyp nicht unterstützt.")
 
 
+def _push_live_update(session: Session, entity_type: str, entity) -> None:
+    """SSE-Live-Update: Version aus dem aktuellen Zustand angelegt/gespeichert
+    → alle offenen Kurs-Seiten (MCP, Browser-Editor, LLM — gleicher Pfad)
+    refetchen. Defensiv: push_content_updated ist selbst try/except umhüllt."""
+    course_id = getattr(entity, "course_id", None)
+    if course_id is None:
+        return
+    notifications.push_content_updated(session, int(course_id), entity_type, int(entity.id))
+
+
 def snapshot_current(
     session: Session,
     user: User,
@@ -452,6 +463,7 @@ def snapshot_current(
     session.commit()
     session.refresh(v)
     _capture_task_files(session, v)
+    _push_live_update(session, entity_type, entity)
     return _version_to_dict(v)
 
 
@@ -537,6 +549,7 @@ def create_version(session: Session, user: User, entity_type: str, entity_id: in
     session.commit()
     session.refresh(v)
     _capture_task_files(session, v)
+    _push_live_update(session, entity_type, entity)
     return _version_to_dict(v)
 
 
@@ -550,6 +563,7 @@ def update_version(session: Session, user: User, version_id: int, snapshot: dict
     session.commit()
     session.refresh(v)
     _capture_task_files(session, v)
+    _push_live_update(session, v.entity_type, entity)
     return _version_to_dict(v)
 
 
@@ -615,4 +629,5 @@ def restore_version(session: Session, user: User, version_id: int) -> dict:
         except Exception as e:  # noqa: BLE001
             logger.warning("Version-Snapshot-Kopie (version %s→%s): %s",
                            v.id, nv.id, e)
+    _push_live_update(session, v.entity_type, entity)
     return _version_to_dict(nv, include_snapshot=True)

@@ -467,6 +467,9 @@
       get id() { return id; },
       get versionId() { return versionId; },
       get dirty() { return dirty; },
+      // Letzter gespeicherter Stand (Baseline): Live-Update-Handler damit
+      // eigene Auto-Saves vom externen Content unterscheiden können.
+      getBaseline: () => lastPayload,
       onChange,
       touch,
       finish,

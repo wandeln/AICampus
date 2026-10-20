@@ -28,6 +28,7 @@ from services.auth_service import require_course_access
 from services.llm_service import LLMService
 from services.settings_resolver import get_effective_llm_config
 from services import media_service
+from services import notifications
 from services import version_service
 from services.media_service import RefInfo
 from services.content_edits import ContentEditError, _resolve_span
@@ -323,6 +324,10 @@ async def upload_media(
     session.add(media)
     session.commit()
     session.refresh(media)
+    # Live-Update: Medien sind nicht versioniert → kein zentrales Event
+    # (SVG-Uploads werden als Applet behandelt, damit auch Studio-Tabs updaten).
+    notifications.push_content_updated(
+        session, course_id, "applet" if media.media_type == "applet" else "media", media.id)
 
     counts = media_service.reference_counts(session, course_id)
     return {
@@ -758,6 +763,9 @@ async def delete_media(
     session.commit()
 
     media_service.delete_file(media.file_path)
+    # Live-Update: offene Medien-Listen/Studio-Tabs entfernen die Kachel.
+    notifications.push_content_updated(
+        session, course_id, "applet" if media.media_type == "applet" else "media", media.id)
     return {"message": f"Medium '{media.title}' gelöscht."}
 
 

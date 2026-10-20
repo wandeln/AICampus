@@ -255,6 +255,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ asset('js/content-live.js') }}"></script>
 <script>
   // Global für den Markdown-Renderer (kursweite Querverweise ins Skript).
   // MUSS vor der ersten createMarkdownEditor()-Aufruf stehen (startInPreview rendert sofort).
@@ -936,6 +937,28 @@
     const isCurrentlyVisible = !this.title.includes('freischalten');
     setVisibilityToggle(!isCurrentlyVisible);
     av.onChange();
+  });
+
+  // ─── Live-Update (MCP / anderer Tab): Aufgabe extern geändert → Reload ──
+  // Eigene Auto-Saves bleiben still: die neueste Version ist dann die
+  // gerade von diesem Tab gespeicherte (av.versionId). Bei Dirty-State
+  // (ungespeicherte Änderungen) nicht Reloaden → Toast.
+  aicampusWatchContent(courseId, async (data) => {
+    if (data.entity_type !== "task" || Number(data.entity_id) !== Number(av.id)) return;
+    if (av.versionId != null) {
+      try {
+        const res = await fetch(`/api/versions/task/${av.id}`, { credentials: "same-origin" });
+        if (res.ok) {
+          const versions = (await res.json()).versions || [];
+          if (versions.length && Number(versions[0].id) === Number(av.versionId)) return;
+        }
+      } catch { /* Fetch-Fehler → als externe Änderung behandeln */ }
+    }
+    if (av.dirty) {
+      showToast("Die Aufgabe wurde extern bearbeitet — bitte die Seite neu laden.", "info");
+      return;
+    }
+    location.reload();
   });
 </script>
 {% endblock %}

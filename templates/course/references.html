@@ -237,6 +237,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ asset('js/content-live.js') }}"></script>
 <script>
 (function() {
   'use strict';
@@ -566,6 +567,13 @@
 
   loadRefs();
   initRefSortable();
+
+  // ─── Live-Update (MCP): Quelle extern bearbeitet/angelegt → neu laden ──
+  // (Such-State bleibt erhalten; offenes Edit-Modal wird nicht berührt)
+  aicampusWatchContent(courseId, (data) => {
+    if (data.entity_type !== "reference") return;
+    loadRefs();
+  });
 })();
 </script>
 {% endblock %}

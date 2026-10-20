@@ -413,9 +413,20 @@
 </style>
 {% endblock %}
 {% block extra_scripts %}
+<script src="{{ asset('js/content-live.js') }}"></script>
 <script>
   // Global für den Markdown-Renderer (kursweite Querverweise ins Skript).
   const courseId = {{ course.id }};
+  const taskId = {{ task.id }};
+
+  // ─── Live-Update (MCP): Aufgabe extern bearbeitet → Hinweis ───
+  // Kein Auto-Reload: Der Student könnte mitten in der Antwort-Eingabe
+  // stehen (Reload = verlorenes Arbeitsergebnis). Der Toast triggert
+  // den manuellen Reload.
+  aicampusWatchContent(courseId, (data) => {
+    if (data.entity_type !== "task" || Number(data.entity_id) !== Number(taskId)) return;
+    showToast('Die Aufgabe wurde aktualisiert — bitte die Seite neu laden, um die neue Version zu sehen.', 'info');
+  });
 
   // ─── Helper: escape HTML entities ──────────────────────────
   function escapeHtml(text) {

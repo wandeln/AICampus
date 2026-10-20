@@ -249,7 +249,7 @@
                 title="Applet-Vorschau"></iframe>
         <div id="applet-preview-svg" class="hidden flex items-center justify-center bg-gray-50 rounded"
              style="max-height: 600px">
-          <img id="applet-preview-svg-img" class="max-h-full max-w-full" alt="SVG-Vorschau">
+          <img id="applet-preview-svg-img" class="max-w-full" style="max-height: 600px" alt="SVG-Vorschau">
         </div>
       </div>
     </div>
@@ -272,6 +272,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ asset('js/content-live.js') }}"></script>
 <script>
 (function() {
   const mediaId = {{ media.id if media else 'null' }};
@@ -424,7 +425,7 @@
     '      sendError("Failed to load resource: " + (e.target.src || e.target.href));\n' +
     '    } else if (e.message) {\n' +
     '      var stack = e.error && e.error.stack ? e.error.stack.split("\\n").slice(1, 4).join("\\n") : "";\n' +
-    '      sendError(e.message + " (Zeile " + (e.lineno || "?") + ", Spalte " + (e.colno || "?"))", stack);\n' +
+    '      sendError(e.message + " (Zeile " + (e.lineno || "?") + ", Spalte " + (e.colno || "?"), stack);\n' +
     '    }\n' +
     '  });\n' +
     '  window.addEventListener("unhandledrejection", function (e) {\n' +
@@ -881,12 +882,13 @@
       const res = await fetch(`/api/courses/${courseId}/media/${mediaId}/applet`, { credentials: "same-origin" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "Fehler beim Laden des Applets.");
-      setFormat(data.format || "html");
+      // Zuerst Code laden, damit setFormat→updatePreview die volle Preview rendert
+      // (nur ein srcdoc-Write — sonst raced der leere First-Load gegen den echten).
       codeCM.setValue(data.media);
+      setFormat(data.format || "html");
       titleInput.value = data.title;
       syncAppletTitle();
       descInput.value = data.llm_description || "";
-      updatePreview();
       // setValue o. ä. haben onChange-Events ausgelöst → Baseline setzen,
       // damit das bloße Laden keinen Autosave/keine Version auslöst.
       av.setBaseline(avPayload());
@@ -1005,6 +1007,28 @@
   }
 
   loadApplet();
+
+  // ─── Live-Update: Applet extern bearbeitet (MCP, anderer Tab) → neu laden ─
+  // Eigener Auto-Save (Server-Stand = letzter gespeicherter Stand) wird
+  // still ignoriert — sonst würde jede Save-Iteration den Editor neu setzen.
+  // Ungespeicherte Änderungen oder eine laufende LLM-Generierung nicht
+  // unterbrechen — nur hinweisen.
+  aicampusWatchContent(courseId, async (data) => {
+    if (data.entity_type !== "applet" || data.entity_id !== mediaId) return;
+    const res = await fetch(`/api/courses/${courseId}/media/${mediaId}/applet`, { credentials: "same-origin" });
+    if (!res.ok) return;
+    const d = await res.json();
+    const base = av.getBaseline();
+    if (base && (d.title || "").trim() === (base.title || "").trim() &&
+                 (d.media || "") === (base.media || "") &&
+                 (d.llm_description || "").trim() === (base.llm_description || "").trim()) return;
+    if (av.dirty) {
+      showToast("Dieses Applet wurde gerade extern aktualisiert — deine ungespeicherten Änderungen wurden beibehalten.", "info");
+      return;
+    }
+    if (!statusBox.classList.contains("hidden")) return; // LLM-Generierung läuft
+    loadApplet();
+  });
 })();
 </script>
 {% endblock %}

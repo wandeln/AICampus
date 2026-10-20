@@ -122,6 +122,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ asset('js/content-live.js') }}"></script>
 <script>
   // Gemeinsame Ansicht für alle Rollen; Tutor/PROF/Admin zusätzlich mit
   // Bearbeitung (Drag-Handle, Toolbar, Inline-Formular, neues Kapitel).
@@ -528,6 +529,7 @@
           await renderMarkdown(fresh.content || '', md, { sectionId: edit.sectionId, bibliography: true });
           md.setAttribute('data-loaded', '1');
         }
+        card._lastContent = fresh.content || '';
         card.setAttribute('data-section-title', fresh.title);
         const t = card.querySelector('.sq-title');
         if (t) t.innerHTML = renderCaptionMath(fresh.title);
@@ -1131,6 +1133,112 @@
   }
 
   // ─── Kapitel-Liste (alle Rollen; Inhalt per Klick ausklappbar) ────
+  // Baut eine Kapitel-Karte (Header + Body) aus einem Section-Dict (List-Endpoint).
+  // Liefert die Karte OHNE Toolbar zurück — der Caller baut sie ins DOM ein und
+  // befüllt dann die Toolbar (querySelector braucht den DOM-Pfad).
+  function buildSectionCard(s) {
+    const svgNS = "http://www.w3.org/2000/svg";
+    const card = document.createElement("div");
+    // Mobil: Karte full-bleed (nimmt das px-4 des Main-Containers per
+    // -mx-4 mit, keine Rundung, keine Seitenbänder). Ab sm: gewöhnliche Karte.
+    // Kein overflow-hidden: würde die Card zum Scroll-Container machen
+    // und den Sticky-Kapitel-Header in der Card einsperren.
+    card.className = "script-chapter-card bg-white border border-gray-200 shadow-sm -mx-4 border-x-0 border-t-0 rounded-none sm:mx-0 sm:border-t sm:border-x sm:rounded-xl overflow-clip";
+    card.setAttribute("data-section-id", s.id);
+    card.setAttribute("data-section-title", s.title);
+    card._visible = !!s.is_visible;
+
+    const header = document.createElement("button");
+    header.type = "button";
+    header.className = "sq-chapter-header w-full flex items-center gap-3 px-6 py-4 text-left hover:bg-gray-50 transition";
+
+    if (SQ_IS_TUTOR) {
+      const handle = document.createElement("div");
+      handle.className = "sq-drag-handle cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 transition select-none p-1 -m-1";
+      handle.title = "Ziehen zur Reihenfolge ändern";
+      handle.innerHTML =
+        '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">' +
+        '<circle cx="9" cy="5" r="1.5"></circle><circle cx="15" cy="5" r="1.5"></circle>' +
+        '<circle cx="9" cy="12" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle>' +
+        '<circle cx="9" cy="19" r="1.5"></circle><circle cx="15" cy="19" r="1.5"></circle></svg>';
+      header.appendChild(handle);
+    }
+
+    const titleWrap = document.createElement("span");
+    titleWrap.className = "sq-title-wrap flex items-center gap-2 min-w-0 flex-1";
+    // Kapitelnummer (rollenabhängig; wird von sqUpdateChapterNumbers() gefüllt).
+    // Fixe Breite w-12 → Titelanfang ist über alle Kapitel hinweg gleich (und
+    // stimmt mit dem TOC-Icon-Platzhalter überein).
+    const chapNum = document.createElement("span");
+    chapNum.className = "sq-chap-num hidden w-12 inline-flex items-center justify-center py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-400 shrink-0";
+    titleWrap.appendChild(chapNum);
+    const title = document.createElement("span");
+    title.className = "sq-title text-lg font-semibold text-blue-600";
+    // LaTeX $…$ im Titel rendern (Rest HTML-escaped, s. renderCaptionMath)
+    title.innerHTML = renderCaptionMath(s.title);
+    titleWrap.appendChild(title);
+    if (SQ_IS_TUTOR && !s.is_visible) {
+      const badge = document.createElement("span");
+      badge.className = "sq-hidden-badge px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-200 text-gray-500 shrink-0";
+      badge.textContent = "versteckt";
+      titleWrap.appendChild(badge);
+    }
+
+    const chevron = document.createElementNS(svgNS, "svg");
+    chevron.setAttribute("viewBox", "0 0 24 24");
+    chevron.setAttribute("fill", "none");
+    chevron.setAttribute("stroke", "currentColor");
+    chevron.setAttribute("stroke-width", "2");
+    chevron.setAttribute("stroke-linecap", "round");
+    chevron.setAttribute("stroke-linejoin", "round");
+    chevron.setAttribute("class", "h-5 w-5 text-gray-400 flex-shrink-0 transition-transform");
+    chevron.innerHTML = '<polyline points="6 9 12 15 18 9"></polyline>';
+
+    header.appendChild(titleWrap);
+    header.appendChild(chevron);
+
+    const body = document.createElement("div");
+    body.className = "script-chapter-body hidden px-6 pt-4 pb-6 border-t border-gray-100";
+    if (SQ_IS_TUTOR) {
+      const toolbar = document.createElement("div");
+      toolbar.className = "sq-toolbar flex items-center gap-2 pb-4";
+      body.appendChild(toolbar);
+    }
+    const md = document.createElement("div");
+    md.className = "markdown-preview";
+    md.textContent = "Wird geladen…";
+    body.appendChild(md);
+
+    header.addEventListener("click", async () => {
+      const nowHidden = body.classList.toggle("hidden");
+      chevron.style.transform = nowHidden ? "" : "rotate(180deg)";
+      if (nowHidden) return;
+      if (!md.hasAttribute("data-loaded")) {
+        try {
+          const r = await fetch(`/api/script-sections/${s.id}`, { credentials: "same-origin" });
+          if (!r.ok) throw new Error("Nicht geladen");
+          const data = await r.json();
+          // bibliography: Ganzes Kapitel → „Quellen“-Liste für @cite:-Zitationen
+          await renderMarkdown(data.content || "", md, { sectionId: s.id, bibliography: true });
+          md.setAttribute("data-loaded", "1");
+          card._lastContent = data.content || "";
+        } catch (e) {
+          md.textContent = "Fehler beim Laden des Kapitels.";
+          return;
+        }
+      }
+      // Markierungen bei JEDEM Aufklappen (neu) anwenden — idempotent.
+      // Wichtig, wenn das Kapitel schon vor dem ersten Laden der Fragen
+      // geöffnet war (sqData war dann noch leer → keine Markierung).
+      sqApplyMarksToSection(md, s.id);
+    });
+
+    card.appendChild(header);
+    card.appendChild(body);
+    return card;
+  }
+
+
   async function loadScript() {
     const container = document.getElementById('script-reading');
     try {
@@ -1154,109 +1262,11 @@
         return;
       }
 
-      const svgNS = "http://www.w3.org/2000/svg";
       for (const s of sections) {
-        const card = document.createElement("div");
-        // Mobil: Karte full-bleed (nimmt das px-4 des Main-Containers per
-        // -mx-4 mit, keine Rundung, keine Seitenbänder). Ab sm: gewöhnliche Karte.
-        // Kein overflow-hidden: würde die Card zum Scroll-Container machen
-        // und den Sticky-Kapitel-Header in der Card einsperren.
-        card.className = "script-chapter-card bg-white border border-gray-200 shadow-sm -mx-4 border-x-0 border-t-0 rounded-none sm:mx-0 sm:border-t sm:border-x sm:rounded-xl overflow-clip";
-        card.setAttribute("data-section-id", s.id);
-        card.setAttribute("data-section-title", s.title);
-        card._visible = !!s.is_visible;
-
-        const header = document.createElement("button");
-        header.type = "button";
-        header.className = "sq-chapter-header w-full flex items-center gap-3 px-6 py-4 text-left hover:bg-gray-50 transition";
-
-        if (SQ_IS_TUTOR) {
-          const handle = document.createElement("div");
-          handle.className = "sq-drag-handle cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 transition select-none p-1 -m-1";
-          handle.title = "Ziehen zur Reihenfolge ändern";
-          handle.innerHTML =
-            '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">' +
-            '<circle cx="9" cy="5" r="1.5"></circle><circle cx="15" cy="5" r="1.5"></circle>' +
-            '<circle cx="9" cy="12" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle>' +
-            '<circle cx="9" cy="19" r="1.5"></circle><circle cx="15" cy="19" r="1.5"></circle></svg>';
-          header.appendChild(handle);
-        }
-
-        const titleWrap = document.createElement("span");
-        titleWrap.className = "sq-title-wrap flex items-center gap-2 min-w-0 flex-1";
-        // Kapitelnummer (rollenabhängig; wird von sqUpdateChapterNumbers() gefüllt).
-        // Fixe Breite w-12 → Titelanfang ist über alle Kapitel hinweg gleich (und
-        // stimmt mit dem TOC-Icon-Platzhalter überein).
-        const chapNum = document.createElement("span");
-        chapNum.className = "sq-chap-num hidden w-12 inline-flex items-center justify-center py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-400 shrink-0";
-        titleWrap.appendChild(chapNum);
-        const title = document.createElement("span");
-        title.className = "sq-title text-lg font-semibold text-blue-600";
-        // LaTeX $…$ im Titel rendern (Rest HTML-escaped, s. renderCaptionMath)
-        title.innerHTML = renderCaptionMath(s.title);
-        titleWrap.appendChild(title);
-        if (SQ_IS_TUTOR && !s.is_visible) {
-          const badge = document.createElement("span");
-          badge.className = "sq-hidden-badge px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-200 text-gray-500 shrink-0";
-          badge.textContent = "versteckt";
-          titleWrap.appendChild(badge);
-        }
-
-        const chevron = document.createElementNS(svgNS, "svg");
-        chevron.setAttribute("viewBox", "0 0 24 24");
-        chevron.setAttribute("fill", "none");
-        chevron.setAttribute("stroke", "currentColor");
-        chevron.setAttribute("stroke-width", "2");
-        chevron.setAttribute("stroke-linecap", "round");
-        chevron.setAttribute("stroke-linejoin", "round");
-        chevron.setAttribute("class", "h-5 w-5 text-gray-400 flex-shrink-0 transition-transform");
-        chevron.innerHTML = '<polyline points="6 9 12 15 18 9"></polyline>';
-
-        header.appendChild(titleWrap);
-        header.appendChild(chevron);
-
-        const body = document.createElement("div");
-        body.className = "script-chapter-body hidden px-6 pt-4 pb-6 border-t border-gray-100";
-        if (SQ_IS_TUTOR) {
-          const toolbar = document.createElement("div");
-          toolbar.className = "sq-toolbar flex items-center gap-2 pb-4";
-          body.appendChild(toolbar);
-        }
-        const md = document.createElement("div");
-        md.className = "markdown-preview";
-        md.textContent = "Wird geladen…";
-        body.appendChild(md);
-
-        let loaded = false;
-        header.addEventListener("click", async () => {
-          const nowHidden = body.classList.toggle("hidden");
-          chevron.style.transform = nowHidden ? "" : "rotate(180deg)";
-          if (nowHidden) return;
-          if (!loaded) {
-            try {
-              const r = await fetch(`/api/script-sections/${s.id}`, { credentials: "same-origin" });
-              if (!r.ok) throw new Error("Nicht geladen");
-              const data = await r.json();
-              // bibliography: Ganzes Kapitel → „Quellen“-Liste für @cite:-Zitationen
-              await renderMarkdown(data.content || "", md, { sectionId: s.id, bibliography: true });
-              loaded = true;
-              md.setAttribute("data-loaded", "1");
-            } catch (e) {
-              md.textContent = "Fehler beim Laden des Kapitels.";
-              return;
-            }
-          }
-          // Markierungen bei JEDEM Aufklappen (neu) anwenden — idempotent.
-          // Wichtig, wenn das Kapitel schon vor dem ersten Laden der Fragen
-          // geöffnet war (sqData war dann noch leer → keine Markierung).
-          sqApplyMarksToSection(md, s.id);
-        });
-
-        card.appendChild(header);
-        card.appendChild(body);
+        const card = buildSectionCard(s);
+        container.appendChild(card);
         // Toolbar erst nach dem Einbau befüllen (querySelector braucht den DOM-Pfad)
         if (SQ_IS_TUTOR) sqSetNormalToolbar(card);
-        container.appendChild(card);
       }
 
       if (SQ_IS_TUTOR) initSortable();
@@ -1318,6 +1328,115 @@
   });
 
   loadScript();
+
+  // ─── Live-Update (MCP): Inhalt extern bearbeitet → gezieltes Refetch ───
+  // Event ist nur Trigger (ohne Inhalt, s. content-live.js): die Karte holt
+  // sich die Section über die normale API (Rechte bleiben enforced). Kein
+  // Page-Reload → Scroll-Position und Auf-/Zuklapp-Zustand bleiben erhalten.
+  function sqLiveFlash(card) {
+    // Outline-Flash ohne Scrollen (sqFlashEl scrollt immer).
+    card.style.outline = '2px solid #60a5fa';
+    card.style.outlineOffset = '2px';
+    setTimeout(() => { card.style.outline = ''; card.style.outlineOffset = ''; }, 2000);
+  }
+
+  // Liefert true, wenn es eine Karte für sectionId gab (aktualisiert/entfernt/
+  // übersprungen); sonst false → sqLiveCreateSection() übernimmt.
+  async function sqLiveEditSection(sectionId) {
+    const card = document.querySelector(`#script-reading [data-section-id="${sectionId}"]`);
+    if (!card) return false;
+    const res = await fetch(`/api/script-sections/${sectionId}`, { credentials: 'same-origin' });
+    if (!res.ok) {
+      // Kapitel gelöscht (oder für Studenten versteckt) → Karte entfernen
+      card.remove();
+      await refreshCourseRefMap();
+      sqBuildToc();
+      return true;
+    }
+    const s = await res.json();
+    // Eigener Auto-Save (Server-Stand = letzter gespeicherter Stand) →
+    // nichts Neues, still ignorieren — auch im Edit-Modus (sonst Toast
+    // bei jeder Save-Iteration).
+    const base = card._av ? card._av.getBaseline() : null;
+    if (base &&
+        (base.title || '').trim() === (s.title || '').trim() &&
+        (base.content || '') === (s.content || '') &&
+        (base.summary || '') === (s.summary || '')) {
+      return true;
+    }
+    if (card._edit) {
+      // Echte externe Änderung, während dieses Kapitel bearbeitet wird
+      // → nicht überschreiben.
+      showToast('Dieses Kapitel wurde extern geändert — Live-Update übersprungen.', 'info');
+      return true;
+    }
+    if (card._lastContent != null &&
+        card._lastContent === (s.content || '') &&
+        (card.getAttribute('data-section-title') || '') === (s.title || '')) {
+      return true;
+    }
+    card.setAttribute('data-section-title', s.title);
+    card._visible = !!s.is_visible;
+    const titleEl = card.querySelector('.sq-title');
+    if (titleEl) titleEl.innerHTML = renderCaptionMath(s.title);
+    if (SQ_IS_TUTOR) {
+      const titleWrap = card.querySelector('.sq-title-wrap');
+      const badge = card.querySelector('.sq-hidden-badge');
+      if (!s.is_visible && !badge && titleWrap) {
+        const b = document.createElement('span');
+        b.className = 'sq-hidden-badge px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-200 text-gray-500 shrink-0';
+        b.textContent = 'versteckt';
+        titleWrap.appendChild(b);
+      } else if (s.is_visible && badge) {
+        badge.remove();
+      }
+    }
+    const body = card.querySelector('.script-chapter-body');
+    const md = card.querySelector('.markdown-preview');
+    if (body && md && !body.classList.contains('hidden') && md.hasAttribute('data-loaded')) {
+      // Karte offen + geladen → Inhalt an Ort und Stelle neu rendern
+      await renderMarkdown(s.content || '', md, { sectionId, bibliography: true });
+      card._lastContent = s.content || '';
+      sqApplyMarksToSection(md, sectionId);
+      sqLiveFlash(card);
+    } else if (md) {
+      // Karte zu → beim nächsten Aufklappen frisch laden
+      md.removeAttribute('data-loaded');
+    }
+    await refreshCourseRefMap();
+    sqBuildToc();
+    return true;
+  }
+
+  // Section neu angelegt (keine Karte) → an der korrekten Position einfügen.
+  async function sqLiveCreateSection(sectionId) {
+    const container = document.getElementById('script-reading');
+    // Neukapitel wird gerade lokal angelegt (ID kommt per onSaved) → Race
+    // gegen das eigene Create-Event; die Karte entsteht lokal.
+    if (container.querySelector('[data-new]')) return;
+    const res = await fetch(`/api/courses/${courseId}/script-sections`, { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const sections = await res.json();
+    const idx = sections.findIndex((x) => String(x.id) === String(sectionId));
+    if (idx < 0) return; // Student: Kapitel nicht sichtbar → nicht in der Liste
+    if (!container.querySelector('.script-chapter-card')) container.innerHTML = ''; // Empty-State-Platzhalter
+    const card = buildSectionCard(sections[idx]);
+    const next = sections[idx + 1];
+    const anchor = next ? container.querySelector(`[data-section-id="${next.id}"]`) : null;
+    if (anchor) container.insertBefore(card, anchor);
+    else container.appendChild(card);
+    // Toolbar erst nach dem Einbau befüllen (querySelector braucht den DOM-Pfad)
+    if (SQ_IS_TUTOR) sqSetNormalToolbar(card);
+    await refreshCourseRefMap();
+    sqBuildToc();
+    sqLiveFlash(card);
+  }
+
+  aicampusWatchContent(courseId, async (data) => {
+    if (data.entity_type !== 'script_section') return;
+    if (await sqLiveEditSection(data.entity_id)) return;
+    await sqLiveCreateSection(data.entity_id);
+  });
 
   const newSectionBtn = document.getElementById('new-section-btn');
   if (newSectionBtn) newSectionBtn.addEventListener('click', () => sqAddNewSection());

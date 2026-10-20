@@ -216,6 +216,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ asset('js/content-live.js') }}"></script>
 <script>
 (function() {
   let mediaList = [];   // Alle bisher geladenen Medien (Seiten kumuliert)
@@ -1154,6 +1155,15 @@
   document.getElementById("media-sort").addEventListener("change", loadMedia);
 
   loadMedia();
+
+  // ─── Live-Update (MCP): Medium/Applet extern angelegt/bearbeitet → neu laden ──
+  // (Filter/Sortierung bleiben erhalten; übersprungen, solange der
+  //  Edit-Dialog offen ist)
+  aicampusWatchContent(courseId, (data) => {
+    if (data.entity_type !== "media" && data.entity_type !== "applet") return;
+    if (editingId != null) return;
+    loadMedia();
+  });
 })();
 </script>
 {% endblock %}

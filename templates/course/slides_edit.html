@@ -299,6 +299,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ asset('js/content-live.js') }}"></script>
 <script>
 (function () {
   // Hinweis (Jinja2): In JS-Kommentaren dieser Datei nie „geschweifte
@@ -1050,6 +1051,27 @@
   };
 
   loadContent();
+
+  // ─── Live-Update: Deck extern bearbeitet (MCP, anderer Tab) → neu laden ─
+  // Eigener Auto-Save (Server-Stand = letzter gespeicherter Stand) wird
+  // still ignoriert — sonst würde jede Save-Iteration den Editor neu setzen
+  // (Cursor-Position verloren). Ungespeicherte Änderungen nicht
+  // überschreiben — nur hinweisen; der Nutzer aktualisiert bewusst.
+  aicampusWatchContent(courseId, async (data) => {
+    if (data.entity_type !== "slide_deck" || data.entity_id !== material.id) return;
+    const res = await fetch(`/api/courses/${courseId}/materials/${material.id}`, { credentials: "same-origin" });
+    if (!res.ok) return;
+    const m = await res.json();
+    const base = av.getBaseline();
+    if (base && (m.title || "").trim() === (base.title || "").trim() &&
+                 (m.content || "") === (base.content || "") &&
+                 (m.summary || "") === (base.summary || "")) return;
+    if (av.dirty) {
+      showToast("Dieses Deck wurde gerade extern aktualisiert — deine ungespeicherten Änderungen wurden beibehalten.", "info");
+      return;
+    }
+    loadContent();
+  });
 
   {% endif %}
 })();

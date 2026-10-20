@@ -130,6 +130,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ asset('js/content-live.js') }}"></script>
 <script>
 (function () {
   const decks = {{ decks | tojson }};
@@ -315,34 +316,78 @@
     }, true);
   }
 
-  for (const d of decks) {
-    const shell = document.querySelector(`[data-deck-preview="${d.id}"]`);
-    if (!shell) continue;
-    const emptyEl = shell.querySelector(".deck-preview-empty");
-    fetch(`/api/courses/${courseId}/materials/${d.id}`, { credentials: "same-origin" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then(async (data) => {
-        if (!data) {
-          emptyEl.textContent = "Fehler beim Laden";
-          return;
-        }
-        const slides = await parseSlides(data.content || "");
-        if (slides.length === 0) {
-          // Empty-State bleibt sichtbar (Platzhalter war "Deck wird geladen…").
-          emptyEl.textContent = "Leeres Deck";
-          return;
-        }
-        const isMini = slides.length > MINI_PREVIEW_SLIDES;
-        const state = { reveal: null };
-        state.reveal = await mountPreviewDeck(
-          shell, d.id,
-          isMini ? slides.slice(0, MINI_PREVIEW_SLIDES) : slides,
-          countSlides(slides)
-        );
-        if (isMini) wireFullDeckUpgrade(shell, d.id, slides, state);
-      })
-      .catch(() => { emptyEl.textContent = "Fehler beim Laden"; });
+  // deckId → { reveal }: State der Kachel-Instanzen (für Live-Remounts).
+  const deckStates = new Map();
+
+  // Kachel-Vorschau (neu) laden + mounten. full = volles Deck statt Mini
+  // (Live-Remount, wenn der Nutzer tiefer als das Mini-Deck stand).
+  // state.mounting = Schutz gegen parallele Mounts (Initial-Load vs. Live).
+  async function slMountDeck(d, state, { full = false } = {}) {
+    if (state.mounting) return;
+    state.mounting = true;
+    try {
+      const shell = document.querySelector(`[data-deck-preview="${d.id}"]`);
+      if (!shell) return;
+      const emptyEl = shell.querySelector(".deck-preview-empty");
+      const data = await fetch(`/api/courses/${courseId}/materials/${d.id}`, { credentials: "same-origin" })
+        .then((r) => (r.ok ? r.json() : null));
+      if (!data) {
+        emptyEl.textContent = "Fehler beim Laden";
+        return;
+      }
+      const slides = await parseSlides(data.content || "");
+      if (slides.length === 0) {
+        // Empty-State bleibt sichtbar (Platzhalter war "Deck wird geladen…").
+        emptyEl.textContent = "Leeres Deck";
+        return;
+      }
+      const isMini = !full && slides.length > MINI_PREVIEW_SLIDES;
+      state.reveal = await mountPreviewDeck(
+        shell, d.id,
+        isMini ? slides.slice(0, MINI_PREVIEW_SLIDES) : slides,
+        countSlides(slides)
+      );
+      if (isMini) wireFullDeckUpgrade(shell, d.id, slides, state);
+    } finally {
+      state.mounting = false;
+    }
   }
+
+  for (const d of decks) {
+    const state = { reveal: null };
+    deckStates.set(d.id, state);
+    slMountDeck(d, state).catch(() => {
+      const shell = document.querySelector(`[data-deck-preview="${d.id}"]`);
+      if (shell) shell.querySelector(".deck-preview-empty").textContent = "Fehler beim Laden";
+    });
+  }
+
+  // ─── Live-Update (MCP): Deck wurde außerhalb bearbeitet ──────────
+  // Neu angelegt → Reload (Kachel wird serverseitig gerendert). Geändert →
+  // gezieltes Remount der Kachel, die aktuelle Folie bleibt erhalten.
+  function slLiveDeckUpdate(deckId) {
+    const shell = document.querySelector(`[data-deck-preview="${deckId}"]`);
+    if (!shell) { location.reload(); return; }
+    const state = deckStates.get(deckId) || { reveal: null };
+    if (state.mounting) { setTimeout(() => slLiveDeckUpdate(deckId), 1000); return; }
+    let posH = 0, posV = 0;
+    try { const i = state.reveal.getIndices(); posH = i.h || 0; posV = i.v || 0; } catch (e) {}
+    try { state.reveal.destroy(); } catch (e) {}
+    state.reveal = null;
+    slMountDeck({ id: deckId }, state, { full: posH >= MINI_PREVIEW_SLIDES }).then(() => {
+      if (state.reveal) state.reveal.slide(posH, posV); // slide() clampt
+      const tile = shell.closest("[data-deck-id]");
+      if (tile) {
+        tile.style.outline = "2px solid #60a5fa";
+        tile.style.outlineOffset = "2px";
+        setTimeout(() => { tile.style.outline = ""; tile.style.outlineOffset = ""; }, 2000);
+      }
+    }).catch(() => location.reload());
+  }
+  aicampusWatchContent(courseId, (data) => {
+    if (data.entity_type !== "slide_deck") return;
+    slLiveDeckUpdate(data.entity_id);
+  });
 
   // ─── Deck-Verwaltung ────────────────────────────────────────────
 

@@ -69,6 +69,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ asset('js/content-live.js') }}"></script>
 <script src="{{ asset('js/slides.js') }}"></script>
 <script src="{{ asset('vendor/reveal/reveal.js') }}"></script>
 {# Highlight-Plugin (Code-Highlighting + data-line-numbers/Per-Line-Reveal;
@@ -134,7 +135,22 @@ if (HAS_NOTES) {
 }
 </script>
 <script>
-(async function () {
+// Aktuelle Reveal-Instanz + Mount-Schutz (Initial-Load vs. Live-Remount)
+let aicampusCurrentReveal = null;
+let aicampusDeckMounting = false;
+
+// Deck (neu) mounten: Inhalt laden → Sections → neue Reveal-Instanz.
+// isLive = Live-Remount via MCP: die Folie des Nutzers bleibt erhalten;
+// Lade-Fehler/leeres Deck → Reload (sauberer Zustand, Hash bleibt erhalten).
+async function aicampusDoMount() {
+  const isLive = aicampusCurrentReveal != null;
+  // Live-Remount: Folie des Nutzers merken + alte Instanz destroyen
+  let posH = 0, posV = 0;
+  if (isLive) {
+    try { const i = aicampusCurrentReveal.getIndices(); posH = i.h || 0; posV = i.v || 0; } catch (e) {}
+    try { aicampusCurrentReveal.destroy(); } catch (e) {}
+    aicampusCurrentReveal = null;
+  }
   const shell = document.getElementById("present-shell");
 
   // Deck-Inhalt laden
@@ -145,12 +161,14 @@ if (HAS_NOTES) {
     const data = await res.json();
     content = data.content || "";
   } catch (e) {
+    if (isLive) { location.reload(); return; }
     shell.innerHTML = '<div class="present-message">Fehler beim Laden des Slide-Decks.</div>';
     return;
   }
 
   const slides = await parseSlides(content);
   if (slides.length === 0) {
+    if (isLive) { location.reload(); return; }
     shell.innerHTML = '<div class="present-message">Dieses Deck enthält noch keine Folien.</div>';
     return;
   }
@@ -160,6 +178,7 @@ if (HAS_NOTES) {
   const slidesEl = document.getElementById("reveal-slides");
   // Footer am Canvas-Element (wandert nicht mit den Slide-Transitions)
   if (FOOTER_ENABLED && FOOTER_TEXT) slidesEl.setAttribute("data-footer", FOOTER_TEXT);
+  if (isLive) slidesEl.innerHTML = ""; // alte Sections (Live-Remount)
   for (let h = 0; h < slides.length; h++) {
     const footer = FOOTER_ENABLED && FOOTER_TEXT ? FOOTER_TEXT : null;
     // Folien-Position (S-Nummern unlabeled Subfigure-Komplexe):
@@ -216,6 +235,18 @@ if (HAS_NOTES) {
   // Code-LaTeX nach Reveal's Highlight-Pass
   aicampusWireCodeMath(reveal);
   await reveal.initialize();
+  aicampusCurrentReveal = reveal;
+  // Live-Remount: zur Folie des Nutzers zurück. Der Hash zeigt schon darauf
+  // (hash: true) — slide() als Absicherung, rAF gegen Reveal's interne
+  // URL-Lektüre beim Start (Muster aus slides.html, Voll-Deck-Upgrade).
+  if (isLive) {
+    reveal.slide(posH, posV);
+    requestAnimationFrame(() => {
+      if (aicampusCurrentReveal !== reveal) return;
+      const cur = reveal.getIndices();
+      if (cur.h !== posH || (cur.v || 0) !== posV) reveal.slide(posH, posV);
+    });
+  }
   // Zitations-Links → auto-Quellen-Folie (Click-Handler in slides.js)
   aicampusRegisterSlideReveal(document.getElementById("reveal-root"), reveal);
   // MCP (get_user_focus): aktuelle Folie im Präsentationsmodus melden
@@ -248,7 +279,8 @@ if (HAS_NOTES) {
 
   // PDF-Export: Reveal legt mit ?print-pdf das Druck-Layout an und feuert
   // "pdf-ready", ruft window.print() aber nicht selbst auf → hier auslösen.
-  if (/print-pdf/.test(window.location.search)) {
+  // Nur Initial-Mount (Live-Remounts sind nie Print-Szenarien).
+  if (!isLive && /print-pdf/.test(window.location.search)) {
     // Reveal's setupPDF() setzt den Sections left/top/width, aber KEINE
     // Höhe (rechnet aus gemessenen Scroll-Heights) → die Sections
     // schrumpfen in der PDF auf den Inhalt. fixPdfLayout() setzt die
@@ -286,7 +318,25 @@ if (HAS_NOTES) {
     reveal.on("pdf-ready", doPrint);
     setTimeout(doPrint, 800); // Fallback, falls das Event nicht ankommt
   }
-})();
+}
+
+async function aicampusMountDeck() {
+  if (aicampusDeckMounting) return;
+  aicampusDeckMounting = true;
+  try {
+    await aicampusDoMount();
+  } finally {
+    aicampusDeckMounting = false;
+  }
+}
+
+aicampusMountDeck();
+
+// ─── Live-Update (MCP): Deck extern bearbeitet → Remount auf der Folie ───
+aicampusWatchContent(courseId, (data) => {
+  if (data.entity_type !== "slide_deck" || data.entity_id !== DECK_ID) return;
+  aicampusMountDeck();
+});
 </script>
 {# Shortcuts-Panel: Ein Klick auf einen Eintrag führt aus, als wäre die Taste
    gedrückt worden. Reveal + das Notes-Plugin (Taste S) hören beide auf

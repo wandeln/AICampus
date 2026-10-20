@@ -20,6 +20,7 @@ env/
 
 # Daten (DB, Import-Staging, hochgeladene Dateien)
 data/
+aicampus.db
 
 # E2E-Test-Artefakte (DBs, Screenshots, Traces)
 .e2e_test/

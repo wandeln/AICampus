@@ -159,6 +159,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ asset('js/content-live.js') }}"></script>
 <script>
   // ─── Filter (client-seitig: nur die Liste wird gefiltert, keine Reload) ───
   const taskListEl = document.getElementById('task-list');
@@ -380,5 +381,13 @@
       showToast('Fehler: ' + err.message, 'error');
     }
   }
+
+  // ─── Live-Update (MCP): Aufgabe extern bearbeitet → Reload ───
+  // (übersprungen, solange das Duplizieren-Modal offen ist)
+  aicampusWatchContent(courseId, (data) => {
+    if (data.entity_type !== "task") return;
+    if (!document.getElementById('duplicate-task-modal').classList.contains('hidden')) return;
+    location.reload();
+  });
 </script>
 {% endblock %}
