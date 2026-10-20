@@ -12,7 +12,7 @@ Das hält die API sauber und typisiert.
 from datetime import datetime
 from typing import Optional, List
 from enum import Enum
-from sqlalchemy import Column, JSON, UniqueConstraint
+from sqlalchemy import Column, Integer, JSON, UniqueConstraint
 from sqlmodel import SQLModel, Field, Relationship
 
 
@@ -119,7 +119,13 @@ class CourseBase(SQLModel):
 class Course(CourseBase, table=True):
     __tablename__ = "courses"
     
-    id: Optional[int] = Field(default=None, primary_key=True)
+    # AUTOINCREMENT: verhindert die Wiederverwendung gelöschter Kurs-IDs.
+    # Sonst erbt ein neuer Kurs mit wiederverwendeter ID alle verwaisten
+    # Restdaten des gelöschten Kurses (s. _migrate_courses_autoincrement).
+    id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(Integer, primary_key=True, autoincrement=True),
+    )
     created_by: int = Field(foreign_key="users.id")
     created_at: datetime = Field(default_factory=datetime.now)
     

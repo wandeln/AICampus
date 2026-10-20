@@ -198,6 +198,12 @@ def _auth(
     if course_id is None:
         return user, token, CourseRole.STUDENT
 
+    if session.get(Course, course_id) is None:
+        raise McpToolError(
+            f"Kurs {course_id} existiert nicht (mehr). Nutze list_courses, um "
+            "deine verfügbaren Kurse zu sehen."
+        )
+
     if course_id not in allowed:
         raise McpToolError(
             f"Kurs {course_id} ist für dieses Token nicht freigegeben. "

@@ -37,10 +37,15 @@ if "sqlite" in DATABASE_URL:
           LLM-Calls) alle Writes mit „database is locked“ blockiert.
         - busy_timeout: bis zu 10 s auf eine Sperre warten (z. B. vom
           Compute-Agenten), statt 5 s wie pysqlite-Default.
+        - foreign_keys: FK-Constraints erzwingen. Ohne sie können Zeilen
+          auf gelöschte Eltern schreiben (z. B. ein Kapitel in einen
+          bereits gelöschten Kurs) und bei ID-Wiederverwendung still in
+          einem neuen Kurs auftauchen.
         """
         cur = dbapi_conn.cursor()
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA busy_timeout=10000")
+        cur.execute("PRAGMA foreign_keys=ON")
         cur.close()
 else:
     engine = create_engine(
@@ -334,6 +339,55 @@ def migrate_schema():
                         conn.exec_driver_sql(
                             f"ALTER TABLE {table} RENAME COLUMN {old_name} TO {new_name}"
                         )
+
+    # Eigene Connection: PRAGMA foreign_keys greift nur außerhalb einer
+    # Transaktion (s. Funktion).
+    _migrate_courses_autoincrement()
+
+
+def _migrate_courses_autoincrement() -> None:
+    """Einmalig: courses-Table ohne ID-Wiederverwendung aufbauen (SQLite).
+
+    Ohne AUTOINCREMENT setzt SQLite die nächste Kurs-ID auf die zuletzt
+    gelöschte Rowid — verwaiste Restdaten des gelöschten Kurses würden
+    dann stillschweigend zum neuen Kurs „gehören“ (Vorfall 2026-10-20:
+    Testkurs 37 gelöscht → sein Kapitel + Studierende-Views landeten im
+    neuen Kurs 37 „VRVis Demo“). AUTOINCREMENT macht ID-Wiederverwendung
+    unmöglich; die Migration läuft mit FKs OFF und eigener Connection,
+    weil PRAGMA foreign_keys innerhalb einer Transaktion wirkungslos ist.
+    """
+    if "sqlite" not in DATABASE_URL:
+        return
+    raw = engine.raw_connection()
+    try:
+        cur = raw.cursor()
+        row = cur.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='courses'"
+        ).fetchone()
+        if not row or "AUTOINCREMENT" in (row[0] or "").upper():
+            return
+        cur.execute("PRAGMA foreign_keys=OFF")
+        ddl = row[0]
+        ddl = ddl.replace(
+            "id INTEGER NOT NULL,",
+            "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,",
+        )
+        ddl = re.sub(r"^[ \t]*PRIMARY KEY \(id\),[ \t]*\n", "", ddl, flags=re.MULTILINE)
+        tmp = "courses_autoincrement_tmp"
+        ddl = ddl.replace("CREATE TABLE courses", f"CREATE TABLE {tmp}", 1)
+        cur.execute("BEGIN IMMEDIATE")
+        try:
+            cur.execute(ddl)
+            cur.execute(f"INSERT INTO {tmp} SELECT * FROM courses")
+            cur.execute("DROP TABLE courses")
+            cur.execute(f"ALTER TABLE {tmp} RENAME TO courses")
+            cur.execute("COMMIT")
+        except Exception:
+            cur.execute("ROLLBACK")
+            raise
+        cur.execute("PRAGMA foreign_keys=ON")
+    finally:
+        raw.close()
 
 
 def get_session():

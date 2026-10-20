@@ -20,7 +20,7 @@ from config import (
     LDAP_BIND_DN, LDAP_BIND_PW,
 )
 from database.base import get_session
-from database.models import User, GlobalUserRole, CourseRole, UserCourse
+from database.models import Course, User, GlobalUserRole, CourseRole, UserCourse
 import hashlib
 import secrets
 import logging
@@ -387,7 +387,16 @@ def require_course_access(*allowed_roles: CourseRole):
                 detail="Keine course_id im Pfad gefunden.",
             )
         course_id = int(course_id)
-        
+
+        # Kurs muss existieren: veraltete Seiten dürfen nicht in gelöschte
+        # Kurse schreiben (sonst entstehen verwaiste Zeilen, die bei
+        # ID-Wiederverwendung in einen neuen Kurs wandern).
+        if session.get(Course, course_id) is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Kurs nicht gefunden (vermutlich gelöscht). Bitte Seite neu laden.",
+            )
+
         # Global-Admin hat überall Zugriff
         if user.role == GlobalUserRole.ADMIN:
             return user, course_id

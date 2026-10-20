@@ -29,6 +29,7 @@ from database.models import (
     FeedbackSource,
     GlobalUserRole,
     HintExchange,
+    MediaUsage,
     ScriptSection,
     Submission,
     SubmissionStatus,
@@ -263,6 +264,11 @@ async def create_task(
     session.refresh(task)
     sync_media_usages(session, course_id)
     if task_type == TaskType.WORKSPACE:
+        # Stale-Dir-Schutz: falls unter der neuen Task-ID noch ein alter
+        # Workspace-Ordner liegt (ID-Wiederverwendung), muss der Task leer starten.
+        old_dir = task_workspace_dir(task.id)
+        if old_dir.is_dir():
+            shutil.rmtree(old_dir, ignore_errors=True)
         # Stub-Skripte sofort (leerer Datei-Baum) — ohne Warten auf den
         # lauffähigen Zustand (Image/Engine); on_task_saved heilt nach.
         try:
@@ -505,6 +511,9 @@ async def delete_task(
         # Agent-Ressourcen + lokale Dateien + Workspace-DB-Rows, BEVOR der
         # Task aus der DB gelöscht wird (Instanz ist danach expired/detached)
         workspace_service.discard_workspace_content(session, task)
+
+    # Media-Usages der Aufgabe vorher entfernen (FK nach tasks.id)
+    session.exec(delete(MediaUsage).where(MediaUsage.task_id == task.id))
 
     for sub in task.submissions:
         for fb in sub.feedback_list:

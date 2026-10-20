@@ -11,10 +11,10 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from database.base import get_session
-from database.models import CourseReference, CourseRole, User
+from database.models import ContentVersion, CourseReference, CourseRole, User
 from services import bibtex as bib
 from services import version_service
 from services.auth_service import require_course_access
@@ -197,6 +197,10 @@ async def delete_reference(
 ):
     """Quelle löschen (existierende @cite:-Referenzen im Inhalt zeigen ❓)."""
     ref = _get_ref(session, course_id, ref_id)
+    # Versions-History der Quelle mit aufräumen
+    session.exec(delete(ContentVersion)
+                 .where(ContentVersion.entity_type == "reference")
+                 .where(ContentVersion.entity_id == ref_id))
     session.delete(ref)
     session.commit()
     return {"message": f"Quelle '{ref.key}' gelöscht."}

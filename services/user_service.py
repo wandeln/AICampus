@@ -19,6 +19,7 @@ from sqlmodel import Session, select
 
 from config import SUBMISSION_DIR
 from database.models import (
+    ContentVersion,
     Course,
     CourseImport,
     CourseInvite,
@@ -33,8 +34,15 @@ from database.models import (
     ImageSpec,
     LLMDebugEntry,
     MediaUsage,
+    McpClientContext,
+    McpEvent,
+    McpOAuthCode,
+    McpOAuthGrantCourse,
+    McpOAuthToken,
     McpToken,
     McpTokenCourse,
+    Notification,
+    PageView,
     ScriptQuestion,
     ScriptQuestionResponse,
     ScriptSection,
@@ -235,6 +243,35 @@ def delete_user_with_data(session: Session, user: User) -> str:
     # 13. Kurs-Mitgliedschaften
     for uc in session.exec(select(UserCourse).where(UserCourse.user_id == user_id)).all():
         session.delete(uc)
+
+    # 13b. Benachrichtigungen + Tracking + MCP-OAuth + Content-Versionen
+    for note in session.exec(
+        select(Notification).where(
+            (Notification.user_id == user_id) | (Notification.actor_id == user_id)
+        )
+    ).all():
+        session.delete(note)
+    for pv in session.exec(select(PageView).where(PageView.user_id == user_id)).all():
+        session.delete(pv)
+    for ev in session.exec(select(McpEvent).where(McpEvent.user_id == user_id)).all():
+        session.delete(ev)
+    for gc in session.exec(
+        select(McpOAuthGrantCourse).where(McpOAuthGrantCourse.user_id == user_id)
+    ).all():
+        session.delete(gc)
+    for code in session.exec(select(McpOAuthCode).where(McpOAuthCode.user_id == user_id)).all():
+        session.delete(code)
+    for tok in session.exec(select(McpOAuthToken).where(McpOAuthToken.user_id == user_id)).all():
+        session.delete(tok)
+    for ctx in session.exec(
+        select(McpClientContext).where(McpClientContext.user_id == user_id)
+    ).all():
+        session.delete(ctx)
+    for ver in session.exec(
+        select(ContentVersion).where(ContentVersion.created_by == user_id)
+    ).all():
+        session.delete(ver)
+    session.flush()
 
     # 14. Den User selbst
     avatar_rel = user.avatar

@@ -25,6 +25,7 @@ from database.models import (
     CourseRole,
     GlobalUserRole,
     MaterialType,
+    MediaUsage,
     User,
     UserCourse,
 )
@@ -260,6 +261,9 @@ async def delete_material(
             .where(ContentVersion.entity_type == "slide_deck")
             .where(ContentVersion.entity_id == material_id)
         )
+
+    # Media-Usages des Materials vorher entfernen (FK nach course_materials.id)
+    session.exec(delete(MediaUsage).where(MediaUsage.material_id == material_id))
 
     session.delete(material)
     session.commit()

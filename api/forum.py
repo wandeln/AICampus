@@ -355,6 +355,14 @@ async def delete_forum_channel(
     ).all()
     for m in msg_count:
         session.delete(m)
+    for read_state in session.exec(
+        select(ForumChannelReadState).where(ForumChannelReadState.channel_id == channel_id)
+    ).all():
+        session.delete(read_state)
+    for note in session.exec(
+        select(Notification).where(Notification.channel_id == channel_id)
+    ).all():
+        session.delete(note)
     session.delete(ch)
     session.commit()
     return {"message": f"Kanal '{ch.name}' gelöscht."}
