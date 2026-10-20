@@ -945,7 +945,8 @@
   // (ungespeicherte Änderungen) nicht Reloaden → Toast.
   aicampusWatchContent(courseId, async (data) => {
     if (data.entity_type !== "task" || Number(data.entity_id) !== Number(av.id)) return;
-    if (av.versionId != null) {
+    const force = data.origin_type === "applet";  // Applet geändert, Task-Version unverändert
+    if (!force && av.versionId != null) {
       try {
         const res = await fetch(`/api/versions/task/${av.id}`, { credentials: "same-origin" });
         if (res.ok) {

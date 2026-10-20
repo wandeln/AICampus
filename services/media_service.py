@@ -505,6 +505,31 @@ def _scan_references(session: Session, course_id: int) -> dict[str, list[RefEntr
     return {fname: list(bucket.values()) for fname, bucket in refs.items()}
 
 
+def referencing_entities(session: Session, course_id: int, filename: str) -> list[tuple[str, int]]:
+    """Alle Kurs-Inhalte, die eine Medium-Datei referenzieren.
+
+    Returns: (entity_type, entity_id)-Paare mit denselben Typen wie die
+    Live-Update-Events: "task" / "slide_deck" / "script_section" — damit
+    beim Applet-Update die eingebettenden Seiten über ihre bestehenden
+    Handler updaten können.
+    """
+    out: list[tuple[str, int]] = []
+    for t in session.exec(select(Task).where(Task.course_id == course_id)).all():
+        if t.description and filename in t.description:
+            out.append(("task", int(t.id)))
+    for mat in session.exec(
+        select(CourseMaterial).where(CourseMaterial.course_id == course_id)
+    ).all():
+        if mat.material_type == MaterialType.SLIDES and mat.content and filename in mat.content:
+            out.append(("slide_deck", int(mat.id)))
+    for s in session.exec(
+        select(ScriptSection).where(ScriptSection.course_id == course_id)
+    ).all():
+        if s.content and filename in s.content:
+            out.append(("script_section", int(s.id)))
+    return out
+
+
 def sync_media_usages(session: Session, course_id: int) -> None:
     """Rebaut die MediaUsage-Einträge eines Kurses aus dem Markdown-Inhalt.
 

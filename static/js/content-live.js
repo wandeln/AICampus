@@ -59,6 +59,14 @@
           return; // fremdes/ungültiges Event (z. B. Glocke)
         }
         if (data.event !== "content_updated" || data.course_id !== courseId) return;
+        // Eingebettetes Applet geändert → Bust-Eintrag für den Renderer:
+        // beim Re-Render bekommt die Medien-URL einen ?v=-Suffix. Ohne das
+        // liefert Chromes Bild-Memory-Cache (keyed pro URL) beim in-place
+        // Re-Render stummen Stale-Content — Cache-Header (no-cache/no-store)
+        // werden für die bereits geladene URL nicht beachtet.
+        if (data.origin_media) {
+          (window.aicampusMediaBusts = window.aicampusMediaBusts || {})[data.origin_media] = Date.now();
+        }
         schedule(data, onEvent);
       };
     } catch { /* EventSource unsupported → kein Live-Update */ }

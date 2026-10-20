@@ -417,14 +417,34 @@ function _boxColorToRgba(value) {
 //   und erreichen das Parent-DOM daher nicht.
 const APPLET_IMAGE_EXT = /\.(?:png|jpe?g|gif|webp|svg|bmp|avif|ico)(?:[?#].*)?$/i;
 function isAppletSrc(src) {
-  return /\.html?$/i.test(src) ||
-    (/^https?:\/\//i.test(src) && !APPLET_IMAGE_EXT.test(src));
+  // ?v=-Suffix (Live-Update-Cache-Buster, s. _mediaBustPass) durchlässig
+  const path = src.split(/[?#]/)[0];
+  return /\.html?$/i.test(path) ||
+    (/^https?:\/\//i.test(src) && !APPLET_IMAGE_EXT.test(path));
 }
 // Internes mp4-Video (eigene /media-URL) → natives <video>-Element mit
 // Controls (Play/Seek). Externe http(s)-Videos laufen über die Applet-Logik
 // (Iframe, s. isAppletSrc — mp4 ist keine Bild-Endung).
 function isVideoSrc(src) {
-  return !/^https?:\/\//i.test(src) && /\.(mp4|webm)$/i.test(src);
+  const path = src.split(/[?#]/)[0];
+  return !/^https?:\/\//i.test(src) && /\.(mp4|webm)$/i.test(path);
+}
+// Live-Update-Cache-Bust: Applet-Medien, die in dieser Seite per Live-Event
+// (origin_media) geändert wurden, haben in window.aicampusMediaBusts einen
+// Zeitstempel. Beim Render wird der Dateiname durch <name>?v=<ts> ersetzt.
+// Notwendig, weil der Browser-Memory-Cache für Bilder pro URL keyt und die
+// bereits geladene Datei bei in-place Re-Render ohne Request wiederverwendet
+// (auch no-cache/no-store-Header ändern das nicht) → stummer Stale-Content.
+// Die rohe Markdown-Quelle bleibt unberührt (nur das gerenderte HTML wird
+// gebusted) → keine ?v=-Lecks in gespeicherten Inhalten.
+function _mediaBustPass(html) {
+  const busts = window.aicampusMediaBusts || {};
+  for (const [fname, ts] of Object.entries(busts)) {
+    if (!html.includes(fname)) continue;
+    html = html.split(fname + "?v=").join(fname); // Alt-Bust → idempotent
+    html = html.split(fname).join(fname + "?v=" + ts);
+  }
+  return html;
 }
 function appletSandboxAttr(src) {
   if (!/^https?:\/\//i.test(src)) return "allow-scripts";
@@ -2240,6 +2260,8 @@ async function renderMarkdown(text, targetElement, options = {}) {
     });
   }
 
+  // Live-Update-Cache-Bust (s. _mediaBustPass): geändertes Applet → ?v=<ts>
+  html = _mediaBustPass(html);
   targetElement.innerHTML = `<div class="markdown-preview">${html}</div>`;
   // Überbreite Tabellen (viele Spalten): Horizontal-Scrollfläche mit
   // dezentem, schmalen Scrollbar (CSS .aicampus-table-scroll, main.css) —

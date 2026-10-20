@@ -93,13 +93,22 @@ def push_forum_message(session: Session, course_id: int, channel_id: int, messag
         logger.exception("[Notifications] Forum-Live-Event (Kurs %s, Kanal %s) fehlgeschlagen.", course_id, channel_id)
 
 
-def push_content_updated(session: Session, course_id: int, entity_type: str, entity_id: int) -> None:
+def push_content_updated(session: Session, course_id: int, entity_type: str, entity_id: int,
+                         origin_type: str | None = None,
+                         origin_media: str | None = None) -> None:
     """Live-Event (SSE): Kurs-Inhalt geändert (MCP) → offene Seiten updaten.
 
     Ergänzt die Versionierung: alle Kurs-Mitglieder bekommen das Event in
     ihren Streams (wie push_forum_message). Payload ohne Inhalt — die
     Seite holt sich das Element über die normale API, d. h. Rechte bleiben
     enforced (Student sieht bei unsichtbarem Inhalt schlicht nichts Neues).
+
+    origin_type: Auslöser war eine Änderung ANDERER Art (z. B. "applet" →
+    eingebettetes Applet geändert, Element-Markdown identisch) → die
+    Empfänger bypassen ihren Content-Identitäts-Check und rendern neu.
+    origin_media: Dateiname des geänderten Applets → der Renderer bustet
+    die URL beim Re-Render (?v=), sonst zeigt der Browser-Memory-Cache
+    stumm die alte Datei.
     """
     try:
         payload = {
@@ -108,6 +117,10 @@ def push_content_updated(session: Session, course_id: int, entity_type: str, ent
             "entity_type": entity_type,
             "entity_id": entity_id,
         }
+        if origin_type:
+            payload["origin_type"] = origin_type
+        if origin_media:
+            payload["origin_media"] = origin_media
         for uid in course_member_ids(session, course_id):
             _push(uid, payload)
     except Exception:

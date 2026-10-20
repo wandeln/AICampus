@@ -425,7 +425,9 @@
   // den manuellen Reload.
   aicampusWatchContent(courseId, (data) => {
     if (data.entity_type !== "task" || Number(data.entity_id) !== Number(taskId)) return;
-    showToast('Die Aufgabe wurde aktualisiert — bitte die Seite neu laden, um die neue Version zu sehen.', 'info');
+    showToast(data.origin_type === "applet"
+      ? 'Eingebettetes Applet wurde aktualisiert — bitte die Seite neu laden, um die neue Version zu sehen.'
+      : 'Die Aufgabe wurde aktualisiert — bitte die Seite neu laden, um die neue Version zu sehen.', 'info');
   });
 
   // ─── Helper: escape HTML entities ──────────────────────────

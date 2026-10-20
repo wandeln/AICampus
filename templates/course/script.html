@@ -1342,7 +1342,10 @@
 
   // Liefert true, wenn es eine Karte für sectionId gab (aktualisiert/entfernt/
   // übersprungen); sonst false → sqLiveCreateSection() übernimmt.
-  async function sqLiveEditSection(sectionId) {
+  // force = Auslöser war ein eingebettetes Applet (origin_type): Das
+  // Section-Markdown ist unverändert, daher bypassen wir die Identitäts-
+  // Checks und rendern die Karte neu (Iframe lädt das Applet neu).
+  async function sqLiveEditSection(sectionId, force = false) {
     const card = document.querySelector(`#script-reading [data-section-id="${sectionId}"]`);
     if (!card) return false;
     const res = await fetch(`/api/script-sections/${sectionId}`, { credentials: 'same-origin' });
@@ -1354,23 +1357,27 @@
       return true;
     }
     const s = await res.json();
-    // Eigener Auto-Save (Server-Stand = letzter gespeicherter Stand) →
-    // nichts Neues, still ignorieren — auch im Edit-Modus (sonst Toast
-    // bei jeder Save-Iteration).
-    const base = card._av ? card._av.getBaseline() : null;
-    if (base &&
-        (base.title || '').trim() === (s.title || '').trim() &&
-        (base.content || '') === (s.content || '') &&
-        (base.summary || '') === (s.summary || '')) {
-      return true;
+    if (!force) {
+      // Eigener Auto-Save (Server-Stand = letzter gespeicherter Stand) →
+      // nichts Neues, still ignorieren — auch im Edit-Modus (sonst Toast
+      // bei jeder Save-Iteration).
+      const base = card._av ? card._av.getBaseline() : null;
+      if (base &&
+          (base.title || '').trim() === (s.title || '').trim() &&
+          (base.content || '') === (s.content || '') &&
+          (base.summary || '') === (s.summary || '')) {
+        return true;
+      }
     }
     if (card._edit) {
       // Echte externe Änderung, während dieses Kapitel bearbeitet wird
       // → nicht überschreiben.
-      showToast('Dieses Kapitel wurde extern geändert — Live-Update übersprungen.', 'info');
+      showToast(force
+        ? 'Eingebettetes Applet wurde aktualisiert — Live-Update übersprungen (Kapitel wird bearbeitet).'
+        : 'Dieses Kapitel wurde extern geändert — Live-Update übersprungen.', 'info');
       return true;
     }
-    if (card._lastContent != null &&
+    if (!force && card._lastContent != null &&
         card._lastContent === (s.content || '') &&
         (card.getAttribute('data-section-title') || '') === (s.title || '')) {
       return true;
@@ -1434,7 +1441,8 @@
 
   aicampusWatchContent(courseId, async (data) => {
     if (data.entity_type !== 'script_section') return;
-    if (await sqLiveEditSection(data.entity_id)) return;
+    const force = data.origin_type === 'applet';
+    if (await sqLiveEditSection(data.entity_id, force)) return;
     await sqLiveCreateSection(data.entity_id);
   });
 

@@ -1059,15 +1059,20 @@
   // überschreiben — nur hinweisen; der Nutzer aktualisiert bewusst.
   aicampusWatchContent(courseId, async (data) => {
     if (data.entity_type !== "slide_deck" || data.entity_id !== material.id) return;
+    const force = data.origin_type === "applet";  // Applet geändert, Markdown identisch
     const res = await fetch(`/api/courses/${courseId}/materials/${material.id}`, { credentials: "same-origin" });
     if (!res.ok) return;
     const m = await res.json();
-    const base = av.getBaseline();
-    if (base && (m.title || "").trim() === (base.title || "").trim() &&
-                 (m.content || "") === (base.content || "") &&
-                 (m.summary || "") === (base.summary || "")) return;
+    if (!force) {
+      const base = av.getBaseline();
+      if (base && (m.title || "").trim() === (base.title || "").trim() &&
+                   (m.content || "") === (base.content || "") &&
+                   (m.summary || "") === (base.summary || "")) return;
+    }
     if (av.dirty) {
-      showToast("Dieses Deck wurde gerade extern aktualisiert — deine ungespeicherten Änderungen wurden beibehalten.", "info");
+      showToast(force
+        ? "Eingebettetes Applet wurde aktualisiert — deine ungespeicherten Änderungen wurden beibehalten."
+        : "Dieses Deck wurde gerade extern aktualisiert — deine ungespeicherten Änderungen wurden beibehalten.", "info");
       return;
     }
     loadContent();

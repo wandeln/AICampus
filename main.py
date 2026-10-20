@@ -1559,8 +1559,14 @@ async def serve_media(
     path = media_service.resolve_media_path(course_id, filename)
     if not path:
         raise HTTPException(404, "Datei nicht gefunden.")
-    # no-cache: Browser müssen nach Datei-Ersatz revalidieren (304 = kein Datentransfer)
-    headers = {"Cache-Control": "no-cache"}
+    # Applets werden unter derselben URL in-place ersetzt (Studio/MCP/Versions-
+    # Restore) → no-store: Der Browser-Memory-Cache würde bei Live-Re-Render
+    # stummen Stale-Content liefern (Chromium revalidiert no-cache-Einträge
+    # für Bilder im Memory-Cache nicht). Bilder/Video: Datei pro Pfad bleibt
+    # unverändert (Re-Upload = neue UUID) → no-cache reicht.
+    headers = {
+        "Cache-Control": "no-store" if media.media_type == "applet" else "no-cache"
+    }
     if media.media_type == "applet" and not filename.lower().endswith(".svg"):
         # HTML-Applets explizit als HTML markieren — kein MIME-Guessing.
         # Auto-Size-Boilerplate wird serverseitig injiziert (wirkt auch für manuelle Edits).

@@ -420,6 +420,16 @@ def _push_live_update(session: Session, entity_type: str, entity) -> None:
     if course_id is None:
         return
     notifications.push_content_updated(session, int(course_id), entity_type, int(entity.id))
+    # Eingebettetes Applet → auch die Seiten, die es einbetten, updaten
+    # (Skript-Kapitel / Slide-Deck / Aufgabe rendern es inline).
+    # origin_type: Das Element-Markdown bleibt identisch — Empfänger müssen
+    # deshalb ihren Content-Identitäts-Check bypassen (sonst stilles No-op).
+    if entity_type == "applet":
+        fname = (getattr(entity, "file_path", "") or "").rsplit("/", 1)[-1]
+        if fname:
+            for t, i in media_service.referencing_entities(session, int(course_id), fname):
+                notifications.push_content_updated(session, int(course_id), t, i,
+                                                   origin_type="applet", origin_media=fname)
 
 
 def snapshot_current(
