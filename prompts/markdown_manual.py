@@ -45,11 +45,16 @@ MARKDOWN_MANUAL = """\
   Interaktive Applets/Websites: ![Titel](/media/…/datei.html) bzw. ![Titel](https://…)
   (werden als Iframe gerendert und im Markdown genauso eingebunden wie Bilder).
   Videos (mp4/webm): ![Titel](/media/…/datei.mp4) — werden als Player gerendert (Play/Seek);
-  {height=X} wie bei Bildern.
+  {height=X} wie bei Bildern. Playback-Attribute (Werte true/false, führender Punkt optional,
+  beliebig kombinierbar): {autoplay=…}, {controls=…}, {loop=…}, {muted=…} —
+  {controls=false} ohne explizites {autoplay=…} schaltet Autoplay ein (sonst lässt sich das
+  Video nicht starten); Autoplay mit Ton kann vom Browser blockiert werden (dann zusätzlich
+  {muted=true} setzen).
 - Verwandte Medien (z. B. Teilabbildungen) als SUBFIGUREN in EINE Abbildung fassen (ein gemeinsames
   „Abb. N: Gesamt-Caption“, Medien nebeneinander, je eigenes kleines Caption — „a)“/„b)“-Prefixe NICHT manuell in die
   Captions schreiben, das wird automatisch ergänzt; die Inners dürfen nur {height=X} und ein optionales
-  {#fig:label} tragen — kein {#fragment}; sobald mindestens ein Inner ein {#fig:label} trägt, wird der Komplex
+  {#fig:label} tragen (plus bei Video-Innern die Video-Playback-Attribute) — kein {#fragment}; sobald mindestens
+  ein Inner ein {#fig:label} trägt, wird der Komplex
   als „Abb. N“ nummeriert (auch OHNE eigenes Komplex-{#fig:label}) und ALLE Inners automatisch mit
   a), b), c), … versehen; gelabelte Inners sind per @fig:label referenzierbar → „Abb. N a)“
   (a/b/… = Position im Komplex), das äußere {#fig:label} nach dem schließenden ) ist in dem Fall optional):

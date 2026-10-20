@@ -14,11 +14,16 @@ Regeln (Spiegelbild des Clients):
   getrennt. Token-Typen (je max. einmal, in BELIEBIGER Reihenfolge):
   {#fig:label}, {#fragment}/{#fragment:id} (auch {#Fragment}), {#aaid:label},
   {.?height=X} (Suffix ∅ oder "px"), {.?zoom=X} (Zoom nur bei einfachen
-  Abbildungen/Applets, NICHT bei Subfigure-Komplexen). Unbekanntes Token oder
-  Duplikat → die Abbildung bleibt literal (wird nicht nummeriert, kein Label).
-- Subfigure-Komplex: ![Gesamt]( inner inner ) + gleicher Tail (ohne zoom).
-  Je Inner erlaubt der Client nur {height=X} und/oder {#fig:label} (je max.
-  einmal, beliebige Reihenfolge). Gültig = Innere UND Tail valide; nur dann
+  Abbildungen/Applets, NICHT bei Subfigure-Komplexen) und
+  {.?autoplay=…}/{.?controls=…}/{.?loop=…}/{.?muted=…} (true/false, führender
+  Punkt optional — nur wenn die Src ein internes mp4/webm-Video ist).
+  Unbekanntes Token oder Duplikat → die Abbildung bleibt literal (wird nicht
+  nummeriert, kein Label).
+- Subfigure-Komplex: ![Gesamt]( inner inner ) + gleicher Tail (ohne zoom,
+  ohne Video-Attribute).
+  Je Inner erlaubt der Client nur {height=X} und/oder {#fig:label} und — bei
+  Video-Innern — die Video-Playback-Attribute (je max. einmal, beliebige
+  Reihenfolge). Gültig = Innere UND Tail valide; nur dann
   zählt der Komplex als EINE Abbildung (nummeriert bei äußerm {#fig:label}
   ODER mindestens einem gelabelten Inner), und die inneren ![…](…) zählen
   nicht als eigene Figuren. Ungültiger Komplex → bleibt literal: die inneren
@@ -46,6 +51,14 @@ _TOK_FRAG_RE = re.compile(r"#([Ff])ragment(?::[\w-]+)?")
 _TOK_AAID_RE = re.compile(r"#aaid:[\w-]+")
 _TOK_HEIGHT_RE = re.compile(r"\.?height=([\d.]+)([a-z]*)")
 _TOK_ZOOM_RE = re.compile(r"\.?zoom=([\d.]+)")
+_TOK_VIDEO_RE = re.compile(r"\.?(autoplay|controls|loop|muted)=(true|false)", re.IGNORECASE)
+
+
+def _is_video_src(src: str) -> bool:
+    """Internes mp4/webm-Video (Parität: isVideoSrc in markdown-renderer.js)."""
+    return not re.match(r"https?://", src, re.IGNORECASE) and bool(
+        re.search(r"\.(mp4|webm)$", re.split(r"[?#]", src)[0], re.IGNORECASE)
+    )
 
 # Einfache Abbildung (JS IMG_REF): Src = [^)\s]+ (bewusst auch `!` erlaubt —
 # bei unmaskierten ungültigen Komplexen matcht damit der äußere Kopf auf das
@@ -53,12 +66,12 @@ _TOK_ZOOM_RE = re.compile(r"\.?zoom=([\d.]+)")
 # beide Seiten zählen exakt dieselben Labels.
 _IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
 
-# Subfigure-Komplex (JS SUBFIG_RE): je Inner ![Alt](src) + bis zu zwei
+# Subfigure-Komplex (JS SUBFIG_RE): je Inner ![Alt](src) + bis zu sechs
 # beliebige {…}-Blöcke (Src schließt `!` aus, damit der äußere Kopf
 # ![Gesamt]( nicht auf das erste Inner matcht). Die Validierung der Innere
 # (nur height/fig erlaubt) passiert in _subfig_inners() — wie im Client
 # (SUBFIG_RE matcht lose, _parseSubfigInners validiert streng).
-_INNER_SRC = r"!\[[^\]]*\]\([^)\s!]+\)(?:" + _GAP + r"\{[^{}]*\}){0,2}"
+_INNER_SRC = r"!\[[^\]]*\]\([^)\s!]+\)(?:" + _GAP + r"\{[^{}]*\}){0,6}"
 _SUBFIG_ANY_RE = re.compile(
     r"!\[([^\]]*)\]\([ \t]*(?:\r?\n[ \t]*)?("
     + _INNER_SRC
@@ -78,7 +91,7 @@ def strip_code(content: str) -> str:
 
 
 def _parse_attr_tail(
-    text: str, pos: int, allow_zoom: bool
+    text: str, pos: int, allow_zoom: bool, video: bool = False
 ) -> tuple[bool, Optional[str], int, int]:
     """Verbraucht aufeinanderfolgende {…}-Tokens hinter einer Medien-Referenz
     (pos = Position KURZ nach dem schließenden „)“ der Referenz).
@@ -104,6 +117,8 @@ def _parse_attr_tail(
             kind = "height"
         elif allow_zoom and _TOK_ZOOM_RE.fullmatch(tok):
             kind = "zoom"
+        elif video and (vm := _TOK_VIDEO_RE.fullmatch(tok)):
+            kind = "video:" + vm.group(1).lower()
         if kind is None or kind in seen:
             return False, None, -1, end
         if kind == "fig":
@@ -135,7 +150,9 @@ def _subfig_inners(inner_text: str) -> Optional[list[tuple[int, Optional[str], s
         label: Optional[str] = None
         label_pos = -1
         height_seen = False
-        for _ in range(2):
+        vid_seen: set[str] = set()
+        video = _is_video_src(hm.group(2))
+        for _ in range(6):
             am = _ATTR_BLOCK_RE.match(rest)
             if not am:
                 break
@@ -151,6 +168,11 @@ def _subfig_inners(inner_text: str) -> Optional[list[tuple[int, Optional[str], s
                 if hm2.group(2) not in ("", "px") or height_seen:
                     return None  # falscher Suffix bzw. Duplikat-Height
                 height_seen = True
+            elif video and (vm := _TOK_VIDEO_RE.fullmatch(tok)):
+                name = vm.group(1).lower()
+                if name in vid_seen:
+                    return None  # Duplikat
+                vid_seen.add(name)
             else:
                 return None  # unbekanntes Token (z. B. {#fragment}, {zoom=…})
             rest = rest[am.end() :]
@@ -230,7 +252,9 @@ def _numbered_figure_events(
         found.append((m.start(), (m.group(1), label, label_pos, inners)))
     masked = mask_subfigs(text)
     for m in _IMG_RE.finditer(masked):
-        valid, label, label_pos, _end = _parse_attr_tail(masked, m.end(), allow_zoom=True)
+        valid, label, label_pos, _end = _parse_attr_tail(
+            masked, m.end(), allow_zoom=True, video=_is_video_src(m.group(2))
+        )
         if valid and label is not None:
             found.append((m.start(), (m.group(1), label, label_pos, [])))
     found.sort(key=lambda e: e[0])

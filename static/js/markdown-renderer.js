@@ -429,6 +429,17 @@ function isVideoSrc(src) {
   const path = src.split(/[?#]/)[0];
   return !/^https?:\/\//i.test(src) && /\.(mp4|webm)$/i.test(path);
 }
+// <video>-Playback-Attribute aus den Attribut-Tokens (s. 1e). Defaults:
+// controls=true, autoplay/loop/muted=false; explizites {controls=false}
+// ohne explizites {autoplay=…} ⇒ autoplay=true (sonst lässt sich das Video
+// nicht starten).
+function videoAttrs(f) {
+  let s = f.controls !== false ? ' controls' : '';
+  if (f.autoplay !== null ? f.autoplay : f.controls === false) s += ' autoplay';
+  if (f.loop === true) s += ' loop';
+  if (f.muted === true) s += ' muted';
+  return s;
+}
 // Live-Update-Cache-Bust: Applet-Medien, die in dieser Seite per Live-Event
 // (origin_media) geändert wurden, haben in window.aicampusMediaBusts einen
 // Zeitstempel. Beim Render wird der Dateiname durch <name>?v=<ts> ersetzt.
@@ -946,12 +957,15 @@ async function renderMarkdown(text, targetElement, options = {}) {
   //     oder Zeilenumbbruch ohne Leerzeile):
   //       {#fig:label}, {#fragment}, {#fragment:id}, {#Fragment},
   //       {.height=X} (Max-Höhe in px, optionaler Suffix "px"),
-  //       {.zoom=X} (Iframes: Zoom-Faktor des Applet-Inhalts).
+  //       {.zoom=X} (Iframes: Zoom-Faktor des Applet-Inhalts),
+  //       {autoplay=…}/{controls=…}/{loop=…}/{muted=…} (true/false, führender
+  //       Punkt optional — NUR bei internen Videos, s. isVideoSrc).
   //     height/zoom wirken in Slides UND Skript. Unlabelte Medien nehmen
   //     optional ihre Attribute an (Applet: {.zoom=X} und/oder {.height=X},
-  //     Bild: nur {.height=X}); ohne Attribut bleibt ein Applet ein normales
-  //     Iframe. Medien mit Alt-Text bekommen diesen als Caption unter sich
-  //     angezeigt (unlabelt: ohne Nummer; labelt: „Abb. N: Caption").
+  //     Bild: nur {.height=X}, Video: {.height=X} + Playback-Attribute);
+  //     ohne Attribut bleibt ein Applet ein normales Iframe. Medien mit
+  //     Alt-Text bekommen diesen als Caption unter sich angezeigt
+  //     (unlabelt: ohne Nummer; labelt: „Abb. N: Caption").
   //     Alles andere (auch unbekannte Tokens) → Match wird abgebrochen, der
   //     Text bleibt literal (Tippfehler fallen so auf).
   const figures = [];
@@ -1052,7 +1066,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
     // ACHTUNG: `!` in src ausschließen ([^)\s!]+) — sonst matcht der äußere
     // Komplex-Kopf ![Gesamt]( auf das erste INNER als src (s. _SF_INNER).
     const SUBFIG_INNER_SRC =
-      /!\[[^\]]*\]\([^)\s!]+\)(?:[ \t]*(?:\r?\n[ \t]*)?\{[^{}]*\}){0,2}/.source;
+      /!\[[^\]]*\]\([^)\s!]+\)(?:[ \t]*(?:\r?\n[ \t]*)?\{[^{}]*\}){0,6}/.source;
     const SUBFIG_RE = new RegExp(
       String.raw`!\[([^\]]*)\]\([ \t]*(?:\r?\n[ \t]*)?` +
         String.raw`(` + SUBFIG_INNER_SRC + String.raw`(?:\s+` + SUBFIG_INNER_SRC + String.raw`)+)` +
@@ -1161,7 +1175,8 @@ async function renderMarkdown(text, targetElement, options = {}) {
         pos += bm[0].length;
       }
       // Tokens validieren: nur bekannte Typen, je Attribut höchstens einmal.
-      const a = { label: null, frag: null, height: null, zoom: null, aaid: null };
+      const a = { label: null, frag: null, height: null, zoom: null, aaid: null,
+                  autoplay: null, controls: null, loop: null, muted: null };
       let valid = true;
       for (const inner of tokens) {
         let t;
@@ -1186,6 +1201,12 @@ async function renderMarkdown(text, targetElement, options = {}) {
         } else if ((t = inner.match(/^\.?zoom=([\d.]+)$/))) {
           if (a.zoom !== null) { valid = false; break; } // Duplikat
           a.zoom = parseFloat(t[1]);
+        } else if (isVideoSrc(src) &&
+                   (t = inner.match(/^\.?(autoplay|controls|loop|muted)=(true|false)$/i))) {
+          // Playback-Attribute nur für interne Videos (sonst = unbekanntes
+          // Token → literal, Tippfehler fallen auf).
+          if (a[t[1]] !== null) { valid = false; break; } // Duplikat
+          a[t[1]] = t[2].toLowerCase() === 'true';
         } else {
           valid = false; break; // unbekanntes Attribut → literal
         }
@@ -1198,7 +1219,8 @@ async function renderMarkdown(text, targetElement, options = {}) {
       if (valid) {
         if (a.label !== null) {
           const num = figNumberForLabel(a.label);
-          figures.push({ alt, src, label: a.label, num, frag: a.frag, height: a.height, zoom: a.zoom, aaid: a.aaid });
+          figures.push({ alt, src, label: a.label, num, frag: a.frag, height: a.height, zoom: a.zoom, aaid: a.aaid,
+                         autoplay: a.autoplay, controls: a.controls, loop: a.loop, muted: a.muted });
           repl = `%%FIG_${figures.length - 1}%%`;
         } else if (isAppletSrc(src) && !a.frag) {
           appletFigures.push({ alt, src, zoom: a.zoom, height: a.height });
@@ -1209,7 +1231,8 @@ async function renderMarkdown(text, targetElement, options = {}) {
           // Ohne Attribut UND ohne Alt-Text bleibt das Bild literal
           // (normales marked-<img>), wie bisher — Videos brauchen immer
           // einen Render-Pfad (<video>, kein <img>).
-          plainFigures.push({ alt, src, height: a.height });
+          plainFigures.push({ alt, src, height: a.height,
+                              autoplay: a.autoplay, controls: a.controls, loop: a.loop, muted: a.muted });
           repl = `%%PLAINFIG_${plainFigures.length - 1}%%`;
         }
       }
@@ -1743,7 +1766,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
     const mediaTag = isApplet
       ? `<iframe src="${escapeHtml(effSrc)}" class="aicampus-applet${isVideo ? ' aicampus-video' : ''}" sandbox="${appletSandboxAttr(effSrc)}" loading="lazy" title="${safeAlt}"${dataZoom}${dataMaxH}${mediaStyle}></iframe>`
       : isVideoSrc(f.src)
-      ? `<video src="${escapeHtml(f.src)}" controls preload="metadata"${mediaStyle}></video>`
+      ? `<video src="${escapeHtml(f.src)}" preload="metadata"${videoAttrs(f)}${mediaStyle}></video>`
       : `<img src="${escapeHtml(f.src)}" alt="${safeAlt}"${mediaStyle}>`;
     // Gezoomte Applets in einen overflow:hidden-Wrapper (sichtbare =
     // geskalte Höhe; transform ändert die Iframe-Layout-Box nicht). Initiale
@@ -1853,7 +1876,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
     const isVid = isVideoSrc(f.src);
     const imgStyle = f.height != null ? ` style="max-height: ${f.height}px !important"` : '';
     const imgTag = isVid
-      ? `<video src="${escapeHtml(f.src)}" controls preload="metadata"${imgStyle}></video>`
+      ? `<video src="${escapeHtml(f.src)}" preload="metadata"${videoAttrs(f)}${imgStyle}></video>`
       : `<img src="${escapeHtml(f.src)}" alt="${escapeHtml(f.alt)}"${imgStyle}>`;
     // Videos immer im <figure>-Wrapper (zentrierung/Margen), auch ohne
     // Caption/Height.
@@ -1882,7 +1905,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
       const mediaTag = isAppletSrc(inner.src)
         ? `<iframe src="${escapeHtml(inner.src)}" class="aicampus-applet" sandbox="${appletSandboxAttr(inner.src)}" loading="lazy" title="${safeAlt}"${style}></iframe>`
         : isVideoSrc(inner.src)
-        ? `<video src="${escapeHtml(inner.src)}" controls preload="metadata"${style}></video>`
+        ? `<video src="${escapeHtml(inner.src)}" preload="metadata"${videoAttrs(inner)}${style}></video>`
         : `<img src="${escapeHtml(inner.src)}" alt="${safeAlt}"${style}>`;
       const innerId = inner.label ? ` id="fig:${inner.label}"` : '';
       const letterPrefix = hasInnerLabel ? `${String.fromCharCode(97 + i)}) ` : '';
@@ -2770,12 +2793,14 @@ function _codeMathLooksLikeMath(latex) {
   return /\\|[{}^_()=+\-*\/<>≤≥≠∞∑∫√]/.test(latex);
 }
 
-// Subfigure-Inner-Text (s. 1e0) in [ {alt, src, height, label} ] auflösen:
-// pro Medium ![Caption](src) + optional BIS ZU ZWEI Attribut-Blöcke, die NUR
-// {height=X} und/oder {#fig:label} enthalten (je Token max. einmal,
-// beliebige Reihenfolge); Lücken zwischen den Innern reines Leerraum;
-// ≥2 Innere. Sonst null (Komplex bleibt literal — spiegelt die Server-Regex
-// exakt, s. _SF_INNER in api/script.py).
+// Subfigure-Inner-Text (s. 1e0) in [ {alt, src, height, label, …} ]
+// auflösen: pro Medium ![Caption](src) + optional BIS ZU SECHS
+// Attribut-Blöcke, die NUR {height=X} und/oder {#fig:label} und — bei
+// Videos — die Playback-Attribute {autoplay=…}/{controls=…}/{loop=…}/
+// {muted=…} enthalten (je Token max. einmal, beliebige Reihenfolge);
+// Lücken zwischen den Innern reines Leerraum; ≥2 Innere. Sonst null
+// (Komplex bleibt literal — spiegelt die Server-Seite exakt, s.
+// _subfig_inners in services/fig_labels.py).
 function _parseSubfigInners(innerText) {
   const inners = [];
   let rest = innerText;
@@ -2785,13 +2810,15 @@ function _parseSubfigInners(innerText) {
     rest = rest.slice(m[0].length);
     let height = null;
     let label = null;
-    for (let ti = 0; ti < 2; ti++) {
+    const vid = { autoplay: null, controls: null, loop: null, muted: null };
+    for (let ti = 0; ti < 6; ti++) {
       const am = /^[ \t]*(?:\r?\n[ \t]*)?\{([^{}]*)\}/.exec(rest);
       if (!am) break;
       const tok = am[1].trim();
       rest = rest.slice(am[0].length);
       const sm = tok.match(/^#fig:([\p{L}0-9_-]+)$/u);
       const hm = tok.match(/^\.?height=([\d.]+)([a-z]*)$/);
+      const vm = tok.match(/^\.?(autoplay|controls|loop|muted)=(true|false)$/i);
       if (sm) {
         if (label !== null) return null; // Duplikat-Label
         label = sm[1];
@@ -2799,11 +2826,14 @@ function _parseSubfigInners(innerText) {
         if (hm[2] !== '' && hm[2] !== 'px') return null;
         if (height !== null) return null; // Duplikat-Height
         height = parseFloat(hm[1]);
+      } else if (vm && isVideoSrc(m[2])) {
+        if (vid[vm[1]] !== null) return null; // Duplikat
+        vid[vm[1]] = vm[2].toLowerCase() === 'true';
       } else {
         return null; // unbekanntes Token
       }
     }
-    inners.push({ alt: m[1], src: m[2], height, label });
+    inners.push({ alt: m[1], src: m[2], height, label, ...vid });
     if (rest === '') break;
     const gm = /^[ \t\r\n]+/.exec(rest);
     if (!gm) return null; // keine reine Leerraum-Lücke → ungültig
