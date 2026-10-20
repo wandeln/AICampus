@@ -290,6 +290,11 @@ server = MCPServer(
         "(Bilder + Applets mit"
         " fertiger Markdown-Referenz zum Einbinden in Skript/Folien; "
         "Bild-Inhalt ansehen: read_image).\n"
+        "Bezieht sich der User auf etwas, das er gerade sieht („das“, „diesen "
+        "Absatz“, „diese Folie“, „kürze das“), oder bist du dir unsicher, "
+        "worauf sich seine Anweisung bezieht, rufe ZUERST get_user_focus() "
+        "auf (offene Seite, aktuelles Kapitel/Folie, Textmarkierung) — "
+        "nicht raten oder suchen.\n"
         "Das visible-Flag in course_overview betrifft NUR die Sichtbarkeit "
         "für Studierende: visible=false bedeutet 'noch nicht für Studierende "
         "freigeschaltet'. Als Tutor/Prof sind dir ALLE Inhalte sichtbar und "
@@ -481,11 +486,13 @@ def _focus_hint(page: str, entity_id: Optional[int], section: Optional[dict], ca
 async def get_user_focus(ctx: Context) -> str:
     """Was schaut sich der User gerade in AICampus an?
 
-    ZUERST AUFRUFEN, wenn der User auf das Bezug nimmt, was er gerade
-    sieht/öffnet/gemacht hat („das hier“, „diesen Absatz“, „diese Folie“,
-    „bitte kürze das“, „bitte formuliere das ein bisschen aus“): Liefert
-    die offene Seite (Skript/Slides/Aufgabe/Applet), das aktuelle Kapitel
-    (Skript) bzw. die aktuelle Folie (Slides inkl. Präsentationsmodus)
+    Wenn du dir nicht sicher bist, worauf sich die Anweisung des Users
+    bezieht — besonders wenn er auf das Bezug nimmt, was er gerade
+    sieht/öffnet/gerade gemacht hat („das hier“, „diesen Absatz“, „diese Folie“,
+    „bitte kürze das“, „bitte formuliere das ein bisschen aus“, „die Stelle mit X“) —
+    rufe immer ZUERST dieses Tool auf, statt zu raten oder zu suchen: Es
+    liefert die offene Seite (Skript/Slides/Aufgabe/Applet), das aktuelle
+    Kapitel (Skript) bzw. die aktuelle Folie (Slides inkl. Präsentationsmodus)
     und — falls der User Text markiert hat — die Markierung inkl.
     Umgebung. Danach bearbeiten: edit_content / edit_applet / edit_task
     (ref kommt aus diesem Rückgabewert)."""
