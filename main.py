@@ -398,12 +398,47 @@ app.include_router(preview_proxy.router)  # /preview/{task}/{port}/… (same-ori
 app.include_router(mcp_oauth.consent_router)
 
 # MCP-Server (streamable HTTP) — Bearer-Token-Auth (PAT + OAuth), s. api/mcp_server.py
+# Claude (claude.ai) probiert POST /mcp (ohne Trailing-Slash) — der Mount würde
+# 307 auf /mcp/ redirecten, was Claude nicht zuverlässig folgt. Die Route muss
+# VOR dem Mount stehen (Starlette: First Match). Class-Instanz statt Funktion:
+# Starlette behandelt nur Funktionen/Methoden als request-response-Endpoint,
+# alles andere als ASGI-App (Doppel-Wrapping → TypeError).
+from starlette.routing import Route
+
+class _MCPAppNoSlash:
+    async def __call__(self, scope, receive, send):
+        scope = {**scope, "path": "/", "raw_path": b"/",
+                 "root_path": scope.get("root_path", "") + "/mcp"}
+        await mcp_server_api.mcp_app(scope, receive, send)
+
+app.router.routes.append(Route("/mcp", _MCPAppNoSlash()))
 app.mount("/mcp", mcp_server_api.mcp_app)
 
 # RFC 9728 Protected-Resource-Metadata am Domain-Root: der WWW-Authenticate-Header
 # verweist dorthin (die Sub-App kopiert die Metadata nur unter dem /mcp-Prefix).
+# Claude probiert auch die Varianten ohne Trailing-Slash und die Root-Variante.
 for _r in mcp_server_api.protected_resource_routes:
     app.add_route(_r.path, _r.endpoint, methods=_r.methods)
+    app.add_route(_r.path.rstrip("/"), _r.endpoint, methods=_r.methods)
+    app.add_route("/.well-known/oauth-protected-resource", _r.endpoint, methods=_r.methods)
+
+# RFC 8414/6749 am Domain-Root: Claudes OAuth-/DCR-Modul streift den /mcp-Pfad
+# von der Issuer-URL und probiert root-level URLs (…/register → 404 war der
+# Grund für das scheitern von „Automatisch registrieren"). Deshalb hier die
+# kompletten OAuth-Endpunkte spiegeln — gleicher Provider → gleiche Clients.
+# AS-Metadata zusätzlich in der Path-Suffix-Form (RFC 8414 §3.2.3).
+from pydantic import AnyHttpUrl
+from mcp.server.auth.routes import create_auth_routes
+from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+for _r in create_auth_routes(
+    mcp_server_api.provider,
+    AnyHttpUrl(mcp_server_api.MCP_ISSUER),
+    client_registration_options=ClientRegistrationOptions(enabled=True),
+    revocation_options=RevocationOptions(enabled=True),
+):
+    app.add_route(_r.path, _r.endpoint, methods=_r.methods)
+    if _r.path == "/.well-known/oauth-authorization-server":
+        app.add_route(_r.path + "/mcp", _r.endpoint, methods=_r.methods)
 
 
 # ═══════════════════════════════════════════════════════════════════

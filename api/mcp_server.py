@@ -2603,6 +2603,10 @@ protected_resource_routes = create_protected_resource_routes(
     authorization_servers=[MCP_ISSUER],
 )
 
+# RFC 8414 Authorization-Server-Metadata: main.py spiegelt sie über
+# create_auth_routes(…) am Domain-Root (Claude-Discovery) — die Optionen
+# dort müssen mit den AuthSettings unten synchron bleiben!
+
 mcp_app = server._lowlevel_server.streamable_http_app(
     streamable_http_path="/",
     stateless_http=True,
