@@ -647,7 +647,7 @@ async def duplicate_task(
 
     session.commit()
     session.refresh(new_task)
-    sync_media_usages(task.course_id)
+    sync_media_usages(session, task.course_id)
     version_service.mark_created(session, user, "task", new_task.id)
 
     if task.task_type.value == "workspace":
