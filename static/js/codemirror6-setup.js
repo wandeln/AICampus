@@ -818,18 +818,31 @@ class CM6Editor {
   }
 
   // Zeile exakt an den oberen Rand des Editors scrollen (Folien-
-  // Navigation): ein Dispatch, kein Frame-Loop wie in CM5.
+  // Navigation, Preview-Sync). Wichtig: scroller.scrollTop DIREKT setzen
+  // statt CM6s scrollIntoView (Effect oder Methode) — CM6 scrollt dabei
+  // ALLE scrollbaren Vorfahren des Scrollers mit (scrollRectIntoView
+  // wandert bis doc.body und ruft dort win.scrollBy auf). Auf einer
+  // scrollbaren Seite (z.B. Skript) würde die ganze Seite mitscrollen.
+  // coordsAtPos liefert auch für Zeilen außerhalb des Viewports
+  // (geschätzte Höhen) Koordinaten — darauf basiert auch die interne
+  // CM6-Navigation.
   scrollToLineTop(line) {
     const s = this.view.state;
     const n = Math.max(0, Math.min(line | 0, s.doc.lines - 1));
     const from = s.doc.line(n + 1).from;
-    // y:"start" geht nur über einen ScrollIntoView-EFFECT (EditorView.
-    // scrollIntoView(pos, {y})); ein Options-Objekt in spec.scrollIntoView
-    // wird von state auf true (="nearest") coerced und ignoriert y.
-    this.view.dispatch({
-      selection: { anchor: from },
-      effects: EditorView.scrollIntoView(from, { y: "start" }),
-    });
+    const coords = this.view.coordsAtPos(from);
+    if (coords) {
+      const scroller = this.view.scrollDOM;
+      // Zeilen-Oberrand ans Scroller-Oberrand: scrollTop = Abstand der
+      // Zeile zum Dokumentanfang (beide client-Y-Werte verschieben sich
+      // beim Scrollen gemeinsam → Differenz ist scrollunabhängig).
+      // Wichtig: SETZEN, nicht addieren — sonst addiert sich der Offset
+      // bei jedem Sync-Event und der Editor läuft auf den Boden.
+      scroller.scrollTop = Math.max(0, coords.top - this.view.documentTop);
+    }
+    // Selektionsänderung ohne Scroll-Effekt (CM6 scrollt bei
+    // programmatischen Selections nicht).
+    this.view.dispatch({ selection: { anchor: from } });
   }
 
   getWrapperElement() { return this.wrapper; }

@@ -224,6 +224,87 @@ function _chapterRef(refMap, sectionId) {
   return refMap.chapters[String(sectionId)] || null;
 }
 
+// ─── Quellzeilen-Tracking (Preview→Editor-Scroll-Sync) ────────────────
+// renderMarkdown(sourceLines) pflegt während der Extraktionsstufen
+// lines[i] = Originalzeile (0-basiert) der i-ten Pipeline-Zeile und
+// markiert die Top-Level-Blocks der Preview mit data-src-line (s.
+// _insertSrcLineMarkers/_applySrcLineMarkers am Ende). Verwendung:
+// Skript-Edit-Modus — Preview-Scroll scrollt den Editor auf die
+// zugehörige Quellzeile.
+function _nlPrefix(text) {
+  // prefix[i] = Anzahl \n in text[0..i) → Zeilenindex für jeden Offset
+  const p = new Array(text.length + 1);
+  p[0] = 0;
+  for (let i = 0; i < text.length; i++) p[i + 1] = p[i] + (text[i] === '\n' ? 1 : 0);
+  return p;
+}
+
+// [start, end) → repl im Zeilen-Tracking: alle Zeilen von repl (und der
+// sie tragenden Zeile) bekommen die Zeilennummer der Regions-Startzeile.
+function _replLines(lines, prefix, start, end, repl) {
+  const sl = prefix[start];
+  const el = prefix[end - 1];
+  const line0 = lines[sl];
+  lines.splice(sl, el - sl + 1, ...repl.split('\n').map(() => line0));
+}
+
+// lines-Abschnitt für den Text-Slice [a, b) (b = Ende wenn weggelassen);
+// a darf mid-line sein (die Partial-Zeile übernimmt die Nummer ihrer Zeile).
+function _sliceLines(text, lines, a, b) {
+  const end = b === undefined ? text.length : b;
+  if (end <= a) return [];
+  const p = _nlPrefix(text);
+  return lines.slice(p[a], p[end - 1] + 1);
+}
+
+// Anzahl Zeilen, die ein leading trim() entfernt (reine Whitespace-Zeilen).
+function _leadTrimLines(s) {
+  let m = 0;
+  while (m < s.length && /\s/.test(s[m])) m++;
+  return (s.slice(0, m).match(/\n/g) || []).length;
+}
+
+// Zeilen-Zuweisungen für aus Segmente-Texten zusammengesetzten
+// Wrapper-Text (Boxen/Spalten): eine Zeile bekommt die Zuweisung des
+// Segments, das sie zuerst mit (Nicht-Whitespace-)Inhalt füllt;
+// leere Zeilen → line0.
+function _segLineAssign(line0, segs) {
+  const out = [];
+  let cur = null;
+  for (const seg of segs) {
+    let k = 0;
+    for (let i = 0; i < seg.t.length; i++) {
+      const c = seg.t[i];
+      if (c === '\n') {
+        out.push(cur === null ? line0 : cur);
+        cur = null;
+        k += 1;
+      } else if (cur === null && c !== ' ' && c !== '\t' && c !== '\r') {
+        cur = seg.f(k);
+      }
+    }
+  }
+  if (cur !== null) out.push(cur);
+  return out;
+}
+
+// .replace + Zeilen-Tracking in einem Rutsch: pro Match wird der
+// Ersatz (Offsets im Vorersatz-Text) gesammelt und nach dem Replace
+// rückwärts angewendet. fn-Signatur wie gewohnt (match, groups, …).
+function _trackedReplace(text, lines, re, fn) {
+  const prefix = _nlPrefix(text);
+  const pend = [];
+  const out = text.replace(re, (...args) => {
+    const m = args[0];
+    const off = args[args.length - 2];
+    const repl = fn(...args);
+    if (typeof repl === 'string' && repl !== m) pend.push([off, off + m.length, repl]);
+    return repl;
+  });
+  for (let i = pend.length - 1; i >= 0; i--) _replLines(lines, prefix, pend[i][0], pend[i][1], pend[i][2]);
+  return out;
+}
+
 // ─── Hinweis-/Merksatz-/Mathe-Boxen: @startbox:{typ} … @endbox ─────────
 // Bekannte Typen mit Icon & Überschrift. Unbekannte Typen werden als neutrale
 // Box mit dem rohen Typen als Titel gerendert (Inhalt geht nicht verloren).
@@ -333,13 +414,15 @@ function _scanColumnBlock(text, from) {
   return null;
 }
 
-function _convertColumnBlocks(text) {
+function _convertColumnBlocks(text, lines) {
   const open = _nextColumnOpen(text, 0);
-  if (open === null) return text;
+  if (open === null) return [text, lines];
   const scan = _scanColumnBlock(text, open.end);
   if (scan === null) {
     // ungeschlossene Zeile → bleibt literal, ab nach der Head-Zeile weiter
-    return text.slice(0, open.end) + _convertColumnBlocks(text.slice(open.end));
+    const p = _nlPrefix(text);
+    const res = _convertColumnBlocks(text.slice(open.end), _sliceLines(text, lines, open.end));
+    return [text.slice(0, open.end) + res[0], lines.slice(0, p[open.end]).concat(res[1])];
   }
   const weights = [open.weight];
   // Zellen-Grenzen paarweise: [offen, @nextcolumn-Start), [@nextcolumn-Ende,
@@ -348,14 +431,37 @@ function _convertColumnBlocks(text) {
   const bounds = [open.end];
   for (const s of scan.splits) { bounds.push(s.start, s.headEnd); weights.push(s.weight); }
   bounds.push(scan.close);
-  let html = '\n\n<div class="aicampus-cols" style="grid-template-columns:' +
+  const p = _nlPrefix(text);
+  const line0 = lines[p[open.start]];
+  const gridOpen = '\n\n<div class="aicampus-cols" style="grid-template-columns:' +
     weights.map((w) => w + 'fr').join(' ') + '">';
+  const cellOpen = '\n<div class="aicampus-col">\n\n';
+  const cellClose = '\n\n</div>';
+  const gridClose = '\n</div>\n\n';
+  let html = gridOpen;
+  const segs = [{ t: gridOpen, f: () => line0 }];
   for (let i = 0; i < weights.length; i++) {
-    const body = _convertColumnBlocks(text.slice(bounds[i * 2], bounds[i * 2 + 1])).trim();
-    html += '\n<div class="aicampus-col">\n\n' + body + '\n\n</div>';
+    const cell = _convertColumnBlocks(
+      text.slice(bounds[i * 2], bounds[i * 2 + 1]),
+      _sliceLines(text, lines, bounds[i * 2], bounds[i * 2 + 1])
+    );
+    const cellTrimmed = cell[0].trim();
+    const lead = _leadTrimLines(cell[0]);
+    html += cellOpen + cellTrimmed + cellClose;
+    segs.push(
+      { t: cellOpen, f: () => line0 },
+      { t: cellTrimmed, f: (k) => cell[1][k + lead] },
+      { t: cellClose, f: () => line0 },
+    );
   }
-  html += '\n</div>\n\n';
-  return text.slice(0, open.start) + html + _convertColumnBlocks(text.slice(scan.closeEnd));
+  html += gridClose;
+  segs.push({ t: gridClose, f: () => line0 });
+  const tailRes = _convertColumnBlocks(text.slice(scan.closeEnd), _sliceLines(text, lines, scan.closeEnd));
+  segs.push({ t: tailRes[0], f: (k) => tailRes[1][k] });
+  return [
+    text.slice(0, open.start) + html + tailRes[0],
+    lines.slice(0, p[open.start]).concat(_segLineAssign(line0, segs)),
+  ];
 }
 
 // ─── Highlight-Box: @boxcolor:<farbe> ───────────────────────────────────
@@ -661,7 +767,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
     return;
   }
 
-  const { preview = false, sectionId = null, slideMode = false, slidePos = null } = options;
+  const { preview = false, sectionId = null, slideMode = false, slidePos = null, sourceLines = false } = options;
 
   // Globale Label-Map für Querverweise (gecacht; null auf Nicht-Kurs-Seiten).
   // Keys sind kind-prefixed ("eq:test" ≠ "box:test"), s. script-refmap.
@@ -702,7 +808,17 @@ async function renderMarkdown(text, targetElement, options = {}) {
   };
 
   // 0. Kapitel-Label ({#sec:label} als erste nicht-leere Zeile) → kein Content, entfernen
-  text = text.replace(/^(?:[ \t]*\n)*[ \t]*\{#sec:[\p{L}0-9_-]+\}[ \t]*(?:\r?\n|$)/u, '');
+  let lineOffset = 0; // (sourceLines) Zeilen, die Schritt 0 entfernt
+  {
+    const m0 = /^(?:[ \t]*\n)*[ \t]*\{#sec:[\p{L}0-9_-]+\}[ \t]*(?:\r?\n|$)/u.exec(text);
+    if (m0) {
+      lineOffset = (m0[0].match(/\n/g) || []).length + (m0[0].endsWith('\n') ? 0 : 1);
+      text = text.slice(m0[0].length);
+    }
+  }
+  // (sourceLines) lines[i] = Originalzeile (0-basiert) der i-ten
+  // Pipeline-Zeile; jede Extraktionsstufe unten pflegt sie.
+  let lines = text.split('\n').map((_, i) => i);
 
   // ── Pre-extraction phase ──────────────────────────────────────────
   // Order matters: extract code blocks FIRST so LaTeX extraction never
@@ -714,7 +830,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
   //     Code-Blöcke eine nummerierte Caption ("Code N: Caption", s. Schritt 11).
   //     Jedes andere Token → Block fällt durch zum normalen Code (1b).
   const mermaidBlocks = [];
-  let processed = text.replace(/```mermaid([^\n]*)\n([\s\S]*?)```/g, (match, head, diagram) => {
+  let processed = _trackedReplace(text, lines, /```mermaid([^\n]*)\n([\s\S]*?)```/g, (match, head, diagram) => {
     head = head.trim();
     let mLabel = null;
     let mCaption = null;
@@ -745,14 +861,14 @@ async function renderMarkdown(text, targetElement, options = {}) {
 
   // 1b. Extract remaining fenced code blocks (``` ... ```)
   const fencedCodeBlocks = [];
-  processed = processed.replace(/```([\s\S]*?)```/g, (match, content) => {
+  processed = _trackedReplace(processed, lines, /```([\s\S]*?)```/g, (match, content) => {
       fencedCodeBlocks.push(content);
     return `%%FC${fencedCodeBlocks.length - 1}%%`;
   });
 
   // 1c. Extract inline code spans (`...`)
   const inlineCodeSpans = [];
-  processed = processed.replace(/`([^`]+?)`/g, (match, content) => {
+  processed = _trackedReplace(processed, lines, /`([^`]+?)`/g, (match, content) => {
     inlineCodeSpans.push(content);
     return `%%IC${inlineCodeSpans.length - 1}%%`;
   });
@@ -785,13 +901,17 @@ async function renderMarkdown(text, targetElement, options = {}) {
   let boxFallbackCount = 0;
   // Slide-Decks: slide-eigene Box-Labels → S1, S2, … (wie eq/fig/code).
   let slideBoxCount = 0;
-  processed = _convertBoxBlocks(processed);
+  const boxRes = _convertBoxBlocks(processed, lines);
+  processed = boxRes[0];
+  lines = boxRes[1];
   // 1d2. Convert columns: @startcolumn … @nextcolumn … @endcolumn →
   //      Spalten-Grid (s. _convertColumnBlocks). Läuft NACH den Boxen:
   //      Boxen in Spalten sind dann bereits konvertiert, Spalten in Boxen
   //      (die Marker überleben die Box-Konversion als literal) werden
   //      hier im Box-Body umgewandelt.
-  processed = _convertColumnBlocks(processed);
+  const colRes = _convertColumnBlocks(processed, lines);
+  processed = colRes[0];
+  lines = colRes[1];
 
   // Erste Box-Öffnung ab pos: gültiges @startbox:{typ} (Typ direkt nach dem
   // Doppelpunkt, s. BOX_EVENT_RE) → { start, type, typeEnd } oder null.
@@ -849,18 +969,20 @@ async function renderMarkdown(text, targetElement, options = {}) {
     return { valid, caption, label };
   }
 
-  function _convertBoxBlocks(text) {
+  function _convertBoxBlocks(text, lines) {
     const open = _nextBoxOpen(text, 0);
-    if (open === null) return text;
+    if (open === null) return [text, lines];
     const nl = text.indexOf('\n', open.typeEnd);
-    if (nl === -1) return text; // kein Ende der Head-Zeile → bleibt literal
+    if (nl === -1) return [text, lines]; // kein Ende der Head-Zeile → bleibt literal
     const close = _findBoxClose(text, nl + 1);
     const head = _parseBoxHead(text.slice(open.typeEnd, nl));
+    const p = _nlPrefix(text);
     if (close === null || !head.valid) {
       // Öffnung bleibt literal (ungeschlossen/ungültige Head-Zeile); ab nach
       // der Head-Zeile weiter verarbeiten, damit verschachtelte Boxen
       // weiterhin konvertiert werden.
-      return text.slice(0, nl + 1) + _convertBoxBlocks(text.slice(nl + 1));
+      const res = _convertBoxBlocks(text.slice(nl + 1), _sliceLines(text, lines, nl + 1));
+      return [text.slice(0, nl + 1) + res[0], lines.slice(0, p[nl + 1]).concat(res[1])];
     }
     const type = open.type;
     const label = head.label;
@@ -890,60 +1012,78 @@ async function renderMarkdown(text, targetElement, options = {}) {
       }
     }
     const rawContent = text.slice(nl + 1, close.start);
-    const tail = _convertBoxBlocks(text.slice(close.end));
+    const line0 = lines[p[open.start]];
+    const tailRes = _convertBoxBlocks(text.slice(close.end), _sliceLines(text, lines, close.end));
+    // (sourceLines) Partial-Zeile vor @startbox (wenn mid-line)
+    const headPartial = (() => {
+      let lo = 0;
+      for (let L = 0; L < p[open.start]; L++) lo = text.indexOf('\n', lo) + 1;
+      return text.slice(lo, open.start);
+    })();
+    let bodyStart = nl + 1;
+    let wo, wc;
     if (type === 'highlight') {
       // Headless-Box (kein Kopf). Optional: ERSTE Zeile @boxcolor:<farbe>
       // → normalisierter Inline-Style (ungültig → CSS-Default, Primärfarbe);
       // die @boxcolor-Zeile wird im Match-Fall immer entfernt. Ein Label
       // ist erlaubt (Anker + Nummerierung, aber ohne sichtbaren Kopf).
       const idAttr = label ? ` id="box:${label}"` : '';
-      let body = rawContent;
-      const m = /^@boxcolor:\s*(.+?)\s*\r?\n([\s\S]*)$/u.exec(body);
+      const m = /^@boxcolor:\s*(.+?)\s*\r?\n([\s\S]*)$/u.exec(rawContent);
       let rgba = null;
       if (m) {
         rgba = _boxColorToRgba(m[1]);
-        body = m[2];
+        bodyStart += m[0].length - m[2].length;
       }
       const styleAttr = rgba ? ' style="background-color:' + rgba + '"' : '';
-      return (
-        text.slice(0, open.start) +
-        '\n\n<div class="aicampus-callbox aicampus-callbox-highlight"' + idAttr + styleAttr +
-        '>\n\n' + _convertBoxBlocks(body).trim() + '\n\n</div>\n\n' +
-        tail
-      );
-    }
-    const info = CALLOUT_TYPES[type] || { icon: '📄', title: type.charAt(0).toUpperCase() + type.slice(1) };
-    const body = _convertBoxBlocks(rawContent).trim();
-    const idAttr = label ? ` id="box:${label}"` : '';
-    // Nummer im Kopf: in Slides trägt ein im Skript vorhandenes Label die
-    // Skript-Nummer als Link zur Box im Skript (wie bei eq/fig/code).
-    let headTitle;
-    if (boxNum !== null) {
-      const g = globalLabels['box:' + label];
-      if (slideMode && g && g.kind === 'box') {
-        const cid = (refMap && refMap.courseId) || _getCourseId() || '';
-        headTitle =
-          escapeHtml(info.title) +
-          ` <a class="aicampus-callbox-num-link" href="/courses/${cid}/script#box:${label}"` +
-          ` title="Zur Box im Skript">${boxNum}</a>`;
-      } else {
-        headTitle = escapeHtml(info.title) + ' ' + boxNum;
-      }
+      wo = '\n\n<div class="aicampus-callbox aicampus-callbox-highlight"' + idAttr + styleAttr + '>\n\n';
+      wc = '\n\n</div>\n\n';
     } else {
-      headTitle = escapeHtml(info.title);
+      const info = CALLOUT_TYPES[type] || { icon: '📄', title: type.charAt(0).toUpperCase() + type.slice(1) };
+      const idAttr = label ? ` id="box:${label}"` : '';
+      // Nummer im Kopf: in Slides trägt ein im Skript vorhandenes Label die
+      // Skript-Nummer als Link zur Box im Skript (wie bei eq/fig/code).
+      let headTitle;
+      if (boxNum !== null) {
+        const g = globalLabels['box:' + label];
+        if (slideMode && g && g.kind === 'box') {
+          const cid = (refMap && refMap.courseId) || _getCourseId() || '';
+          headTitle =
+            escapeHtml(info.title) +
+            ` <a class="aicampus-callbox-num-link" href="/courses/${cid}/script#box:${label}"` +
+            ` title="Zur Box im Skript">${boxNum}</a>`;
+        } else {
+          headTitle = escapeHtml(info.title) + ' ' + boxNum;
+        }
+      } else {
+        headTitle = escapeHtml(info.title);
+      }
+      if (caption !== null && caption.trim() !== '') {
+        headTitle += ': ' + renderCaptionMath(caption.trim());
+      }
+      wo = '\n\n<div class="aicampus-callbox aicampus-callbox-' + type + '"' + idAttr + '>\n' +
+        '<div class="aicampus-callbox-head">' +
+        '<span class="aicampus-callbox-icon" aria-hidden="true">' + info.icon + '</span> ' +
+        headTitle + '</div>\n' +
+        '<div class="aicampus-callbox-body">\n\n';
+      wc = '\n\n</div>\n</div>\n\n';
     }
-    if (caption !== null && caption.trim() !== '') {
-      headTitle += ': ' + renderCaptionMath(caption.trim());
-    }
-    return (
-      text.slice(0, open.start) +
-      '\n\n<div class="aicampus-callbox aicampus-callbox-' + type + '"' + idAttr + '>\n' +
-      '<div class="aicampus-callbox-head">' +
-      '<span class="aicampus-callbox-icon" aria-hidden="true">' + info.icon + '</span> ' +
-      headTitle + '</div>\n' +
-      '<div class="aicampus-callbox-body">\n\n' + body + '\n\n</div>\n</div>\n\n' +
-      tail
+    const bodyRes = _convertBoxBlocks(
+      text.slice(bodyStart, close.start),
+      _sliceLines(text, lines, bodyStart, close.start)
     );
+    const bodyTrimmed = bodyRes[0].trim();
+    const lead = _leadTrimLines(bodyRes[0]);
+    const segs = [
+      { t: headPartial, f: () => line0 },
+      { t: wo, f: () => line0 },
+      { t: bodyTrimmed, f: (k) => bodyRes[1][k + lead] },
+      { t: wc, f: () => line0 },
+      { t: tailRes[0], f: (k) => tailRes[1][k] },
+    ];
+    return [
+      text.slice(0, open.start) + wo + bodyTrimmed + wc + tailRes[0],
+      lines.slice(0, p[open.start]).concat(_segLineAssign(line0, segs)),
+    ];
   }
 
   // 1e. Extract figures (labeled + unlabeled) mit Attribut-Tokens.
@@ -1076,6 +1216,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
     let out = '';
     let last = 0;
     let m;
+    const pend = [];
     while ((m = SUBFIG_RE.exec(processed)) !== null) {
       const inners = _parseSubfigInners(m[2]);
       if (inners === null) continue; // ungültig → literal (Regex rückt selbst weiter)
@@ -1141,15 +1282,22 @@ async function renderMarkdown(text, targetElement, options = {}) {
         }
       });
       out += processed.slice(last, m.index) + `%%SUBFIG_${subfigures.length - 1}%%`;
+      pend.push([m.index, pos, `%%SUBFIG_${subfigures.length - 1}%%`]);
       last = pos;
       SUBFIG_RE.lastIndex = pos;
     }
-    if (subfigures.length) processed = out + processed.slice(last);
+    if (subfigures.length) {
+      const prefix = _nlPrefix(processed);
+      for (let i = pend.length - 1; i >= 0; i--) _replLines(lines, prefix, pend[i][0], pend[i][1], pend[i][2]);
+      processed = out + processed.slice(last);
+    }
   }
   {
     let out = '';
     let last = 0;
     let m;
+    const prefix1 = _nlPrefix(processed);
+    const pend = [];
     while ((m = IMG_REF.exec(processed)) !== null) {
       const alt = m[1];
       const src = m[2];
@@ -1237,19 +1385,30 @@ async function renderMarkdown(text, targetElement, options = {}) {
         }
       }
       // repl = null (inkl. Bild ohne Attribute) → Referenz + Tail bleiben
-      // literal (per Platzhalter, s. imgLiteralTails).
-      out += processed.slice(last, m.index) + (repl !== null
-        ? repl
-        : `%%IMGLIT_${imgLiteralTails.push(processed.slice(m.index, pos)) - 1}%%`);
+      // literal (per Platzhalter, s. imgLiteralTails); assign = Zeilen der
+      // Tail-Zeilen (für das 1l-Restore).
+      const litIdx = repl === null
+        ? imgLiteralTails.push({
+            text: processed.slice(m.index, pos),
+            assign: lines.slice(prefix1[m.index], prefix1[pos - 1] + 1),
+          }) - 1
+        : null;
+      const litRepl = repl !== null ? repl : `%%IMGLIT_${litIdx}%%`;
+      out += processed.slice(last, m.index) + litRepl;
+      pend.push([m.index, pos, litRepl]);
       last = pos;
       IMG_REF.lastIndex = pos;
+    }
+    {
+      const prefix = _nlPrefix(processed);
+      for (let i = pend.length - 1; i >= 0; i--) _replLines(lines, prefix, pend[i][0], pend[i][1], pend[i][2]);
     }
     processed = out + processed.slice(last);
   }
 
   // 1f. Handle escaped dollar signs: \$ → placeholder
   const escapedDollar = '%%ED%%';
-  processed = processed.replace(/\\\$/g, escapedDollar);
+  processed = _trackedReplace(processed, lines, /\\\$/g, () => escapedDollar);
 
   // 1g. Extract $$...$$ display blocks (optional trailing {#eq:label}
   //     → nummerierte Gleichung "(N)" mit Anker, latex-artig verlinkbar)
@@ -1263,7 +1422,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
   // Nummerierung (S1), (S2), … — abgesetzt von der Skript-Nummerierung.
   let slideEqCount = 0;
   const latexFragments = [];
-  processed = processed.replace(
+  processed = _trackedReplace(processed, lines,
     /\$\$([\s\S]*?)\$\$(?:\s*\{#eq:([\p{L}0-9_-]+)\})?(?:\s*\{#([Ff])ragment(?::([\p{L}0-9_-]+))?\})?(?:\s*\{#aaid:([\p{L}0-9_-]+)\})?/gu,
     (match, latex, label, fchar, id, aaid) => {
       latexBlocks.push(latex.trim());
@@ -1293,7 +1452,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
 
   // 1h. Extract $...$ inline math (no newlines allowed)
   const latexInlines = [];
-  processed = processed.replace(/\$([^$\n]+?)\$/g, (match, latex) => {
+  processed = _trackedReplace(processed, lines, /\$([^$\n]+?)\$/g, (match, latex) => {
     latexInlines.push(latex.trim());
     return `%%LATEX_INLINE_${latexInlines.length - 1}%%`;
   });
@@ -1307,9 +1466,9 @@ async function renderMarkdown(text, targetElement, options = {}) {
   // jetzt der Renderer im Design des Skript-Quellenverzeichnisses) → in
   // @bibentry:{key} umschreiben; damit verschwinden auch die Links auf den für
   // Studenten nicht erreichbaren Quellen-Tab.
-  processed = processed.replace(/\[@cite:([\p{L}0-9_-]+)\][^\n]*/gu, '@bibentry:$1');
+  processed = _trackedReplace(processed, lines, /\[@cite:([\p{L}0-9_-]+)\][^\n]*/gu, (m, key) => '@bibentry:' + key);
   const xrefs = [];
-  processed = processed.replace(/@(fig|eq|sec|kap|code|box|tab|bibentry|citep|citet|cite):([\p{L}0-9_-]+)/gu, (match, kind, label) => {
+  processed = _trackedReplace(processed, lines, /@(fig|eq|sec|kap|code|box|tab|bibentry|citep|citet|cite):([\p{L}0-9_-]+)/gu, (match, kind, label) => {
     xrefs.push({ kind, label });
     return `%%XREF_${xrefs.length - 1}%%`;
   });
@@ -1318,7 +1477,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
   //     → Aufgaben-Box (Daten via refmap.tasks; Code-Blöcke sind zu
   //     diesem Zeitpunkt bereits extrahiert → in Code bleibt es literal).
   const taskRefs = [];
-  processed = processed.replace(/@task:(\d+)/g, (match, id) => {
+  processed = _trackedReplace(processed, lines, /@task:(\d+)/g, (match, id) => {
     taskRefs.push(id);
     return `%%TASKREF_${taskRefs.length - 1}%%`;
   });
@@ -1344,7 +1503,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
   let tabFallbackCount = 0;
   // Slide-Decks: slide-eigene Tabellen-Labels → S1, S2, … (wie eq/fig/code).
   let slideTabCount = 0;
-  processed = processed.replace(
+  processed = _trackedReplace(processed, lines,
     /((?:^[ \t]*\|[^\n]*\r?\n)+)[ \t]*(?:\r?\n[ \t]*)*\{#tab:([\p{L}0-9_-]+)\}(?:[ \t]*\[([^\]]*)\])?(?:[ \t]*\{\.?zoom=([\d.]+)\})?[ \t]*(?:\r?\n|$)/gmu,
     (match, tableMd, label, caption, zoom) => {
       let num;
@@ -1388,7 +1547,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
   //                           Inhalte der Folie erscheinen in einem Schritt
   //     eq/fig haben ihren Marker oben bereits selbst extrahiert.
   if (slideMode) {
-    processed = processed.replace(
+    processed = _trackedReplace(processed, lines,
       /\{#([Ff])ragment(?::([\p{L}0-9_-]+))?\}/gu,
       (m, fchar, id) => {
         const idAttr = id ? ` data-frag-id="${id}"` : '';
@@ -1399,7 +1558,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
     // umgebende Block-Element (Reveal 4.6: explizites Auto-Animate-Element-
     // Matching per data-id; in Reveal 5 heißt das Attribut
     // data-auto-animate-id). eq/fig nehmen {#aaid:…} oben bereits direkt.
-    processed = processed.replace(
+    processed = _trackedReplace(processed, lines,
       /\{#aaid:([\p{L}0-9_-]+)\}/gu,
       (m, label) => `<span class="aicampus-aaid-marker" data-aaid="${label}"></span>`
     );
@@ -1407,12 +1566,18 @@ async function renderMarkdown(text, targetElement, options = {}) {
 
   // 1l. Literal-Image-Tails wiederherstellen (nach 1k, damit enthaltene
   //     {#fragment}-Token als sichtbarer Text bleiben und KEIN Sentinel werden)
-  imgLiteralTails.forEach((tail, idx) => {
-    processed = processed.split(`%%IMGLIT_${idx}%%`).join(tail);
+  imgLiteralTails.forEach((item, idx) => {
+    const ph = `%%IMGLIT_${idx}%%`;
+    const off = processed.indexOf(ph);
+    if (off === -1) return;
+    const prefix = _nlPrefix(processed);
+    lines.splice(prefix[off], 1, ...item.assign);
+    processed = processed.slice(0, off) + item.text + processed.slice(off + ph.length);
   });
 
-  // 2. Render Markdown (marked)
-  let html = marked.parse(processed, {
+  // 2. Render Markdown (marked) — bei sourceLines erst Zeilen-Marker
+  //    einfügen (1m), damit am Ende data-src-line gesetzt werden kann.
+  let html = marked.parse(sourceLines ? _insertSrcLineMarkers(processed, lines, lineOffset) : processed, {
     breaks: false,
     gfm: true,
     headerIds: false,
@@ -1562,8 +1727,8 @@ async function renderMarkdown(text, targetElement, options = {}) {
     // (1l hat nur den Haupttext behandelt — die Tabelle ist zu dem Zeitpunkt
     // bereits extrahiert).
     let tableMd = t.md;
-    imgLiteralTails.forEach((tail, i) => {
-      tableMd = tableMd.split(`%%IMGLIT_${i}%%`).join(tail);
+    imgLiteralTails.forEach((item, i) => {
+      tableMd = tableMd.split(`%%IMGLIT_${i}%%`).join(item.text);
     });
     const tableHtml = marked.parse(tableMd, { breaks: false, gfm: true, headerIds: false, mangle: false });
     const g = globalLabels['tab:' + t.label];
@@ -2302,6 +2467,59 @@ async function renderMarkdown(text, targetElement, options = {}) {
   // Code-LaTeX (z. B. Pseudo-Code): im Skript direkt auf der finalen DOM
   // anwenden; in Slides erst NACH Reveal's Highlight-Pass (s. aicampusWireCodeMath).
   if (!slideMode) applyCodeMath(targetElement);
+  if (sourceLines) _applySrcLineMarkers(targetElement);
+}
+
+// (sourceLines) Zeilen-Marker vor jedes Top-Level-Block einfügen:
+// marked-Tokens haben keine Zeilen-Info (kein token.map in v14), sind aber
+// lückenlose Source-Substrings (token.raw; Lexer: src = src.substring(raw.length))
+// → Positions-Walk über den Token-Stream. norm = text mit derselben
+// Normalisierung wie marked (_Lexer.lex: \r\n|\r→\n; blockTokens: Leading-Tabs
+// → 4 Spaces); Norm-Zeile k = Originalzeile k (die Normalisierung ändert
+// keine Zeilenzahl). Marker = <div> auf eigener Zeile (1. Zeile endet mit
+// ">" + Zeilenumbruch → marked-HTML-Block), vom Folgeblock durch Leerzeile
+// getrennt. → _applySrcLineMarkers am Ende.
+function _insertSrcLineMarkers(text, lines, lineOffset) {
+  const tokens = marked.lexer(text, { breaks: false, gfm: true });
+  const norm = text.replace(/\r\n|\r/g, '\n')
+                   .replace(/^( *)(\t+)/gm, (m, l, t) => l + '    '.repeat(t.length));
+  const lineOff = [0];
+  for (let i = 0; i < norm.length; i++) if (norm[i] === '\n') lineOff.push(i + 1);
+  let out = '';
+  let last = 0;   // Ende des letzten kopierten Abschnitts (norm)
+  let cursor = 0; // Token-Anfang in norm (Tokens lückenlos → strikt monoton)
+  let line = 0;   // Norm-Zeilennummer von cursor
+  for (const tok of tokens) {
+    const raw = tok.raw;
+    // Contiguity-Check: fällt er durch, weicht unsere Norm von der
+    // marked-internen ab → sicherheitshalber ganz ohne Marker.
+    if (typeof raw !== 'string' || !norm.startsWith(raw, cursor)) return text;
+    if (tok.type !== 'space') {
+      while (lineOff[line + 1] !== undefined && lineOff[line + 1] <= cursor) line++;
+      const off = lineOff[line];
+      if (off > last) {
+        const n = (lines[line] != null ? lines[line] : 0) + lineOffset;
+        out += norm.slice(last, off) +
+          `<div class="sq-slm" data-line="${n}">\n</div>\n\n`;
+        last = off;
+      }
+    }
+    cursor += raw.length;
+  }
+  return out + norm.slice(last);
+}
+
+// (sourceLines) Marker → data-src-line: jeder Marker liegt direkt vor dem
+// Block, dessen Anfangszeile er trägt — auch verschachtelt (z. B. in
+// Box-Bodies; der dazwischenliegende Block wird vom HTML-Parser als
+// Geschwister des Markers gelegt). Läuft am SEHR Ende, nach
+// _cleanupBlockArtifacts (leere <p>-Bruchstücke sind dann weg).
+function _applySrcLineMarkers(root) {
+  for (const m of root.querySelectorAll('.sq-slm')) {
+    const el = m.nextElementSibling;
+    if (el) el.dataset.srcLine = m.dataset.line;
+    m.remove();
+  }
 }
 
 // Byproducts aufräumen: Figure-/Applet-/Code-/Taskbox-/Tabellen-Placeholders
@@ -3195,21 +3413,28 @@ function createMarkdownEditor(containerId, options = {}) {
 
   // Preview unterhalb des (CodeMirror-)Editors einhängen. CM6 (via Shim)
   // zieht das Textarea in den .ta-cm-Wrapper, daher relativ zum
-  // Editor-Element selbst einhängen (textarea.parentNode wäre der Wrapper):
+  // Editor-Element selbst einhängen (textarea.parentNode wäre der Wrapper).
+  // (Seiten mit externalToggle — z. B. Skript-Edit-Modus — dürfen das
+  // previewDiv danach in ihr eigenes Layout verschieben.)
   (cm ? cm.getWrapperElement() : textarea).insertAdjacentElement('afterend', previewDiv);
 
   const anchorId = options.buttonAnchor;
-  if (anchorId) {
-    const anchorEl = document.getElementById(anchorId);
-    if (anchorEl) {
-      anchorEl.appendChild(toggleBtn);
+  // externalToggle: die Seite steuert den Modus selbst (setMode()/eigene
+  // Buttons, z. B. die Edit/Preview-Gruppe im Skript-Edit-Modus) → kein
+  // internes Preview-Button.
+  if (!options.externalToggle) {
+    if (anchorId) {
+      const anchorEl = document.getElementById(anchorId);
+      if (anchorEl) {
+        anchorEl.appendChild(toggleBtn);
+      } else {
+        toggleBtn.style.marginTop = '0.5rem';
+        previewDiv.insertAdjacentElement('beforebegin', toggleBtn);
+      }
     } else {
       toggleBtn.style.marginTop = '0.5rem';
       previewDiv.insertAdjacentElement('beforebegin', toggleBtn);
     }
-  } else {
-    toggleBtn.style.marginTop = '0.5rem';
-    previewDiv.insertAdjacentElement('beforebegin', toggleBtn);
   }
 
   let isPreview = false;
@@ -3219,6 +3444,7 @@ function createMarkdownEditor(containerId, options = {}) {
     preview: true,
     sectionId: options.sectionId || null,
     bibliography: !!options.bibliography, // Ganze Dokumente: „Quellen“-Liste in der Preview
+    sourceLines: !!options.livePreview,   // Split-View: data-src-line für den Scroll-Sync
   };
 
   // Preview rendern; options.onPreviewRender wird danach aufgerufen
@@ -3230,14 +3456,20 @@ function createMarkdownEditor(containerId, options = {}) {
     if (options.onPreviewRender) options.onPreviewRender();
   };
 
-  toggleBtn.addEventListener('click', () => {
-    isPreview = !isPreview;
+  // Edit/Preview-Umschalten — intern (Button) oder per setMode(), wenn die
+  // Seite den Modus selbst steuert (externalToggle).
+  function setMode(mode) {
+    const next = mode === 'preview';
+    if (next === isPreview) return;
+    isPreview = next;
     if (isPreview) {
       if (cm) cm.getWrapperElement().classList.add('hidden');
       else textarea.classList.add('hidden');
       previewDiv.classList.remove('hidden');
-      toggleBtn.innerHTML = '<span>✏️</span> <span>Edit</span>';
-      toggleBtn.classList.add('bg-blue-50', 'border-blue-300', 'text-blue-700');
+      if (toggleBtn.isConnected) {
+        toggleBtn.innerHTML = '<span>✏️</span> <span>Edit</span>';
+        toggleBtn.classList.add('bg-blue-50', 'border-blue-300', 'text-blue-700');
+      }
       renderPreview();
     } else {
       previewDiv.classList.add('hidden');
@@ -3247,17 +3479,24 @@ function createMarkdownEditor(containerId, options = {}) {
       } else {
         textarea.classList.remove('hidden');
       }
-      toggleBtn.innerHTML = '<span>👁️</span> <span>Preview</span>';
-      toggleBtn.classList.remove('bg-blue-50', 'border-blue-300', 'text-blue-700');
+      if (toggleBtn.isConnected) {
+        toggleBtn.innerHTML = '<span>👁️</span> <span>Preview</span>';
+        toggleBtn.classList.remove('bg-blue-50', 'border-blue-300', 'text-blue-700');
+      }
     }
-  });
+  }
+  toggleBtn.addEventListener('click', () => setMode(isPreview ? 'edit' : 'preview'));
 
   // Sauberer Wert, unabhängig vom Editorzustand
   const getValue = () => (cm ? cm.getValue() : textarea.value);
 
   let updateTimeout = null;
   const onValueChanged = () => {
-    if (isPreview) {
+    // livePreview: auch im Edit-Modus aktuell halten (z. B. die
+    // Preview/Editor-Split-Ansicht im Skript-Edit-Modus) — aber nur,
+    // solange die Preview tatsächlich sichtbar ist (versteckte Preview
+    // nicht bei jedem Tippen neu rendern)
+    if (isPreview || (options.livePreview && previewDiv.offsetParent !== null)) {
       clearTimeout(updateTimeout);
       updateTimeout = setTimeout(renderPreview, 300);
     }
@@ -3271,9 +3510,9 @@ function createMarkdownEditor(containerId, options = {}) {
     textarea.addEventListener('input', onValueChanged);
   }
 
-  // Optional: direkt im Preview-Modus starten (z.B. für LLM-generierte Inhalte)
+  // Optional: direkt im Preview-Modus starten (z. B. für LLM-generierte Inhalte)
   if (options.startInPreview) {
-    toggleBtn.click();
+    setMode('preview');
   }
 
   return {
@@ -3284,6 +3523,8 @@ function createMarkdownEditor(containerId, options = {}) {
     isPreview: () => isPreview,
     getValue,
     required: wasRequired,
+    renderPreview,
+    setMode,
     setValue(v) {
       if (cm) cm.setValue(v);
       else textarea.value = v;

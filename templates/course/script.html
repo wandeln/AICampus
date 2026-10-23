@@ -4,6 +4,9 @@
 {% if is_tutor or is_admin %}
 <!-- SortableJS (MIT) — Drag-and-Drop (nur Tutor/PROF) -->
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js"></script>
+<!-- Code-Task-Workspace-CSS: der Trenner im Skript-Edit-Modus
+     (Preview/Editor-Split) sieht exakt aus wie im Workspace -->
+<link rel="stylesheet" href="{{ asset('css/workspace.css') }}">
 {% endif %}
 <style>
   /* Markierungen für Skript-Fragen im Lesefluss (Student) */
@@ -42,6 +45,27 @@
       border-bottom-right-radius: 11px;
     }
   }
+  /* ── Edit-Modus: Inhaltsbereich (Preview/Editor-Split) ────────────
+     Füllt (maximal) die Fensterhöhe: intern scrollt der Inhalt statt
+     der Seite, der Edit/Preview-Toggle bleibt immer in Reichweite.
+     Beide Modi aktiv → Preview oben, Editor unten, dazwischen der
+     ziehbare Trenner wie im Code-Task-Workspace. */
+  .sq-e-panes { height: calc(100vh - 200px); min-height: 380px; }
+  .sq-e-pane { flex: 1 1 0; min-height: 0; overflow-anchor: none; }
+  /* Trenner immer waagerecht (Preview oben, Editor unten) — setzt sich
+     gegen die Breakpoint-Regeln der workspace.css durch (gleiche
+     Spezifität, späteres Stylesheet-Block). */
+  .sq-e-split { width: 100%; height: 6px; cursor: row-resize; }
+  .sq-e-split::before { transform: rotate(90deg); }
+  /* Edit/Preview-Toggle (Look wie die Foto/Zeichnen-Gruppe; der aktive
+     Zustand wird per .sqe-mode-active gesetzt) */
+  .sqe-mode-btn { color: #6b7280; }
+  .sqe-mode-btn:hover { color: #374151; }
+  .sqe-mode-btn.sqe-mode-active { background-color: #4f46e5; color: #ffffff; }
+  .sqe-mode-btn.sqe-mode-active:hover { color: #ffffff; }
+  /* Editor in der Pane rahmenlos (wie im Workspace) — die Pane rahmt ein;
+     .cm-editor hat ansonsten das Formularfeld-Styling aus main.css */
+  .sq-e-panes .cm-editor { border: none; border-radius: 0; }
 </style>
 {% endblock %}
 
@@ -314,14 +338,33 @@
                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
       </div>
       <div id="sqe-content-${key}" class="mb-4">
-        <h3 class="font-semibold text-gray-800 mb-2 text-sm">Inhalt</h3>
-        <textarea id="sqe-content-ta-${key}" rows="18"
-                  placeholder="Markdown-Inhalt des Kapitels (fett, kursiv, Listen, $Math$, Mermaid)…"
-                  class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"></textarea>
-        <div class="flex items-center justify-between mt-2">
-          <p class="text-xs text-gray-400">💡 Markdown und LaTeX werden unterstützt (Medien: <code>{height=X}</code> = Max-Höhe in px, Applets zusätzlich <code>{zoom=X}</code>).</p>
-          <div id="sqe-content-anchor-${key}"></div>
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <h3 class="font-semibold text-gray-800 text-sm">Inhalt</h3>
+          <!-- Edit/Preview-Toggle: mindestens ein Modus ist immer aktiv -->
+          <div class="flex items-center rounded-lg border border-gray-300 overflow-hidden" role="group" aria-label="Inhalt: Edit/Preview">
+            <button type="button" id="sqe-mode-edit-${key}" class="sqe-mode-btn text-sm px-3 py-1.5 transition inline-flex items-center gap-1.5" title="Markdown-Editor anzeigen/ausblenden">✏️ Edit</button>
+            <button type="button" id="sqe-mode-preview-${key}" class="sqe-mode-btn border-l border-gray-300 text-sm px-3 py-1.5 transition inline-flex items-center gap-1.5" title="Live-Vorschau anzeigen/ausblenden">👁️ Preview</button>
+          </div>
         </div>
+        <!-- Inhaltsbereich: maximal Fensterhöhe (interner Scroll statt
+             Seiten-Scroll). Beide Modi aktiv → Preview oben, Editor unten,
+             dazwischen ziehbarer Trenner (Look wie im Code-Task-Workspace). -->
+        <div id="sqe-panes-${key}" class="sq-e-panes flex flex-col border border-gray-200 rounded-lg overflow-hidden bg-white">
+          <div id="sqe-pane-preview-${key}" class="sq-e-pane overflow-y-auto p-4 bg-white"></div>
+          <div id="sqe-split-${key}" class="ws-split-handle sq-e-split" role="separator"
+               title="Ziehen: Preview/Editor vergrößern · Doppelklick: Standardgröße"></div>
+          <div id="sqe-pane-editor-${key}" class="sq-e-pane overflow-hidden relative">
+            <!-- absolute inset-0: Editor füllt die Pane zuverlässig —
+                 height:100% gegen ein (per flex-grow bestimmtes) Flex-Item
+                 ist fragil, absolute Positionierung immer determiniert. -->
+            <div class="absolute inset-0">
+              <textarea id="sqe-content-ta-${key}" rows="18"
+                        placeholder="Markdown-Inhalt des Kapitels (fett, kursiv, Listen, $Math$, Mermaid)…"
+                        class="w-full h-full text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+            </div>
+          </div>
+        </div>
+        <p class="text-xs text-gray-400 mt-2">💡 Markdown und LaTeX werden unterstützt (Medien: <code>{height=X}</code> = Max-Höhe in px, Applets zusätzlich <code>{zoom=X}</code>).</p>
       </div>
       <div id="sqe-summary-${key}" class="mb-2">
         <h3 class="font-semibold text-gray-800 mb-2 text-sm">Zusammenfassung</h3>
@@ -333,6 +376,135 @@
           <div id="sqe-summary-anchor-${key}"></div>
         </div>
       </div>`;
+  }
+
+  // Edit/Preview-Modus-Gruppe + Split-View für den Inhalt (Panes, Toggle,
+  // ziehbarer Trenner wie im Code-Task-Workspace). Mindestens ein Modus
+  // ist immer aktiv — der letzte aktive lässt sich nicht abschalten.
+  // Default: Split-View (Preview oben, Editor unten).
+  function sqeInitContent(card, key, contentEditor) {
+    if (!contentEditor) return;
+    const panes = document.getElementById('sqe-panes-' + key);
+    const previewPane = document.getElementById('sqe-pane-preview-' + key);
+    const editorPane = document.getElementById('sqe-pane-editor-' + key);
+    const split = document.getElementById('sqe-split-' + key);
+    const editBtn = document.getElementById('sqe-mode-edit-' + key);
+    const prevBtn = document.getElementById('sqe-mode-preview-' + key);
+    if (!panes || !previewPane || !editorPane || !split || !editBtn || !prevBtn) return;
+
+    // Preview in die obere Pane (die Pane liefert Rahmen/Scroll); der
+    // Editor füllt die untere. Der Editor-Wrapper hatte eine fixe px-Höhe
+    // aus createMarkdownEditor — durch 100% ersetzen, damit Flex greift.
+    previewPane.appendChild(contentEditor.previewDiv);
+    contentEditor.previewDiv.className = 'markdown-preview-area';
+    const editorEl = contentEditor.cm ? contentEditor.cm.getWrapperElement() : contentEditor.textarea;
+    editorEl.style.height = '100%';
+
+    const modes = { edit: true, preview: true };
+    let prevShown = false;
+    const apply = () => {
+      // Einzelmodus: Editor-Pane füllt die Fläche wieder komplett —
+      // ggf. von einem Split-Drag gesetzte Fixhöhe entfernen
+      if (modes.edit !== modes.preview) {
+        editorPane.style.height = '';
+        editorPane.style.flex = '';
+      }
+      editorPane.classList.toggle('hidden', !modes.edit);
+      previewPane.classList.toggle('hidden', !modes.preview);
+      split.classList.toggle('hidden', !(modes.edit && modes.preview));
+      editBtn.classList.toggle('sqe-mode-active', modes.edit);
+      prevBtn.classList.toggle('sqe-mode-active', modes.preview);
+      if (modes.edit && contentEditor.cm) contentEditor.cm.refresh();
+      // Beim (Wieder-)Einblenden neu rendern — livePreview überspringt
+      // verdeckte Previews, das ist der einzige Refresh-Pfad
+      if (modes.preview && !prevShown) contentEditor.renderPreview();
+      prevShown = modes.preview;
+    };
+    const toggle = (which) => {
+      const other = which === 'edit' ? 'preview' : 'edit';
+      if (modes[which] && !modes[other]) {
+        // letzter aktiver Modus → auf den anderen wechseln
+        modes[which] = false;
+        modes[other] = true;
+      } else {
+        modes[which] = !modes[which];
+      }
+      apply();
+    };
+    editBtn.addEventListener('click', () => toggle('edit'));
+    prevBtn.addEventListener('click', () => toggle('preview'));
+
+    // Trenner: Drag = Höhe der unteren (Editor-)Pane, Doppelklick = Reset
+    const SPLIT_MIN = 120;
+    split.addEventListener('mousedown', (e) => e.preventDefault()); // kein Text-Caret
+    split.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const startY = e.clientY;
+      const startH = editorPane.getBoundingClientRect().height;
+      const maxH = () => panes.clientHeight - SPLIT_MIN;
+      let raf = 0;
+      const onMove = (ev) => {
+        const size = Math.max(SPLIT_MIN, Math.min(startH + (startY - ev.clientY), maxH()));
+        editorPane.style.height = size + 'px';
+        editorPane.style.flex = 'none';
+        if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (contentEditor.cm) contentEditor.cm.refresh(); });
+      };
+      const onUp = () => {
+        split.removeEventListener('pointermove', onMove);
+        split.removeEventListener('pointerup', onUp);
+        split.removeEventListener('pointercancel', onUp);
+        split.classList.remove('ws-split-dragging');
+        document.body.classList.remove('ws-split-drag', 'ws-split-drag-v');
+        if (contentEditor.cm) contentEditor.cm.refresh();
+      };
+      split.setPointerCapture(e.pointerId);
+      split.classList.add('ws-split-dragging');
+      document.body.classList.add('ws-split-drag', 'ws-split-drag-v');
+      split.addEventListener('pointermove', onMove);
+      split.addEventListener('pointerup', onUp);
+      split.addEventListener('pointercancel', onUp);
+    });
+    split.addEventListener('dblclick', () => {
+      editorPane.style.height = '';
+      editorPane.style.flex = '';
+      if (contentEditor.cm) contentEditor.cm.refresh();
+    });
+    // Fensterwechsel: Editor-Höhe in den verfügbaren Bereich klemmen
+    window.addEventListener('resize', () => {
+      if (!editorPane.style.height || !panes.isConnected) return;
+      const clamped = Math.max(SPLIT_MIN, Math.min(parseFloat(editorPane.style.height) || 0, panes.clientHeight - SPLIT_MIN));
+      if (clamped !== parseFloat(editorPane.style.height)) editorPane.style.height = clamped + 'px';
+    });
+
+    // Preview-Scroll → Editor: das oberste sichtbare Preview-Block
+    // (data-src-line aus renderMarkdown(sourceLines)) bestimmt die
+    // Editor-Zeile. Nur Preview→Editor (kein Rückkopplungslauf).
+    let syncRaf = 0;
+    previewPane.addEventListener('scroll', () => {
+      if (syncRaf) return;
+      syncRaf = requestAnimationFrame(() => {
+        syncRaf = 0;
+        if (!modes.preview || !contentEditor.cm) return;
+        const wrap = previewPane.querySelector('.markdown-preview');
+        if (!wrap) return;
+        const top = previewPane.getBoundingClientRect().top + 2;
+        const els = wrap.querySelectorAll('[data-src-line]');
+        // Default: erstes Element — bei scrollTop=0 liegt es unter der
+        // Pane-Kante (p-4-Padding) und würde sonst nie erwischt.
+        let line = els.length ? +els[0].dataset.srcLine : -1;
+        // data-src-line-Elemente in Dokumentenreihenfolge (inkl. Box-Bodies):
+        // letztes mit top ≤ Pane-Kante = oberstes sichtbares Block-Element.
+        for (const el of els) {
+          if (el.getBoundingClientRect().top <= top) line = +el.dataset.srcLine;
+          else break;
+        }
+        if (line >= 0) contentEditor.cm.scrollToLineTop(Math.min(line, contentEditor.cm.lastLine()));
+      });
+    });
+
+    card._edit.modes = modes;
+    card._edit.applyModes = apply;
+    apply();
   }
 
   // Edit-Modus: Autosave läuft automatisch; „Fertig“ beendet den Edit-Modus.
@@ -394,9 +566,9 @@
         contentTa.value = data.content || '';
         summaryTa.value = data.summary || '';
         const contentEditor = createMarkdownEditor('sqe-content-' + key, {
-          buttonAnchor: 'sqe-content-anchor-' + key,
+          externalToggle: true, // Edit/Preview-Gruppe im Formular steuert den Modus
+          livePreview: true,    // Split-View: Preview aktualisiert sich beim Tippen
           textareaId: 'sqe-content-ta-' + key,
-          startInPreview: true,
           sectionId: parseInt(sectionId),
           bibliography: true, // Ganzes Kapitel → „Quellen“-Liste in der Preview
           onPreviewRender: () => sqApplyMarks(), // Fragen-Markierungen auch in der Preview
@@ -436,6 +608,7 @@
           if (el) el.innerHTML = renderCaptionMath(t || el.textContent || '');
           card.setAttribute('data-section-title', t || card.getAttribute('data-section-title') || '');
         });
+        sqeInitContent(card, key, contentEditor);
         card._edit.aiBtn.addEventListener('click', () => sqAiGenerate(card));
         md.classList.add('hidden');
         sqSetEditToolbar(card);
@@ -591,14 +764,14 @@
         edit.titleInput.value = data.title;
         if (edit.syncTitle) edit.syncTitle();
       }
-      // Preview sofort aktualisieren (analog task_detail.html)
+      // setValue triggert die (debounced) Live-Preview inkl. Fragen-Markierungen;
+      // ausgeblendete Preview nur mitumschalten
       if (generateFields.content && data.content) {
         mdEditorSet(edit.contentEditor, edit.contentTa, data.content);
-        (async () => {
-          await renderMarkdown(data.content, edit.contentEditor.previewDiv, { preview: true, sectionId: edit.sectionId });
-          if (!edit.contentEditor.isPreview()) edit.contentEditor.toggleBtn.click();
-          sqApplyMarks(); // Re-Render ersetzt die Preview → Markierungen neu anwenden
-        })();
+        if (edit.modes && edit.applyModes && !edit.modes.preview) {
+          edit.modes.preview = true;
+          edit.applyModes();
+        }
       }
       if (generateFields.summary && data.summary) {
         mdEditorSet(edit.summaryEditor, edit.summaryTa, data.summary);
@@ -674,9 +847,9 @@
     form.innerHTML = sqEditFormHtml(key);
     body.appendChild(form);
     const contentEditor = createMarkdownEditor('sqe-content-' + key, {
-      buttonAnchor: 'sqe-content-anchor-' + key,
+      externalToggle: true, // Edit/Preview-Gruppe im Formular steuert den Modus
+      livePreview: true,    // Split-View: Preview aktualisiert sich beim Tippen
       textareaId: 'sqe-content-ta-' + key,
-      startInPreview: true,
       bibliography: true, // Ganzes Kapitel → „Quellen“-Liste in der Preview
       onPreviewRender: () => sqApplyMarks(), // Fragen-Markierungen auch in der Preview
       onValueChange: () => { if (card._av) card._av.onChange(); },
@@ -719,6 +892,7 @@
       }
       card.setAttribute('data-section-title', t || 'Neues Kapitel');
     });
+    sqeInitContent(card, key, contentEditor);
 
     // Toolbar: „Fertig“ + Versions-History links + Auge (Sichtbarkeit) rechts —
     // konsistent zum Edit-Modus bestehender Kapitel
@@ -2360,7 +2534,7 @@
       }
       // Edit-Modus: Markierungen auch in der Markdown-Preview (wenn aktiv)
       const edit = card._edit;
-      if (edit && edit.contentEditor && edit.contentEditor.isPreview()) {
+      if (edit && edit.contentEditor && edit.modes && edit.modes.preview) {
         const prev = edit.contentEditor.previewDiv.querySelector('.markdown-preview');
         if (prev) sqApplyMarksToSection(prev, parseInt(card.getAttribute('data-section-id')));
       }
@@ -2426,7 +2600,7 @@
       return;
     }
     const edit = card._edit;
-    const previewEl = (edit && edit.contentEditor && edit.contentEditor.isPreview())
+    const previewEl = (edit && edit.contentEditor && edit.modes && edit.modes.preview)
       ? edit.contentEditor.previewDiv.querySelector('.markdown-preview')
       : null;
     const mark = sqFindMark(q.id, previewEl || card);
