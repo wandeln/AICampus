@@ -1967,6 +1967,24 @@ class WorkspaceService:
         return files
 
     @staticmethod
+    def _strip_notebook_outputs(text: str) -> str:
+        """Jupyter-Notebook (v4): outputs + execution_count der Code-Cells
+        entfernen, damit gespeicherte Run-Outputs (z. B. base64-Matplotlib-
+        Bilder) den LLM-Grading-Kontext nicht sprengen.
+        Ungueltiges JSON: unveraendert zurueckgeben."""
+        try:
+            nb = json.loads(text)
+        except ValueError:
+            return text
+        if not isinstance(nb, dict) or not isinstance(nb.get("cells"), list):
+            return text
+        for cell in nb["cells"]:
+            if isinstance(cell, dict) and cell.get("cell_type") == "code":
+                cell.pop("outputs", None)
+                cell.pop("execution_count", None)
+        return json.dumps(nb, ensure_ascii=False, indent=1)
+
+    @staticmethod
     def _collect_texts(root: Path, max_file: int = MAX_LLM_FILE_CHARS,
                        max_total: int = MAX_LLM_TOTAL_CHARS) -> dict[str, str]:
         """Textdateien aus dem übergebenen Verzeichnis für den LLM-Prompt
@@ -1988,6 +2006,8 @@ class WorkspaceService:
             if b"\x00" in data[:1024]:
                 continue  # Binary — nicht in den LLM
             text = data.decode(errors="replace")
+            if p.suffix == ".ipynb":
+                text = WorkspaceService._strip_notebook_outputs(text)
             if len(text) > max_file:
                 text = text[:max_file] + "\n… (gekürzt)"
             out[rel] = text
