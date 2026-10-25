@@ -1392,6 +1392,8 @@
           const r = await fetch(`/api/script-sections/${s.id}`, { credentials: "same-origin" });
           if (!r.ok) throw new Error("Nicht geladen");
           const data = await r.json();
+          // Tracking: Kapitel-Inhalt wurde geöffnet (Dedupe läuft serverseitig)
+          try { navigator.sendBeacon(`/api/analytics/script-section?course_id=${courseId}&section_id=${s.id}`); } catch (e) { /* unkritisch */ }
           // bibliography: Ganzes Kapitel → „Quellen“-Liste für @cite:-Zitationen
           await renderMarkdown(data.content || "", md, { sectionId: s.id, bibliography: true });
           md.setAttribute("data-loaded", "1");

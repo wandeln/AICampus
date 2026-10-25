@@ -60,6 +60,7 @@ _PAGE_RULES: list[tuple[re.Pattern, str, Optional[int]]] = [
     (re.compile(r"^/courses/(\d+)/tasks/(\d+)$"), "task", 1),
     (re.compile(r"^/courses/(\d+)/tasks/(\d+)/students/(\d+)/review$"), "review", 1),
     (re.compile(r"^/courses/(\d+)/script$"), "script", 1),
+    (re.compile(r"^/courses/(\d+)/script/(\d+)$"), "script_section", 1),
     (re.compile(r"^/courses/(\d+)/slides$"), "slides", 1),
     (re.compile(r"^/courses/(\d+)/slides/(\d+)$"), "slides", 1),
     (re.compile(r"^/courses/(\d+)/slides/(\d+)/present$"), "slides", 1),

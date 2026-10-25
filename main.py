@@ -1242,14 +1242,8 @@ async def tasks_page(
     return templates.TemplateResponse(template, ctx)
 
 
-@app.get("/courses/{course_id}/script")
-async def script_page(
-    course_id: int,
-    request: Request,
-    session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
-):
-    """Kurs-Tab 'Skript': mehrere Markdown-Kapitel (gemeinsame Ansicht; Tutor/PROF mit Bearbeitung)."""
+def _render_script_page(session, user, request, course_id):
+    """Geteiltes Rendering des Skript-Tabs (auch für Deep-Links zu einzelnen Kapiteln)."""
     membership, ctx = _course_tab_context(session, user, request, course_id, active_tab="script")
     if not membership and user.role != GlobalUserRole.ADMIN:
         raise HTTPException(403, "Du bist kein Mitglied dieses Kurses.")
@@ -1277,21 +1271,50 @@ async def script_page(
     return templates.TemplateResponse("course/script.html", ctx)
 
 
+@app.get("/courses/{course_id}/script")
+async def script_page(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Kurs-Tab 'Skript': mehrere Markdown-Kapitel (gemeinsame Ansicht; Tutor/PROF mit Bearbeitung)."""
+    return _render_script_page(session, user, request, course_id)
+
+
 @app.get("/courses/{course_id}/script/{section_id}")
 async def script_section_page(
     course_id: int,
     section_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Legacy-Link → Skript-Tab (Kapitel wird per #chapter-Hash aufgeklappt)."""
+    """Deep-Link zu einem Skript-Kapitel: rendert den Skript-Tab und klafft das
+    Kapitel per #chapter-Hash auf (Tracking: page_key 'script_section')."""
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(404, "Kurs nicht gefunden.")
     section = session.get(ScriptSection, section_id)
     if not section or section.course_id != course_id:
         raise HTTPException(404, "Kapitel nicht gefunden.")
-    return RedirectResponse(url=f"/courses/{course_id}/script#chapter-{section_id}", status_code=302)
+    return _render_script_page(session, user, request, course_id)
+
+
+@app.post("/api/analytics/script-section")
+async def track_script_section_view(
+    course_id: int,
+    section_id: int,
+    user: User = Depends(get_current_user),
+):
+    """Beacon (sendBeacon): Skript-Kapitel wurde geöffnet — der Inhalt wird
+    clientseitig lazy geladen, ohne diesen Call wäre das Tracking blind.
+
+    Zählt als Page-View 'script_section' mit dem Deep-Link-Pfad; serverseitiges
+    Dedupe (30 s, gleicher Pfad) verhindert Doppelzählung bei Deep-Link-Laden.
+    """
+    analytics.record_page_view(user.id, f"/courses/{course_id}/script/{section_id}")
+    return {"ok": True}
 
 
 def _slides_theme_ctx(session: Session, course_id: int) -> dict:
