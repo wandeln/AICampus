@@ -48,7 +48,7 @@
     </div>
   </div>
 
-  <p class="text-sm text-gray-500 mb-2">Klicke auf eine Punktezahl, um die Einreichung zu bewerten.</p>
+  <p class="text-sm text-gray-500 mb-2">Klicke auf eine Punktezahl, um die Einreichung zu bewerten. · Spaltenüberschrift anklicken = sortieren (erneuter Klick = auf-/absteigend umschalten).</p>
 
   <!-- Loading State -->
   <div id="loading-state" class="hidden text-center py-12">
@@ -181,21 +181,21 @@
 
     // Header
     let headerHtml = '<tr class="bg-gray-100">';
-    headerHtml += '<th class="text-left py-3 px-4 font-semibold text-gray-700 border-b sticky left-0 bg-gray-100 z-10 min-w-[180px]">Name</th>';
-    headerHtml += '<th class="text-left py-3 px-4 font-semibold text-gray-700 border-b min-w-[120px]">Matr.-Nr.</th>';
-    headerHtml += '<th class="text-left py-3 px-4 font-semibold text-gray-700 border-b min-w-[120px]">Gruppe</th>';
+    headerHtml += '<th data-sort="name" title="Klicken zum Sortieren" class="text-left py-3 px-4 font-semibold text-gray-700 border-b sticky left-0 bg-gray-100 z-10 min-w-[180px] cursor-pointer select-none hover:bg-gray-200">Name<span class="sort-ind text-sm"></span></th>';
+    headerHtml += '<th data-sort="username" title="Klicken zum Sortieren" class="text-left py-3 px-4 font-semibold text-gray-700 border-b min-w-[120px] cursor-pointer select-none hover:bg-gray-200">Matr.-Nr.<span class="sort-ind text-sm"></span></th>';
+    headerHtml += '<th data-sort="annotation" title="Klicken zum Sortieren" class="text-left py-3 px-4 font-semibold text-gray-700 border-b min-w-[120px] cursor-pointer select-none hover:bg-gray-200">Gruppe<span class="sort-ind text-sm"></span></th>';
 
     data.tasks.forEach((task, i) => {
       const typeBadge = {
         text: '📝', workspace: '💻', mc: '🎯'
       }[task.task_type] || '📋';
-      headerHtml += '<th data-task-idx="' + i + '" class="text-center py-3 px-3 font-semibold text-gray-700 border-b text-xs min-w-[120px]" title="' + task.title + '">' +
-        typeBadge + ' ' + task.title + ' ' + task.max_points + 'P' +
+      headerHtml += '<th data-sort="task-' + task.id + '" data-task-idx="' + i + '" class="text-center py-3 px-3 font-semibold text-gray-700 border-b text-xs min-w-[120px] cursor-pointer select-none hover:bg-gray-200" title="' + task.title + ' — klicken zum Sortieren">' +
+        typeBadge + ' ' + task.title + ' ' + task.max_points + 'P<span class="sort-ind text-sm"></span>' +
       '</th>';
     });
 
-    headerHtml += '<th class="text-center py-3 px-4 font-bold text-gray-800 border-b bg-blue-50 min-w-[80px]">Summe</th>';
-    headerHtml += '<th class="text-center py-3 px-4 font-bold text-gray-800 border-b bg-blue-50 min-w-[80px]">Anteil</th>';
+    headerHtml += '<th data-sort="sum" title="Klicken zum Sortieren" class="text-center py-3 px-4 font-bold text-gray-800 border-b bg-blue-50 min-w-[80px] cursor-pointer select-none hover:bg-blue-100">Summe<span class="sort-ind text-sm"></span></th>';
+    headerHtml += '<th data-sort="pct" title="Klicken zum Sortieren" class="text-center py-3 px-4 font-bold text-gray-800 border-b bg-blue-50 min-w-[80px] cursor-pointer select-none hover:bg-blue-100">Anteil<span class="sort-ind text-sm"></span></th>';
     headerHtml += '</tr>';
     thead.innerHTML = headerHtml;
 
@@ -290,6 +290,16 @@
     return terms.every(term => words.some(word => word.startsWith(term)));
   }
 
+  // Sichtbare Aufgabenspalten (Titelsuche + Typ) — Filter und Sortierung
+  // nutzen dieselbe Definition (Summen-Sortierung = Summe der sichtbaren Spalten).
+  function visibleTaskIdx(terms, typeFilter) {
+    const s = new Set();
+    overviewData.tasks.forEach((task, i) => {
+      if (titleMatches(task.title, terms) && (!typeFilter || task.task_type === typeFilter)) s.add(i);
+    });
+    return s;
+  }
+
   function applyOverviewFilter() {
     if (!overviewData) return;
 
@@ -299,12 +309,7 @@
     const filterActive = terms.length > 0 || typeFilter !== '' || annotationFilter !== '';
 
     // 1. Aufgabenspalten (Titelsuche + Typ)
-    const visibleTasks = new Set();
-    overviewData.tasks.forEach((task, i) => {
-      if (titleMatches(task.title, terms) && (!typeFilter || task.task_type === typeFilter)) {
-        visibleTasks.add(i);
-      }
-    });
+    const visibleTasks = visibleTaskIdx(terms, typeFilter);
     document.querySelectorAll('#overview-table [data-task-idx]').forEach(el => {
       el.classList.toggle('hidden', !visibleTasks.has(parseInt(el.dataset.taskIdx, 10)));
     });
@@ -343,6 +348,10 @@
     renderStats(count, sumTotals, maxPts, minPts === Infinity ? 0 : minPts, passed, filterActive);
     document.getElementById('filter-no-tasks').classList.toggle('hidden', !(filterActive && visibleTasks.size === 0));
     document.getElementById('filter-no-results').classList.toggle('hidden', !(filterActive && count === 0));
+
+    // 3. Bei aktiver Sortierung nach Filteränderung neu sortieren
+    //    (Summen haben sich ggf. geändert) — nur Zeilen umsortieren.
+    if (sortState) applySort();
   }
 
   // ─── Filter Events ──────────────────────────────────────────
@@ -380,6 +389,76 @@
     document.getElementById('type-filter').value = '';
     document.getElementById('annotation-filter').value = '';
     applyOverviewFilter();
+  });
+
+  // ─── Sortierung (Klick auf Spaltenüberschrift) ───────────────
+  // sortState: null = noch nie sortiert, sonst { key, dir }.
+  // Klick: Default-Richtung; erneuter Klick = auf-/absteigend umschalten.
+  // Textspalten (name/username/annotation) aufsteigend, Zahlen absteigend.
+  let sortState = null;
+
+  function defaultSortDir(key) {
+    return (key === 'name' || key === 'username' || key === 'annotation') ? 'asc' : 'desc';
+  }
+
+  function currentVisibleTasks() {
+    const terms = document.getElementById('filter-input').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return visibleTaskIdx(terms, document.getElementById('type-filter').value);
+  }
+
+  function sortValue(student, key, visible) {
+    if (key === 'name') return student.name || '';
+    if (key === 'username') return student.username || '';
+    if (key === 'annotation') return student.annotation || '';
+    if (key === 'sum' || key === 'pct') {
+      let total = 0;
+      visible.forEach(i => { total += (overviewData.scores[student.id] || {})[overviewData.tasks[i].id] || 0; });
+      return total;
+    }
+    const taskId = parseInt(key.slice(5), 10); // "task-<id>"
+    return (overviewData.scores[student.id] || {})[taskId] || 0;
+  }
+
+  // Nur vorhandene Zeilen neu anordnen (keine Neu-Render, Filter-Status bleibt).
+  function applySort() {
+    if (!sortState || !overviewData) return;
+    const tbody = document.getElementById('table-body');
+    const rows = Array.from(tbody.querySelectorAll('tr[data-student-id]'));
+    const byId = new Map(overviewData.students.map(s => [String(s.id), s]));
+    const visible = currentVisibleTasks();
+    const isText = !sortState.key.startsWith('task-') && sortState.key !== 'sum' && sortState.key !== 'pct';
+    const mul = sortState.dir === 'asc' ? 1 : -1;
+    rows.sort((a, b) => {
+      const sa = byId.get(a.dataset.studentId);
+      const sb = byId.get(b.dataset.studentId);
+      const va = sa ? sortValue(sa, sortState.key, visible) : 0;
+      const vb = sb ? sortValue(sb, sortState.key, visible) : 0;
+      const c = isText ? String(va).localeCompare(String(vb), 'de') : va - vb;
+      return c * mul || parseInt(a.dataset.studentId, 10) - parseInt(b.dataset.studentId, 10);
+    });
+    rows.forEach(r => tbody.appendChild(r));
+  }
+
+  function updateSortIndicators() {
+    document.querySelectorAll('#table-header th[data-sort]').forEach(th => {
+      const ind = th.querySelector('.sort-ind');
+      if (ind) ind.textContent = (sortState && sortState.key === th.dataset.sort) ? (sortState.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    });
+  }
+
+  function toggleSort(key) {
+    if (sortState && sortState.key === key) {
+      sortState = { key, dir: sortState.dir === 'asc' ? 'desc' : 'asc' };
+    } else {
+      sortState = { key, dir: defaultSortDir(key) };
+    }
+    updateSortIndicators();
+    applySort();
+  }
+
+  document.getElementById('table-header').addEventListener('click', (e) => {
+    const th = e.target.closest('th[data-sort]');
+    if (th) toggleSort(th.dataset.sort);
   });
 
   // Live-Dashboard-Link: aktuelle Filter als Query-Parameter mitschicken,
