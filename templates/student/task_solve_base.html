@@ -43,8 +43,6 @@
       {% endif %}
     </div>
 
-    <h1 class="text-2xl font-bold text-gray-900">{{ task.title }}</h1>
-
     {% if is_student_view %}
     <div class="flex gap-2 mt-3">
       <a href="/courses/{{ course.id }}/tasks/{{ task.id }}"
@@ -57,6 +55,8 @@
       </button>
     </div>
     {% endif %}
+
+    <h1 class="text-2xl font-bold text-gray-900 mt-3">{{ task.title }}</h1>
 
     <div class="flex gap-2 mt-3">
       <span class="px-2 py-0.5 rounded text-xs font-medium
