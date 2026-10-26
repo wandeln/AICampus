@@ -337,6 +337,20 @@
         <input type="text" id="sqe-title-${key}" maxlength="300" placeholder="z.B. Kapitel 1: Grundlagen"
                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
       </div>
+      <details class="mb-3">
+        <summary class="cursor-pointer select-none text-sm font-medium text-gray-700 hover:text-gray-900">
+          📝 Interne Zusammenfassung (für Studierende nicht sichtbar)
+        </summary>
+        <div id="sqe-summary-${key}" class="mt-2">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400">(intern — für die LLM-Konsistenz zwischen Kapiteln, nicht für Studenten)</span>
+            <div id="sqe-summary-anchor-${key}"></div>
+          </div>
+          <textarea id="sqe-summary-ta-${key}" rows="4"
+                    placeholder="Wird vom LLM erstellt (3-6 Sätze): zentrale Begriffe, Notation, wichtige Definitionen/Sätze."
+                    class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"></textarea>
+        </div>
+      </details>
       <div id="sqe-content-${key}" class="mb-4">
         <div class="flex items-center justify-between gap-2 mb-2">
           <h3 class="font-semibold text-gray-800 text-sm">Inhalt</h3>
@@ -365,16 +379,6 @@
           </div>
         </div>
         <p class="text-xs text-gray-400 mt-2">💡 Markdown und LaTeX werden unterstützt (Medien: <code>{height=X}</code> = Max-Höhe in px, Applets zusätzlich <code>{zoom=X}</code>).</p>
-      </div>
-      <div id="sqe-summary-${key}" class="mb-2">
-        <h3 class="font-semibold text-gray-800 mb-2 text-sm">Zusammenfassung</h3>
-        <textarea id="sqe-summary-ta-${key}" rows="4"
-                  placeholder="Wird vom LLM erstellt (3-6 Sätze): zentrale Begriffe, Notation, wichtige Definitionen/Sätze."
-                  class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"></textarea>
-        <div class="flex items-center justify-between mt-2">
-          <span class="text-xs text-gray-400">(intern — für die LLM-Konsistenz zwischen Kapiteln, nicht für Studenten)</span>
-          <div id="sqe-summary-anchor-${key}"></div>
-        </div>
       </div>`;
   }
 

@@ -191,11 +191,17 @@
                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none mb-3">
         <details class="mb-3">
           <summary class="cursor-pointer select-none text-sm font-medium text-gray-700 hover:text-gray-900">
-            📝 Interne Zusammenfassung (nur für LLM-Querverweise — für Studenten nicht sichtbar)
+            📝 Interne Zusammenfassung (für Studierende nicht sichtbar)
           </summary>
-          <textarea id="material-summary-input" rows="4" maxlength="2000"
-                    placeholder="3–6 Sätze: wovon handelt das Deck, welche Themen/Kapitel werden abgedeckt — inkl. aller Referenz-Handles (z. B. {% raw %}{#sec:recursion{% endraw %}, {% raw %}{#fig:tree{% endraw %}), damit andere Kapitel/Decks korrekt referenzieren können."
-                    class="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none resize-y"></textarea>
+          <div id="slide-summary-container" class="mt-2">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs text-gray-400">(intern — für die LLM-Konsistenz zwischen Decks, nicht für Studenten)</span>
+              <div id="slide-summary-anchor"></div>
+            </div>
+            <textarea id="material-summary-input" rows="4"
+                      placeholder="3–6 Sätze: wovon handelt das Deck, welche Themen/Kapitel werden abgedeckt — inkl. aller Referenz-Handles (z. B. {% raw %}{#sec:recursion{% endraw %}, {% raw %}{#fig:tree{% endraw %}), damit andere Kapitel/Decks korrekt referenzieren können."
+                      class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"></textarea>
+          </div>
         </details>
         <label class="block text-sm font-medium text-gray-700 mb-1" for="material-textarea">Folien (Markdown)</label>
         <textarea id="material-textarea" rows="24"
@@ -319,8 +325,7 @@
   window.cancelEdit = function () {
     const ta = document.getElementById("material-textarea");
     const ti = document.getElementById("material-title-input");
-    const si = document.getElementById("material-summary-input");
-    if (ta && (contentGet() !== loadedContent || ti.value.trim() !== loadedTitle || (si && si.value !== loadedSummary))) {
+    if (ta && (contentGet() !== loadedContent || ti.value.trim() !== loadedTitle || summaryGet() !== loadedSummary)) {
       if (!confirm("Ungespeicherte Änderungen verwerfen und zur Folien-Übersicht zurückkehren?")) return;
     }
     window.location.href = `/courses/${courseId}/slides`;
@@ -358,10 +363,10 @@
       // für Updates (LLM) mit setValue()-Semantik.
       if (cmContent) cmContent.setInitialContent(data.content || "");
       else textarea.value = data.content || "";
-      summaryInput.value = data.summary || "";
+      summarySet(data.summary || "");
       loadedTitle = titleInput.value;
       loadedContent = contentGet();
-      loadedSummary = summaryInput.value;
+      loadedSummary = summaryGet();
       // Die initiale Ladung (setValue/setInitialContent feuern Change-Events)
       // ist keine Änderung → Baseline auf den geladenen Stand setzen.
       av.setBaseline(avPayload());
@@ -820,8 +825,18 @@
         } else unchanged.push("Inhalt");
       }
       if (generateFields.summary) {
-        if (data.summary) { summaryInput.value = data.summary; changed.push("Zusammenfassung"); }
-        else unchanged.push("Zusammenfassung");
+        if (data.summary) {
+          summarySet(data.summary);
+          // Sofort rendern + in den Preview-Modus wechseln, damit das
+          // Ergebnis sichtbar ist (analog Skript-Edit).
+          if (summaryEditor) {
+            (async () => {
+              await renderMarkdown(data.summary, summaryEditor.previewDiv, { preview: true });
+              if (!summaryEditor.isPreview()) summaryEditor.toggleBtn.click();
+            })();
+          }
+          changed.push("Zusammenfassung");
+        } else unchanged.push("Zusammenfassung");
       }
       // LLM-Änderungen sind ebenfalls Änderungen → Auto-Save-Trigger
       // (Titel-Set ohne input-Event hiermit zusätzlich abdecken)
@@ -865,7 +880,7 @@
         method: "PUT",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, content, is_visible: currentVisible, summary: summaryInput.value }),
+        body: JSON.stringify({ title, content, is_visible: currentVisible, summary: summaryGet() }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -942,6 +957,16 @@
     }
     textarea.value = v;
   }
+  // Zusammenfassungs-Editor (createMarkdownEditor, analog zum
+  // Skript-Kapitel-Editor): solange CodeMirror aktiv ist, enthält das
+  // versteckte Textarea NICHT den Inhalt → Werte immer über
+  // summaryGet()/summarySet() zugreifen.
+  let summaryEditor = null;
+  function summaryGet() { return summaryEditor ? summaryEditor.getValue() : summaryInput.value; }
+  function summarySet(v) {
+    if (summaryEditor) summaryEditor.setValue(v);
+    else summaryInput.value = v;
+  }
   let cmContent = null;
   const cmMode = (typeof CodeMirror !== "undefined" && CodeMirror.modes)
     ? (CodeMirror.modes.gfm ? "gfm" : (CodeMirror.modes.markdown ? "markdown" : null))
@@ -984,7 +1009,7 @@
   const avPayload = () => ({
     title: titleInput.value,
     content: contentGet(),
-    summary: summaryInput.value,
+    summary: summaryGet(),
   });
   // Titel live synchron halten: Kopfzeile + Browser-Tab
   const titleHeading = document.getElementById("material-title-heading");
@@ -1001,7 +1026,7 @@
     applyPayload: (p) => {
       titleInput.value = p.title || "";
       contentSet(p.content || "");
-      summaryInput.value = p.summary || "";
+      summarySet(p.summary || "");
       syncTitle();
     },
     hostEl: document.getElementById("av-slides-slot"),
@@ -1010,7 +1035,17 @@
   if (cmContent) cmContent.on("change", () => av.onChange());
   else textarea.addEventListener("input", () => av.onChange());
   titleInput.addEventListener("input", () => av.onChange());
-  summaryInput.addEventListener("input", () => av.onChange());
+  // Zusammenfassungs-Editor: Markdown mit Edit/Preview-Toggle (analog zum
+  // Skript-Kapitel-Editor). startInPreview: die LLM-Zusammenfassung ist
+  // Markdown — gerendert besser lesbar. Der Toggle-Button wird per
+  // buttonAnchor in die Zeile über dem Editor gehängt; onValueChange deckt
+  // auch den Fallback ohne CodeMirror ab (Input-Event-Listener).
+  summaryEditor = createMarkdownEditor("slide-summary-container", {
+    buttonAnchor: "slide-summary-anchor",
+    textareaId: "material-summary-input",
+    startInPreview: true,
+    onValueChange: () => av.onChange(),
+  });
 
   // Neues Deck (per „Neues Deck anlegen“ mit ?new=1 geöffnet): „Fertig“
   // ohne jede Änderung verwirft es still (ohne Confirm — es ist leer,
