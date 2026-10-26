@@ -100,7 +100,6 @@ def validate_mc_data(data: dict) -> None:
     if not isinstance(data["shuffle_options"], bool):
         raise McValidationError("shuffle_options muss true/false sein.")
 
-    total_points = 0
     for qi, q in enumerate(questions):
         label = f"Frage {qi + 1}"
         if not isinstance(q, dict):
@@ -117,7 +116,6 @@ def validate_mc_data(data: dict) -> None:
         if points < 0:
             raise McValidationError(f"{label}: Punkte dürfen nicht negativ sein.")
         q["points"] = points
-        total_points += points
 
         multi = bool(q.get("multi_select", False))
         q["multi_select"] = multi
@@ -158,9 +156,6 @@ def validate_mc_data(data: dict) -> None:
                     f"{label}: Genau EINE richtige Antwort nötig "
                     f"(sind {n_correct}) — oder „mehrere Antworten möglich“ aktivieren."
                 )
-
-    if total_points <= 0:
-        raise McValidationError("Die Fragen müssen insgesamt mind. 1 Punkt wert sein.")
 
 
 def mc_total_points(data: dict) -> int:

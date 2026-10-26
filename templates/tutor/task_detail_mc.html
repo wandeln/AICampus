@@ -86,6 +86,8 @@
     mcTotalEl.textContent = total + " P gesamt";
     // Max.-Punkte-Feld mitziehen (Server überschreibt es ohnehin mit der Summe)
     const mp = document.querySelector('input[name="max_points"]');
+    // Nur bei total > 0 mitziehen — sonst würde bei neuen Aufgaben der
+    // Standard-Wert (10 P) sofort durch 0 überschrieben.
     if (mp && total > 0 && parseInt(mp.value, 10) !== total) mp.value = total;
   }
 
@@ -96,7 +98,7 @@
       mcState.questions.forEach((q, qi) => {
         const lbl = "Frage " + (qi + 1) + ":";
         if (!String(q.question || "").trim()) errs.push(lbl + " Fragetext fehlt");
-        if (!(parseInt(q.points, 10) > 0)) errs.push(lbl + " Punkte > 0 nötig");
+        if (!(parseInt(q.points, 10) >= 0)) errs.push(lbl + " Punkte ≥ 0 nötig");
         if (q.options.length < 2) errs.push(lbl + " mind. 2 Optionen");
         const nc = q.options.filter((o) => o.correct).length;
         if (q.multi_select) {
@@ -109,7 +111,6 @@
           if (!String(o.text || "").trim()) errs.push(lbl + " Option " + (oi + 1) + ": Text fehlt");
         });
       });
-      if (mcTotalPoints() <= 0) errs.push("Gesamtpunkte > 0 nötig");
     }
     return errs;
   }

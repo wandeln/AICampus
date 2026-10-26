@@ -1375,7 +1375,14 @@
     emojiEl.textContent = tier.emoji;
     msgEl.textContent = msg;
 
-    if (tier.badge) {
+    if ({{ task.max_points }} === 0) {
+      // 0-Punkte-Aufgabe (z.B. Warmup): Prozentwert ist nicht sinnvoll
+      emojiEl.textContent = '✅';
+      msgEl.textContent = 'Aufgabe eingereicht!';
+      subEl.textContent = 'Diese Aufgabe gibt keine Punkte.';
+      tierContainer.innerHTML = '';
+      updateTierBadgeIcon(null);
+    } else if (tier.badge) {
       const badgeName = tier.badge.replace('badge-', '').charAt(0).toUpperCase() + tier.badge.replace('badge-', '').slice(1);
       subEl.textContent = Math.round(pct) + '% erreicht · ' + badgeName + ' Badge';
       tierContainer.innerHTML = '<span class="badge-tier ' + tier.badge + '">' + tier.emoji + ' ' + badgeName.toUpperCase() + '</span>';
