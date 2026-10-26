@@ -70,6 +70,16 @@
            class="bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition text-sm font-medium flex items-center gap-2">
           👁️&#x200B; Student-View
         </a>
+        {% if task and task.id %}
+        <a id="live-dashboard-link"
+           href="{% if task.task_type == 'mc' %}/courses/{{ course.id }}/live/mc?task_id={{ task.id }}{% else %}/courses/{{ course.id }}/live?filter_text={{ task.title | urlencode }}{% endif %}"
+           target="_blank" rel="noopener"
+           title="{% if task.task_type == 'mc' %}Anonymisiertes MC-Live-Dashboard: Antwortverteilung dieser Aufgabe in Echtzeit (nur PROF/Tutor){% else %}Anonymisiertes Live-Dashboard: Kurs-Stats, vorfiltert auf diese Aufgabe (nur PROF/Tutor){% endif %}"
+           class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
+                  bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition">
+          <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span> Live-Dashboard
+        </a>
+        {% endif %}
       </div>
       {% endif %}
     </div>
