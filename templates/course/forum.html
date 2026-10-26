@@ -474,6 +474,11 @@
     // Refmaps vorgeladen, damit der erste Render synchron läuft — sonst
     // wären alle Nachrichten kurz leer, bis der Fetch fertig ist (die
     // Funktionen rejecten nie, Fehler liefern null → Fallback-Nummern).
+    // In der Lade-Phase: Hinweis statt "Noch keine Nachrichten" (das
+    // Element entfernt appendForumMessages beim Anhängen automatisch).
+    if (initialMessages.length) {
+      document.getElementById('forum-empty').innerHTML = '<p>Nachrichten werden geladen…</p>';
+    }
     Promise.all([getCourseRefMap(), getCourseSlidesRefMap()]).then(() => {
       appendForumMessages(initialMessages, false);
       forumList.scrollTop = forumList.scrollHeight;
