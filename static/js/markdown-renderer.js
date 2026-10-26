@@ -767,7 +767,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
     return;
   }
 
-  const { preview = false, sectionId = null, slideMode = false, slidePos = null, sourceLines = false } = options;
+  const { preview = false, sectionId = null, slideMode = false, slidePos = null, sourceLines = false, breaks = false } = options;
 
   // Globale Label-Map für Querverweise (gecacht; null auf Nicht-Kurs-Seiten).
   // Keys sind kind-prefixed ("eq:test" ≠ "box:test"), s. script-refmap.
@@ -1578,7 +1578,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
   // 2. Render Markdown (marked) — bei sourceLines erst Zeilen-Marker
   //    einfügen (1m), damit am Ende data-src-line gesetzt werden kann.
   let html = marked.parse(sourceLines ? _insertSrcLineMarkers(processed, lines, lineOffset) : processed, {
-    breaks: false,
+    breaks,
     gfm: true,
     headerIds: false,
     mangle: false,

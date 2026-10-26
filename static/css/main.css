@@ -192,6 +192,45 @@
   margin-bottom: 0 !important;
 }
 
+/* Forum-Nachrichten: gleicher Renderer wie Skript/Slides, aber chat-gerechte
+   Kompaktheit — Überschriften dürfen im Chat nicht dominieren. !important
+   schlägt die .markdown-preview-Regeln oben (und die Font-Size-Regeln im
+   Inline-Style-Block von base.html). */
+/* Fallback-Rohtext (kurz, bis das async-Rendering fertig ist): dieselbe
+   Größe/Zeilenhöhe wie das gerenderte Ergebnis → kein Größen-Sprung. */
+.forum-content {
+  line-height: 1.6;
+}
+.forum-message .markdown-preview {
+  font-size: 0.875rem !important;
+  line-height: 1.6 !important;
+}
+.forum-message .markdown-preview > :first-child {
+  margin-top: 0 !important;
+}
+.forum-message .markdown-preview > :last-child {
+  margin-bottom: 0 !important;
+}
+.forum-message .markdown-preview h1 {
+  font-size: 1.125rem !important;
+  font-weight: 700 !important;
+  border-bottom: 0 !important;
+  margin-top: 0.75rem !important;
+  margin-bottom: 0.375rem !important;
+}
+.forum-message .markdown-preview h2 {
+  font-size: 1rem !important;
+  font-weight: 700 !important;
+  margin-top: 0.625rem !important;
+  margin-bottom: 0.3rem !important;
+}
+.forum-message .markdown-preview h3 {
+  font-size: 0.9375rem !important;
+  font-weight: 700 !important;
+  margin-top: 0.5rem !important;
+  margin-bottom: 0.25rem !important;
+}
+
 .markdown-preview strong {
   font-weight: 700 !important;
 }

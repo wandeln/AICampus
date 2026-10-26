@@ -98,7 +98,7 @@
         id="forum-input"
         rows="1"
         maxlength="5000"
-        placeholder="Nachricht schreiben…"
+        placeholder="Nachricht schreiben… (Markdown & LaTeX werden gerendert)"
         class="flex-1 border border-gray-300 rounded-lg px-4 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
       ></textarea>
       <button
@@ -193,12 +193,23 @@
           <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${roleClass}">${escapeHtml(m.role)}</span>
           <span class="text-xs text-gray-400">${forumTimeLabel(m.created_at)}</span>
         </div>
-        <div class="text-sm text-gray-700 whitespace-pre-wrap break-words mt-0.5">${escapeHtml(m.content)}</div>
+        <div class="forum-content text-sm text-gray-700 break-words mt-0.5"></div>
       </div>
       ${m.can_delete
         ? `<button type="button" class="forum-delete opacity-0 group-hover:opacity-100 self-start mt-0.5 text-gray-300 hover:text-red-500 transition" data-id="${m.id}" title="Nachricht löschen">✕</button>`
         : ''}
     `;
+    // Markdown + KaTeX + Querverweise: derselbe Renderer wie Skript/Slides
+    // (breaks: einzelne Zeilenumbrüche bleiben, wie im Chat gewohnt).
+    // Kein Zwischen-Rohtext: der Initial-Load wartet auf die Refmaps (s. u.),
+    // spätere Polls/Posts laufen auf dem Cache — das Rendering ist dann
+    // synchron (außer Mermaid-Blöcke). Nur bei Renderer-Fehler Rohtext —
+    // besser als eine leere Nachricht.
+    const md = el.querySelector('.forum-content');
+    renderMarkdown(m.content, md, { breaks: true }).catch((e) => {
+      console.warn('Forum: Markdown-Rendering fehlgeschlagen', e);
+      md.textContent = m.content;
+    });
     return el;
   }
 
@@ -460,8 +471,13 @@
 
   // ─── Initial-Render ──────────────────────────────────────────
   if (activeChannelId != null) {
-    appendForumMessages(initialMessages, false);
-    forumList.scrollTop = forumList.scrollHeight;
+    // Refmaps vorgeladen, damit der erste Render synchron läuft — sonst
+    // wären alle Nachrichten kurz leer, bis der Fetch fertig ist (die
+    // Funktionen rejecten nie, Fehler liefern null → Fallback-Nummern).
+    Promise.all([getCourseRefMap(), getCourseSlidesRefMap()]).then(() => {
+      appendForumMessages(initialMessages, false);
+      forumList.scrollTop = forumList.scrollHeight;
+    });
     // Sichtbarer Chat → aktiver Kanal wird als gelesen markiert (Badge weg);
     // unsichtbar (mobil, nur Kanal-Liste) → Badge und Ungelesen bleiben stehen.
     if (chatVisible()) clearActiveChannelBadge();
