@@ -171,7 +171,7 @@ grep -q "42" /tmp/out.txt && echo "OK"
 ## 4. Kurs-Material
 
 Registerkarten je Kurs: **Skript, Slides, Aufgaben, Übersicht (Tutor+),
-Medien (Prof+), Quellen (Tutor+), Forum (alle), Mitglieder (Prof+),
+Forum (alle), Mitglieder (Prof+), Medien (Prof+), Quellen (Tutor+),
 Einstellungen (Prof+)**.
 
 ### 4.1 Vorlesungsskript

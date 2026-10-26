@@ -583,6 +583,16 @@ def _course_tab_context(
                 "active": active_tab == "tasks",
             }
         )
+    if is_tutor:
+        tabs.append(
+            {
+                "key": "overview",
+                "icon": "📊",
+                "label": "Übersicht",
+                "url": f"/courses/{course_id}/overview",
+                "active": active_tab == "overview",
+            }
+        )
     # Forum: für alle Kurs-Mitglieder (Student/Tutor/PROF) + Admins
     if membership is not None or is_admin:
         # Ungelesen-Zähler (Summe über alle Kanäle) als Badge am Forum-Tab
@@ -595,16 +605,6 @@ def _course_tab_context(
                 "url": f"/courses/{course_id}/forum",
                 "active": active_tab == "forum",
                 "badge": forum_badge,
-            }
-        )
-    if is_tutor:
-        tabs.append(
-            {
-                "key": "overview",
-                "icon": "📊",
-                "label": "Übersicht",
-                "url": f"/courses/{course_id}/overview",
-                "active": active_tab == "overview",
             }
         )
     if is_prof or is_admin:
