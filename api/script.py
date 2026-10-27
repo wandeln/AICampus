@@ -503,6 +503,138 @@ async def get_section(
     return _section_to_dict(section, include_content=True, include_summary=is_tutor)
 
 
+class _RefmapChapter(TypedDict):
+    """Kapitel-Beitrag der Refmap (s. _process_refmap_chapter)."""
+
+    maxFig: int
+    maxEq: int
+    maxCode: int
+    maxBox: int
+    maxTab: int
+    label: str
+    sections: list[dict[str, object]]
+    figures: list[dict[str, object]]
+    codes: list[dict[str, object]]
+    tables: list[dict[str, object]]
+
+
+def _process_refmap_chapter(
+    s: ScriptSection,
+    ch_num: int,
+    counters: dict[str, int],
+    labels: dict[str, dict[str, object]],
+) -> _RefmapChapter:
+    """Ein Kapitel der Refmap — Single Source of Truth für script_refmap UND
+    den Dry-Run-Endpoint script_refmap_chapter (ungespeicherte Kapitel-Inhalte).
+
+    Scannt s.content, erhöht die laufenden Zähler (counters, mutiert) und
+    registriert die Kapitel-Labels in `labels` (mutiert; pro Kind gewinnt das
+    erste Vorkommen). Liefert die Kapitel-Beiträge: Max-Werte (neue
+    Zähler-Positionen), Kapitel-Label, Sections (TOC) und die
+    figures/codes/tables-Entries (mit globalen Nummern).
+    """
+    fig_pairs = _scan_figures(s.content)  # (Caption, Label, Inners) in Vorkommensreihenfolge
+    eqs = _scan_labels(s.content)[1]
+    code_items = _scan_code_labels(s.content)  # (Label, Caption) in Vorkommensreihenfolge
+    box_items = _scan_box_labels(s.content)  # (Label, Typ) in Vorkommensreihenfolge
+    tab_items = _scan_tables(s.content)  # (Caption, Label) in Vorkommensreihenfolge
+    previews = _scan_previews(s.content)  # "kind:label" → Hover-Preview (Tooltip)
+
+    figures: list[dict[str, object]] = []
+    codes: list[dict[str, object]] = []
+    tables: list[dict[str, object]] = []
+    for caption, label, inners in fig_pairs:
+        counters["fig"] += 1
+        if label and f"fig:{label}" not in labels:
+            entry = {"kind": "fig", "sectionId": s.id, "num": counters["fig"]}
+            if p := previews.get(f"fig:{label}"):
+                entry["preview"] = p
+            labels[f"fig:{label}"] = entry
+        figures.append({"num": counters["fig"], "caption": caption, "label": label, "sectionId": s.id})
+        # Gelabelte Subfigure-Inners: eigene Refmap-Entries (ebenfalls
+        # kind "fig" — @fig:label), num = Nummer des Parent-Komplexes
+        # (beim ersten Claim), sub = Letter (a, b, …) → „Abb. N a)".
+        if inners:
+            for i, (sub_label, _inner_cap) in enumerate(inners):
+                if not sub_label or f"fig:{sub_label}" in labels:
+                    continue
+                sub = {
+                    "kind": "fig", "sectionId": s.id,
+                    "num": counters["fig"], "sub": chr(97 + i),
+                }
+                if p := previews.get(f"fig:{sub_label}"):
+                    sub["preview"] = p
+                labels[f"fig:{sub_label}"] = sub
+    for label in eqs:
+        counters["eq"] += 1
+        if f"eq:{label}" not in labels:
+            entry = {"kind": "eq", "sectionId": s.id, "num": counters["eq"]}
+            if p := previews.get(f"eq:{label}"):
+                entry["preview"] = p
+            labels[f"eq:{label}"] = entry
+    for label, caption in code_items:
+        counters["code"] += 1
+        if f"code:{label}" not in labels:
+            entry = {"kind": "code", "sectionId": s.id, "num": counters["code"]}
+            if p := previews.get(f"code:{label}"):
+                entry["preview"] = p
+            labels[f"code:{label}"] = entry
+        codes.append({"num": counters["code"], "caption": caption, "label": label, "sectionId": s.id})
+    for label, box_type in box_items:
+        counters["box"] += 1
+        if f"box:{label}" not in labels:
+            entry = {"kind": "box", "type": box_type, "sectionId": s.id, "num": counters["box"]}
+            if p := previews.get(f"box:{label}"):
+                entry["preview"] = p
+            labels[f"box:{label}"] = entry
+    for caption, label in tab_items:
+        counters["tab"] += 1
+        if f"tab:{label}" not in labels:
+            entry = {"kind": "tab", "sectionId": s.id, "num": counters["tab"]}
+            if p := previews.get(f"tab:{label}"):
+                entry["preview"] = p
+            labels[f"tab:{label}"] = entry
+        tables.append({"num": counters["tab"], "caption": caption, "label": label, "sectionId": s.id})
+    # Sections (h2–h6): kapitellokale Nummerierung, Labels, Anker fürs TOC
+    headings = _scan_headings(s.content)
+    ch_label = _chapter_label(s.content)
+    # Kapitel-Label ({#sec:label} als eigene Zeile) wird VOR den Section-Labels
+    # registriert, damit @sec:label auf das Kapitel („Kap. N“) zeigt, falls eine
+    # Section denselben Namen trägt.
+    if ch_label and f"sec:{ch_label}" not in labels:
+        labels[f"sec:{ch_label}"] = {
+            "kind": "sec", "sectionId": s.id, "num": ch_num,
+            "chapter": True, "preview": s.title,
+        }
+    sec_entries = []
+    for h, local in zip(headings, _local_section_numbers(headings)):
+        full_num = f"{ch_num}.{local}"
+        sec_entries.append({
+            "num": full_num,
+            "level": h["level"],
+            "title": _clean_heading_title(h["title"]),
+            "label": h["label"],
+            "anchor": f"sec:{h['label']}" if h["label"] else f"sec:{s.id}-{full_num}",
+        })
+        if h["label"] and f"sec:{h['label']}" not in labels:
+            labels[f"sec:{h['label']}"] = {
+                "kind": "sec", "sectionId": s.id, "num": full_num,
+                "preview": _clean_heading_title(h["title"]),
+            }
+    return {
+        "maxFig": counters["fig"],
+        "maxEq": counters["eq"],
+        "maxCode": counters["code"],
+        "maxBox": counters["box"],
+        "maxTab": counters["tab"],
+        "label": ch_label,
+        "sections": sec_entries,
+        "figures": figures,
+        "codes": codes,
+        "tables": tables,
+    }
+
+
 @router.get("/courses/{course_id}/script-refmap")
 async def script_refmap(
     course_id: int,
@@ -567,117 +699,23 @@ async def script_refmap(
     figures: list[dict[str, object]] = []
     codes: list[dict[str, object]] = []
     tables: list[dict[str, object]] = []
-    fig_running = 0
-    eq_running = 0
-    code_running = 0
-    box_running = 0
-    tab_running = 0
+    counters = {"fig": 0, "eq": 0, "code": 0, "box": 0, "tab": 0}
     for ch_num, s in enumerate(sections, start=1):
-        fig_pairs = _scan_figures(s.content)  # (Caption, Label, Inners) in Vorkommensreihenfolge
-        eqs = _scan_labels(s.content)[1]
-        code_items = _scan_code_labels(s.content)  # (Label, Caption) in Vorkommensreihenfolge
-        box_items = _scan_box_labels(s.content)  # (Label, Typ) in Vorkommensreihenfolge
-        tab_items = _scan_tables(s.content)  # (Caption, Label) in Vorkommensreihenfolge
-        previews = _scan_previews(s.content)  # "kind:label" → Hover-Preview (Tooltip)
-        max_fig = 0
-        max_eq = 0
-        max_code = 0
-        max_box = 0
-        max_tab = 0
-        for caption, label, inners in fig_pairs:
-            fig_running += 1
-            if label and f"fig:{label}" not in labels:
-                e: dict[str, object] = {"kind": "fig", "sectionId": s.id, "num": fig_running}
-                if p := previews.get(f"fig:{label}"):
-                    e["preview"] = p
-                labels[f"fig:{label}"] = e
-            max_fig = max(max_fig, fig_running)
-            figures.append({"num": fig_running, "caption": caption, "label": label, "sectionId": s.id})
-            # Gelabelte Subfigure-Inners: eigene Refmap-Entries (ebenfalls
-            # kind "fig" — @fig:label), num = Nummer des Parent-Komplexes
-            # (beim ersten Claim), sub = Letter (a, b, …) → „Abb. N a)".
-            if inners:
-                for i, (sub_label, _inner_cap) in enumerate(inners):
-                    if not sub_label or f"fig:{sub_label}" in labels:
-                        continue
-                    e2: dict[str, object] = {
-                        "kind": "fig", "sectionId": s.id,
-                        "num": fig_running, "sub": chr(97 + i),
-                    }
-                    if p := previews.get(f"fig:{sub_label}"):
-                        e2["preview"] = p
-                    labels[f"fig:{sub_label}"] = e2
-        for label in eqs:
-            eq_running += 1
-            if f"eq:{label}" not in labels:
-                e: dict[str, object] = {"kind": "eq", "sectionId": s.id, "num": eq_running}
-                if p := previews.get(f"eq:{label}"):
-                    e["preview"] = p
-                labels[f"eq:{label}"] = e
-            max_eq = max(max_eq, eq_running)
-        for label, caption in code_items:
-            code_running += 1
-            if f"code:{label}" not in labels:
-                e: dict[str, object] = {"kind": "code", "sectionId": s.id, "num": code_running}
-                if p := previews.get(f"code:{label}"):
-                    e["preview"] = p
-                labels[f"code:{label}"] = e
-            max_code = max(max_code, code_running)
-            codes.append({"num": code_running, "caption": caption, "label": label, "sectionId": s.id})
-        for label, box_type in box_items:
-            box_running += 1
-            if f"box:{label}" not in labels:
-                e: dict[str, object] = {"kind": "box", "type": box_type, "sectionId": s.id, "num": box_running}
-                if p := previews.get(f"box:{label}"):
-                    e["preview"] = p
-                labels[f"box:{label}"] = e
-            max_box = max(max_box, box_running)
-        for caption, label in tab_items:
-            tab_running += 1
-            if f"tab:{label}" not in labels:
-                e: dict[str, object] = {"kind": "tab", "sectionId": s.id, "num": tab_running}
-                if p := previews.get(f"tab:{label}"):
-                    e["preview"] = p
-                labels[f"tab:{label}"] = e
-            max_tab = max(max_tab, tab_running)
-            tables.append({"num": tab_running, "caption": caption, "label": label, "sectionId": s.id})
-        # Sections (h2–h6): kapitellokale Nummerierung, Labels, Anker fürs TOC
-        headings = _scan_headings(s.content)
-        ch_label = _chapter_label(s.content)
-        # Kapitel-Label ({#sec:label} als eigene Zeile) wird VOR den Section-Labels
-        # registriert, damit @sec:label auf das Kapitel („Kap. N“) zeigt, falls eine
-        # Section denselben Namen trägt.
-        if ch_label and f"sec:{ch_label}" not in labels:
-            labels[f"sec:{ch_label}"] = {
-                "kind": "sec", "sectionId": s.id, "num": ch_num,
-                "chapter": True, "preview": s.title,
-            }
-        sec_entries = []
-        for h, local in zip(headings, _local_section_numbers(headings)):
-            full_num = f"{ch_num}.{local}"
-            sec_entries.append({
-                "num": full_num,
-                "level": h["level"],
-                "title": _clean_heading_title(h["title"]),
-                "label": h["label"],
-                "anchor": f"sec:{h['label']}" if h["label"] else f"sec:{s.id}-{full_num}",
-            })
-            if h["label"] and f"sec:{h['label']}" not in labels:
-                labels[f"sec:{h['label']}"] = {
-                    "kind": "sec", "sectionId": s.id, "num": full_num,
-                    "preview": _clean_heading_title(h["title"]),
-                }
+        c = _process_refmap_chapter(s, ch_num, counters, labels)
+        figures.extend(c["figures"])
+        codes.extend(c["codes"])
+        tables.extend(c["tables"])
         chapters[str(s.id)] = {
             "title": s.title,
-            "label": ch_label,
+            "label": c["label"],
             "num": ch_num,
             "visible": s.is_visible,
-            "maxFig": max_fig,
-            "maxEq": max_eq,
-            "maxCode": max_code,
-            "maxBox": max_box,
-            "maxTab": max_tab,
-            "sections": sec_entries,
+            "maxFig": c["maxFig"],
+            "maxEq": c["maxEq"],
+            "maxCode": c["maxCode"],
+            "maxBox": c["maxBox"],
+            "maxTab": c["maxTab"],
+            "sections": c["sections"],
         }
 
     # Aufgaben für @task:{id}-Referenzen (Datenquelle der Aufgaben-Box).
@@ -763,7 +801,81 @@ async def script_refmap(
     }
 
 
-# ─── Schreiben (PROF/TUTOR) ───────────────────────────────────────
+@router.post("/courses/{course_id}/script-refmap-chapter")
+async def script_refmap_chapter(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    _user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF, CourseRole.TUTOR)),
+):
+    """Refmap-Dry-Run für EIN Kapitel (nur PROF/TUTOR).
+
+    Berechnet die Nummerierung/Labels für (ggf. noch ungespeicherten)
+    Inhalt, als wäre er bei section_id gespeichert (null = am Ende).
+    Body: {"section_id": int|null, "content": str, "title": str}
+
+    Damit kann der Client die in-memory-Refmap beim Bearbeiten aktualisieren
+    (s. syncRefMapChapter in markdown-renderer.js), so dass Querverweise in
+    den Live-Previews — v. a. in der internen Zusammenfassung — direkt
+    aufgelöst werden, ohne erst zu speichern.
+    """
+    body = await request.json()
+    section_id = body.get("section_id")
+    content = body.get("content") or ""
+    title = (body.get("title") or "").strip()
+
+    sections = session.exec(
+        select(ScriptSection)
+        .where(ScriptSection.course_id == course_id)
+        .order_by(ScriptSection.display_order.asc())  # type: ignore[attr-defined]
+    ).all()
+
+    # Zähler = Offset aller VORHERIGEN Kapitel; das bearbeitete Kapitel wird
+    # übersprungen (sein Inhalt wird durch den Draft ersetzt).
+    counters = {"fig": 0, "eq": 0, "code": 0, "box": 0, "tab": 0}
+    labels: dict[str, dict[str, object]] = {}
+    ch_num = 0
+    draft_title = ""
+    found = section_id is None
+    for s in sections:
+        ch_num += 1
+        if s.id == section_id:
+            draft_title = s.title
+            found = True
+            break
+        _process_refmap_chapter(s, ch_num, counters, labels)
+    if not found:
+        raise HTTPException(404, "Kapitel nicht gefunden.")
+
+    # Draft-Objekt nur zum Scannen (wird NICHT in der Session persistiert).
+    draft = ScriptSection(
+        id=section_id,  # type: ignore[arg-type]
+        course_id=course_id,
+        title=title or draft_title,
+        content=content,
+        created_by=0,  # type: ignore[arg-type]
+    )
+    if section_id is None:
+        ch_num += 1  # neues Kapitel → am Ende
+    c = _process_refmap_chapter(draft, ch_num, counters, labels)
+    return {
+        "sectionId": section_id,
+        "chapterNum": ch_num,
+        "maxFig": c["maxFig"],
+        "maxEq": c["maxEq"],
+        "maxCode": c["maxCode"],
+        "maxBox": c["maxBox"],
+        "maxTab": c["maxTab"],
+        "label": c["label"],
+        "sections": c["sections"],
+        "figures": c["figures"],
+        "codes": c["codes"],
+        "tables": c["tables"],
+        "labels": {k: v for k, v in labels.items() if v.get("sectionId") == section_id},
+    }
+
+
+# ─── Schreiben (PROF/TUTOR) ─────────────────────────────────────────────
 
 @router.post("/courses/{course_id}/script-sections")
 async def create_section(

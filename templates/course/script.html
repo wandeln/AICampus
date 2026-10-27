@@ -299,6 +299,25 @@
     else ta.value = v;
   }
 
+  // Live-Refmap beim Bearbeiten (debounced): die Labels des Kapitels
+  // (ggf. ungespeichert) werden in die in-memory-Refmap gemergt, damit
+  // Querverweise — v. a. in der Preview der internen Zusammenfassung —
+  // ohne Speichern auflösbar sind. Danach die sichtbaren Previews neu
+  // rendern, damit die Links direkt erscheinen.
+  function sqScheduleRefMapSync(card, content) {
+    const edit = card._edit;
+    if (!edit) return;
+    clearTimeout(card._rmsTimer);
+    card._rmsTimer = setTimeout(() => {
+      syncRefMapChapter(edit.sectionId, content, edit.titleInput ? edit.titleInput.value : '')
+        .then((d) => {
+          if (!d || !card._edit) return;
+          if (edit.contentEditor) edit.contentEditor.renderPreview();
+          if (edit.summaryEditor && edit.summaryEditor.isPreview()) edit.summaryEditor.renderPreview();
+        });
+    }, 500);
+  }
+
   // Formular-HTML; KEY macht alle IDs pro Karte eindeutig
   function sqEditFormHtml(key) {
     return `
@@ -311,7 +330,7 @@
           <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer">
             <input type="checkbox" id="sqe-fc-${key}" checked class="rounded text-purple-600">Inhalt
           </label>
-          <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer" title="Interne Zusammenfassung für die LLM-Konsistenz zwischen Kapiteln (nicht für Studenten sichtbar)">
+          <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer" title="Interne Zusammenfassung für die LLM-Konsistenz zwischen Kapiteln (nicht für Studierende sichtbar)">
             <input type="checkbox" id="sqe-fs-${key}" checked class="rounded text-purple-600">Zusammenfassung (intern)
           </label>
         </div>
@@ -343,7 +362,7 @@
         </summary>
         <div id="sqe-summary-${key}" class="mt-2">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-xs text-gray-400">(intern — für die LLM-Konsistenz zwischen Kapiteln, nicht für Studenten)</span>
+            <span class="text-xs text-gray-400">(intern — für die LLM-Konsistenz zwischen Kapiteln, nicht für Studierende)</span>
             <div id="sqe-summary-anchor-${key}"></div>
           </div>
           <textarea id="sqe-summary-ta-${key}" rows="4"
@@ -576,7 +595,7 @@
           sectionId: parseInt(sectionId),
           bibliography: true, // Ganzes Kapitel → „Quellen“-Liste in der Preview
           onPreviewRender: () => sqApplyMarks(), // Fragen-Markierungen auch in der Preview
-          onValueChange: () => { if (card._av) card._av.onChange(); },
+          onValueChange: (v) => { if (card._av) card._av.onChange(); sqScheduleRefMapSync(card, v); },
         });
         const summaryEditor = createMarkdownEditor('sqe-summary-' + key, {
           buttonAnchor: 'sqe-summary-anchor-' + key,
@@ -651,6 +670,7 @@
   function sqExitEditMode(card) {
     const edit = card._edit;
     if (!edit) return;
+    clearTimeout(card._rmsTimer);
     if (card._av) { card._av.destroy(); card._av = null; }
     card._edit = null;
     if (edit.form && edit.form.parentNode) edit.form.remove();
@@ -780,7 +800,13 @@
       if (generateFields.summary && data.summary) {
         mdEditorSet(edit.summaryEditor, edit.summaryTa, data.summary);
         (async () => {
-          await renderMarkdown(data.summary, edit.summaryEditor.previewDiv, { preview: true });
+          // Neue/geänderte Labels des (ungespeicherten) Inhalts ZUERST in die
+          // Refmap, damit die Referenzen in der Zusammenfassung-Preview sofort
+          // aufgelöst werden — kein Speichern + Neuöffnen nötig.
+          if (generateFields.content) {
+            await syncRefMapChapter(edit.sectionId, mdEditorVal(edit.contentEditor, edit.contentTa), edit.titleInput.value);
+          }
+          edit.summaryEditor.renderPreview();
           if (!edit.summaryEditor.isPreview()) edit.summaryEditor.toggleBtn.click();
         })();
       }
@@ -856,7 +882,7 @@
       textareaId: 'sqe-content-ta-' + key,
       bibliography: true, // Ganzes Kapitel → „Quellen“-Liste in der Preview
       onPreviewRender: () => sqApplyMarks(), // Fragen-Markierungen auch in der Preview
-      onValueChange: () => { if (card._av) card._av.onChange(); },
+      onValueChange: (v) => { if (card._av) card._av.onChange(); sqScheduleRefMapSync(card, v); },
     });
     const summaryEditor = createMarkdownEditor('sqe-summary-' + key, {
       buttonAnchor: 'sqe-summary-anchor-' + key,
@@ -904,7 +930,7 @@
       '<button type="button" class="sq-finish-btn bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition">✅ Fertig</button>' +
       '<span class="av-slot inline-flex items-center gap-2"></span>' +
       '<span class="flex-1"></span>' +
-      '<button type="button" class="sq-vis-btn p-1.5 rounded hover:bg-gray-100 transition text-gray-300" title="Kapitel für Studenten sichtbar machen">' + sqEyeIcon(false) + '</button>';
+      '<button type="button" class="sq-vis-btn p-1.5 rounded hover:bg-gray-100 transition text-gray-300" title="Kapitel für Studierende sichtbar machen">' + sqEyeIcon(false) + '</button>';
     toolbar.querySelector('.sq-vis-btn').addEventListener('click', () => {
       // Neukapitel ist noch nicht in der DB → nur lokalen Zustand umschalten
       sqSetCardVisibility(card, !card._visible);
@@ -959,7 +985,7 @@
     card._edit.titleInput.focus();
   }
 
-  // ─── Tutor: TOC-Sichtbarkeit für Studenten (Backend-Flag, analog Kapitel) ──
+  // ─── Tutor: TOC-Sichtbarkeit für Studierende (Backend-Flag, analog Kapitel) ──
   let _tocToggling = false;
   async function sqToggleTocVisibility() {
     if (_tocToggling) return; // Doppelklick-Schutz (sonst flippt der DB-Stand hin und her)
@@ -1003,7 +1029,7 @@
     const eye = card.querySelector('.sq-toc-eye');
     if (eye) {
       eye.innerHTML = sqEyeIcon(visible);
-      eye.title = visible ? 'Inhaltsverzeichnis für Studenten verstecken' : 'Inhaltsverzeichnis für Studenten einblenden';
+      eye.title = visible ? 'Inhaltsverzeichnis für Studierende verstecken' : 'Inhaltsverzeichnis für Studierende einblenden';
       eye.className = 'sq-toc-eye p-1.5 rounded hover:bg-gray-100 transition ' + (visible ? 'text-gray-400 hover:text-blue-600' : 'text-gray-300');
     }
     let badge = card.querySelector('.sq-hidden-badge');
@@ -1055,7 +1081,7 @@
     if (old) old.remove();
     const refMap = await getCourseRefMap();
     if (!refMap || !refMap.chapters) return;
-    // TOC-Sichtbarkeit für Studenten (Backend-Flag; robust gegen alte Caches ohne Feld)
+    // TOC-Sichtbarkeit für Studierende (Backend-Flag; robust gegen alte Caches ohne Feld)
     const tocVisible = refMap.tocVisible !== false;
     // Student: bei verstecktem TOC gar keine TOC-Karte; Tutor/Prof sieht es immer
     if (!SQ_IS_TUTOR && !tocVisible) return;
@@ -1087,12 +1113,12 @@
       '<div class="script-toc-body px-6 pb-5 border-t border-gray-100">' +
       (SQ_IS_TUTOR
         ? '<div class="sq-toolbar flex items-center gap-2 pt-4 pb-2"><span class="flex-1"></span>' +
-          '<button type="button" class="sq-toc-eye p-1.5 rounded hover:bg-gray-100 transition ' + (tocVisible ? 'text-gray-400 hover:text-blue-600' : 'text-gray-300') + '" title="' + (tocVisible ? 'Inhaltsverzeichnis für Studenten verstecken' : 'Inhaltsverzeichnis für Studenten einblenden') + '">' + sqEyeIcon(tocVisible) + '</button></div>'
+          '<button type="button" class="sq-toc-eye p-1.5 rounded hover:bg-gray-100 transition ' + (tocVisible ? 'text-gray-400 hover:text-blue-600' : 'text-gray-300') + '" title="' + (tocVisible ? 'Inhaltsverzeichnis für Studierende verstecken' : 'Inhaltsverzeichnis für Studierende einblenden') + '">' + sqEyeIcon(tocVisible) + '</button></div>'
         : '') +
       '</div>';
     const body = card.querySelector('.script-toc-body');
     const chevron = card.querySelector('.sq-toc-chevron');
-    // Header-Klick = lokales Ein-/Ausklappen (Chevron). Die Studenten-Sichtbarkeit
+    // Header-Klick = lokales Ein-/Ausklappen (Chevron). Die Studierende-Sichtbarkeit
     // steuert nur das Auge (Backend-Flag, analog zu den Kapiteln).
     body.classList.toggle('hidden', wasCollapsed);
     chevron.style.transform = wasCollapsed ? '' : 'rotate(180deg)';
@@ -1530,7 +1556,7 @@
     if (!card) return false;
     const res = await fetch(`/api/script-sections/${sectionId}`, { credentials: 'same-origin' });
     if (!res.ok) {
-      // Kapitel gelöscht (oder für Studenten versteckt) → Karte entfernen
+      // Kapitel gelöscht (oder für Studierende versteckt) → Karte entfernen
       card.remove();
       await refreshCourseRefMap();
       sqBuildToc();

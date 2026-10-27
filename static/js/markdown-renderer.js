@@ -186,6 +186,107 @@ function refreshCourseRefMap() {
   return getCourseRefMap();
 }
 
+// ─── Live-Refmap beim Bearbeiten (ungespeicherter Inhalt) ──────────────────
+// Die gecachte Refmap spiegelt den DB-Stand; neue/geänderte Labels des
+// gerade bearbeiteten Kapitels fehlen darin noch → Querverweise rendern ❓
+// bis Speichern + Neuöffen (besonders sichtbar in der internen
+// Zusammenfassung, die selbst keine Labels enthält). syncRefMapChapter()
+// lässt den Server die Nummerierung für den Draft-Inhalt berechnen
+// (POST script-refmap-chapter, Dry-Run) und merge das Ergebnis IN die
+// gecachte Refmap: die Kapitel-Entries werden ersetzt, die Nummern der
+// folgenden Kapitel um den Zähler-Delta verschoben. Nach dem Speichern
+// ersetzt refreshCourseRefMap() den ganzen Stand durch den Server-Stand.
+// Aufrufe laufen serialized (Promise-Kette) — bei schnellem Tippen gewinnt
+// immer der jüngste Inhalt; ein Refresh dazwischen ist unkritisch (der
+// Merge trifft dann nur noch das verwaiste Objekt).
+let _refMapSyncChain = Promise.resolve();
+function syncRefMapChapter(sectionId, content, title) {
+  const cid = _getCourseId();
+  if (cid === null) return Promise.resolve(null);
+  const run = _refMapSyncChain.then(() => _syncRefMapChapterImpl(cid, sectionId, content, title));
+  _refMapSyncChain = run.then(() => {}, () => {});
+  return run;
+}
+
+async function _syncRefMapChapterImpl(cid, sectionId, content, title) {
+  const refMap = await getCourseRefMap();
+  if (!refMap || !refMap.labels) return null;
+  let data;
+  try {
+    const r = await fetch(`/api/courses/${cid}/script-refmap-chapter`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ section_id: sectionId, content, title }),
+    });
+    if (!r.ok) return null;
+    data = await r.json();
+  } catch (e) {
+    return null;
+  }
+  _mergeRefMapChapter(refMap, sectionId, data);
+  return data;
+}
+
+function _mergeRefMapChapter(refMap, sectionId, d) {
+  const key = String(sectionId);
+  // 1) Label-Entries dieses Kapitels ersetzen
+  for (const k of Object.keys(refMap.labels)) {
+    const e = refMap.labels[k];
+    if (e && String(e.sectionId) === key) delete refMap.labels[k];
+  }
+  for (const [k, v] of Object.entries(d.labels || {})) refMap.labels[k] = v;
+  // 2) Folgende Kapitel: Nummern je Kind um den Zähler-Delta verschieben
+  const order = Array.isArray(refMap.chapterOrder) ? refMap.chapterOrder : [];
+  const idx = order.indexOf(key);
+  const later = new Set(idx >= 0 ? order.slice(idx + 1) : []);
+  const old = (refMap.chapters && refMap.chapters[key]) || {};
+  const maxKeys = { fig: 'maxFig', eq: 'maxEq', code: 'maxCode', box: 'maxBox', tab: 'maxTab' };
+  const tocLists = { fig: 'figures', code: 'codes', tab: 'tables' };
+  for (const kind of Object.keys(maxKeys)) {
+    const delta = (d[maxKeys[kind]] || 0) - (old[maxKeys[kind]] || 0);
+    if (!delta) continue;
+    for (const k of Object.keys(refMap.labels)) {
+      const e = refMap.labels[k];
+      if (k.startsWith(kind + ':') && e && later.has(String(e.sectionId))) e.num += delta;
+    }
+    const listName = tocLists[kind];
+    if (listName && Array.isArray(refMap[listName])) {
+      for (const f of refMap[listName]) {
+        if (later.has(String(f.sectionId))) f.num += delta;
+      }
+    }
+  }
+  // 3) Kapitel-Entry: Max-Werte, Kapitel-Label, Sections (TOC)
+  // (Nur gespeicherte Kapitel — ein neues Kapitel hat noch keine ID und
+  // keinen Refmap-Entry; die Content-Preview braucht ihn nicht.)
+  if (sectionId !== null && sectionId !== undefined && refMap.chapters) {
+    const ch = refMap.chapters[key] || (refMap.chapters[key] = {});
+    ch.maxFig = d.maxFig || 0;
+    ch.maxEq = d.maxEq || 0;
+    ch.maxCode = d.maxCode || 0;
+    ch.maxBox = d.maxBox || 0;
+    ch.maxTab = d.maxTab || 0;
+    if (d.label !== undefined) ch.label = d.label;
+    if (d.sections) ch.sections = d.sections;
+  }
+  // 4) TOC-Listen (figures/codes/tables): Einträge dieses Kapitels ersetzen
+  for (const listName of Object.values(tocLists)) {
+    const fresh = d[listName];
+    if (!Array.isArray(fresh) || !Array.isArray(refMap[listName])) continue;
+    const list = refMap[listName];
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (String(list[i].sectionId) === key) list.splice(i, 1);
+    }
+    let pos = list.length;
+    if (idx >= 0) {
+      pos = list.findIndex((f) => later.has(String(f.sectionId)));
+      if (pos < 0) pos = list.length;
+    }
+    list.splice(pos, 0, ...fresh);
+  }
+}
+
 // ─── Slide-Ref-Map (S-Nummern) ─────────────────────────────────────────────
 // GET /api/courses/{courseId}/slides-refmap: slide-eigene Labels (die im
 // Skript NICHT vorkommen) mit fortlaufenden S-Nummern über ALLE Slide-Decks
