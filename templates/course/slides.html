@@ -362,20 +362,21 @@
     });
   }
 
-  // ─── Live-Update (MCP): Deck wurde außerhalb bearbeitet ──────────
-  // Neu angelegt → Reload (Kachel wird serverseitig gerendert). Geändert →
-  // gezieltes Remount der Kachel, die aktuelle Folie bleibt erhalten.
-  function slLiveDeckUpdate(deckId) {
+  // ─── Live-Update (MCP): Deck/Quellen außerhalb bearbeitet ─────────
+  // Kachel neu mounten (aktuelle Folie bleibt erhalten);
+  // flash = blauer Rahmen als Hinblinzler (nur bei Deck-Änderungen).
+  function slRemountDeck(deckId, flash) {
     const shell = document.querySelector(`[data-deck-preview="${deckId}"]`);
-    if (!shell) { location.reload(); return; }
+    if (!shell) { if (flash) location.reload(); return; }
     const state = deckStates.get(deckId) || { reveal: null };
-    if (state.mounting) { setTimeout(() => slLiveDeckUpdate(deckId), 1000); return; }
+    if (state.mounting) { setTimeout(() => slRemountDeck(deckId, flash), 1000); return; }
     let posH = 0, posV = 0;
     try { const i = state.reveal.getIndices(); posH = i.h || 0; posV = i.v || 0; } catch (e) {}
     try { state.reveal.destroy(); } catch (e) {}
     state.reveal = null;
     slMountDeck({ id: deckId }, state, { full: posH >= MINI_PREVIEW_SLIDES }).then(() => {
       if (state.reveal) state.reveal.slide(posH, posV); // slide() clampt
+      if (!flash) return;
       const tile = shell.closest("[data-deck-id]");
       if (tile) {
         tile.style.outline = "2px solid #60a5fa";
@@ -384,7 +385,18 @@
       }
     }).catch(() => location.reload());
   }
+  // Deck-Änderung: neu angelegt → Reload (Kachel serverseitig gerendert),
+  // sonst gezieltes Remount der Kachel.
+  function slLiveDeckUpdate(deckId) { slRemountDeck(deckId, true); }
   aicampusWatchContent(courseId, (data) => {
+    if (data.entity_type === "reference") {
+      // Quelle angelegt/geändert → Zitationen in allen Kacheln:
+      // Refmap neu laden + alle Kacheln stumm neu mounten.
+      refreshCourseRefMap().then(() => {
+        for (const deckId of deckStates.keys()) slRemountDeck(deckId, false);
+      });
+      return;
+    }
     if (data.entity_type !== "slide_deck") return;
     slLiveDeckUpdate(data.entity_id);
   });

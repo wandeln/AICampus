@@ -499,16 +499,18 @@
   // Position-Restore verlieren (s. renderPreview).
   let previewRenderContent = null;
 
-  function renderPreview(content) {
+  function renderPreview(content, force = false) {
     // Gleicher Inhalt wie das bereits laufende/gerenderte Deck → nicht
-    // erneut queuen. WICHTIG: Der LLM-Flow feuert pro Antwort ZWEI
-    // Renders (direktes renderPreview(data.content) + das vom
-    // setValue-Change-Event kommende debounced schedulePreview). Ohne
-    // diesen Skip würde das Debounce bei größeren Decks (>500 ms Build)
-    // mitten im Build den ersten Render überholen — dessen prevIndex
-    // (Position-Restore nach dem Re-Render) ginge verloren, die
-    // Vorschau landete auf Folie 1, der Editor auf der alten Zeile.
-    if (content === lastRenderedContent && (previewRenderContent !== null || previewReveal)) {
+    // erneut queuen (force umgeht den Skip — z. B. Quellen-Änderung:
+    // Inhalt unverändert, aber die Refmap hat sich geändert). WICHTIG:
+    // Der LLM-Flow feuert pro Antwort ZWEI Renders (direktes
+    // renderPreview(data.content) + das vom setValue-Change-Event kommende
+    // debounced schedulePreview). Ohne diesen Skip würde das Debounce bei
+    // größeren Decks (>500 ms Build) mitten im Build den ersten Render
+    // überholen — dessen prevIndex (Position-Restore nach dem Re-Render)
+    // ginge verloren, die Vorschau landete auf Folie 1, der Editor auf der
+    // alten Zeile.
+    if (!force && content === lastRenderedContent && (previewRenderContent !== null || previewReveal)) {
       // Läuft aktuell KEIN Render (Deck schon fertig), ist das Ausrichten
       // obsolet → Flag löschen. Läuft noch einer, verbraucht der es selbst.
       if (previewRenderContent === null) alignEditorContentFor = null;
@@ -517,7 +519,7 @@
     const seq = ++previewSeq;
     previewRenderQueue = previewRenderQueue
       .catch(() => {}) // fehlgeschlagener Vorgänger blockiert die Queue nicht
-      .then(() => renderPreviewInner(content, seq))
+      .then(() => renderPreviewInner(content, seq, force))
       .catch((e) => console.error("Preview-Render fehlgeschlagen:", e));
   }
 
@@ -567,7 +569,7 @@
     }
   }
 
-  async function renderPreviewInner(content, seq) {
+  async function renderPreviewInner(content, seq, force = false) {
     // Render-Zustand merken (Enqueue-Skip in renderPreview) und bei
     // jedem Ausweg (Return/Abbruch/Fehler) wieder räumen:
     previewRenderContent = content;
@@ -577,7 +579,8 @@
       // das leert die Queue nach schnellem Tippen auch zügig.
       if (seq !== previewSeq) return;
       // Doppelte Anfrage mit unverändertem Inhalt → kein zweiter Re-Render
-      if (previewReveal && content === lastRenderedContent) return;
+      // (force = bewusstes Re-Render, z. B. nach Quellen-Änderung)
+      if (!force && previewReveal && content === lastRenderedContent) return;
       lastRenderedContent = content;
       // Aktuelle Folie merken: nach einem Live-Update macht die Vorschau dort
       // weiter, wo der Tutor gerade war (statt zurück zu Folie 1 zu springen).
@@ -1096,8 +1099,10 @@
     // Quelle angelegt/geändert (UI, anderer Tab oder MCP): gecachte Refmap
     // aktualisieren + Previews neu rendern, damit @cite: sofort auflöst.
     if (data.entity_type === "reference") {
+      // force: Inhalt ist unverändert — ohne Skip-Umgehung würde der
+      // Re-Render übersprungen und @cite: bliebe ❓.
       await refreshCourseRefMap();
-      renderPreview(contentGet());
+      renderPreview(contentGet(), true);
       if (summaryEditor && summaryEditor.isPreview()) summaryEditor.renderPreview();
       return;
     }
