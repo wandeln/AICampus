@@ -63,6 +63,7 @@ from services.media_service import all_media_for_course, sync_media_usages
 from services.references_service import build_references_text
 from services.settings_resolver import get_effective_compute_config, get_effective_llm_config
 from services.task_filter import multi_keyword_matches
+from services.timeutil import deadline_from_local, deadline_iso, utc_iso
 from services.workspace_presets import (
     IMAGE_SELECTION_FIELDS,
     validate_workspace_generation,
@@ -90,6 +91,21 @@ from services.workspace_service import (
 router = APIRouter(prefix="/api", tags=["Tutor"])
 grading_service = GradingService()
 llm_service = LLMService()
+
+
+def _normalize_deadline(raw: Optional[str], tz_name: Optional[str] = None) -> Optional[str]:
+    """Deadline-Eingabe → ISO-UTC (Z) für die DB.
+
+    raw ist ein lokaler Wall-Clock-Wert (datetime-local, z. B. "2025-02-15T23:59");
+    tz_name ist die IANA-Zone des Browsers des Anlegers (body.deadline_tz).
+    Ohne Zone gilt die Campus-Zone. Leerer Wert → None (Deadline entfernen).
+    """
+    if raw in (None, ""):
+        return None
+    try:
+        return deadline_from_local(raw, tz_name)
+    except (ValueError, KeyError):
+        raise HTTPException(400, "Ungültige Deadline oder Zeitzone.")
 export_service = ExportService()
 logger = logging.getLogger(__name__)
 
@@ -167,12 +183,12 @@ async def list_tasks(
             "task_type": t.task_type.value,
             "max_points": t.max_points,
             "max_attempts": t.max_attempts,
-            "deadline": t.deadline,
+            "deadline": deadline_iso(t.deadline),
             "submission_count": len(t.submissions),
             "is_visible": t.is_visible,
             "hints_enabled": t.hints_enabled,
             "display_order": t.display_order,
-            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "created_at": utc_iso(t.created_at),
         }
         for t in tasks
     ]
@@ -246,7 +262,7 @@ async def create_task(
         model_solution=model_solution,
         max_points=max_points,
         max_attempts=body.get("max_attempts"),
-        deadline=body.get("deadline"),
+        deadline=_normalize_deadline(body.get("deadline"), body.get("deadline_tz")),
         text_template=text_template,
         mc_data=mc_data_value,
         is_visible=body.get("is_visible", False),  # Default: für Studenten versteckt
@@ -328,7 +344,7 @@ async def get_task(
         "description": task.description,
         "max_points": task.max_points,
         "max_attempts": task.max_attempts,
-        "deadline": task.deadline,
+        "deadline": deadline_iso(task.deadline),
         "text_template": task.text_template if task.task_type.value == "text" else None,
         "hints_enabled": task.hints_enabled,
     }
@@ -417,7 +433,7 @@ async def update_task(
     if "max_attempts" in body:
         task.max_attempts = None if body["max_attempts"] in (None, "") else int(body["max_attempts"])
     if "deadline" in body:
-        task.deadline = None if body["deadline"] in (None, "") else body["deadline"]
+        task.deadline = _normalize_deadline(body["deadline"], body.get("deadline_tz"))
     if "text_template" in body:
         val = body["text_template"]
         task.text_template = None if val in (None, "") else val
@@ -989,7 +1005,7 @@ async def get_course_live_stats(
         "hist_labels": LIVE_HIST_LABELS,
         "total_histogram": _histogram_counts(total_pct),
         "tasks": tasks_payload,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": utc_iso(datetime.now(timezone.utc)),
     }
 
 
@@ -1113,7 +1129,7 @@ async def get_course_live_mc_stats(
             "max_points": task.max_points,
         },
         "questions": questions_payload,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": utc_iso(datetime.now(timezone.utc)),
     }
 
 
@@ -1753,7 +1769,7 @@ async def get_student_submissions(
                 "points_earned": fb.points_earned,
                 "comment": fb.comment,
                 "giver": giver_name,
-                "created_at": fb.created_at.isoformat() if fb.created_at else "",
+                "created_at": utc_iso(fb.created_at) or "",
             })
 
         submissions.append({
@@ -1766,7 +1782,7 @@ async def get_student_submissions(
             "mc_result": sub.mc_result,
             "workspace_snapshot": bool(sub.workspace_snapshot),
             "attempt_number": sub.attempt_number,
-            "submitted_at": sub.submitted_at.isoformat() if sub.submitted_at else "",
+            "submitted_at": utc_iso(sub.submitted_at) or "",
             "status": sub.status.value,
             "solve_time_seconds": sub.solve_time_seconds,
             "feedback": feedback,
@@ -1879,7 +1895,7 @@ async def add_feedback_to_submission(
         "points_earned": feedback.points_earned,
         "comment": feedback.comment,
         "giver": user.name,
-        "created_at": feedback.created_at.isoformat() if feedback.created_at else "",
+        "created_at": utc_iso(feedback.created_at) or "",
         "latest_points": latest_points,
         "max_points": task.max_points,
     }
@@ -2400,7 +2416,7 @@ async def list_workspace_files(
         "file_access": f.access,
         "is_binary": f.is_binary,
         "sort_order": f.sort_order,
-        "updated_at": f.updated_at.isoformat() if f.updated_at else None,
+        "updated_at": utc_iso(f.updated_at),
     } for f in files]
     out_files.extend(_init_artifact_entries(session, task, om))
     out_folders = [{
@@ -3133,8 +3149,8 @@ async def list_submission_runs(
                 "command": r.command,
                 "status": r.status.value,
                 "exit_code": r.exit_code,
-                "started_at": r.started_at.isoformat() if r.started_at else None,
-                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+                "started_at": utc_iso(r.started_at),
+                "finished_at": utc_iso(r.finished_at),
                 "stdout": (r.stdout or "")[-20_000:],
                 "stderr": (r.stderr or "")[-20_000:],
             }

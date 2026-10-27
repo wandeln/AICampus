@@ -35,6 +35,7 @@ from database.models import (
 )
 from services import course_service, user_service
 from services import version_service
+from services.timeutil import utc_iso
 from services.auth_service import hash_password, require_global_admin
 from services.llm_service import get_llm_debug_entry, get_llm_debug_log
 from services.llm_service import record_llm_debug_entry
@@ -61,7 +62,7 @@ async def list_courses(
             "name": c.name,
             "description": c.description,
             "semester": c.semester,
-            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "created_at": utc_iso(c.created_at),
             "member_count": len(c.course_members),
         }
         for c in courses

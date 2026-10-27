@@ -21,6 +21,7 @@ from database.models import (
     McpOAuthGrantCourse,
     McpOAuthToken,
 )
+from services.timeutil import utc_iso
 
 ACCESS_TTL = timedelta(hours=1)
 REFRESH_TTL = timedelta(days=90)
@@ -330,6 +331,6 @@ def grants_for_user(session: Session, user_id: int) -> List[dict]:
             "name": (crow.client_name if crow and crow.client_name else client_id),
             "courses": courses,
             "allow_write": e["allow_write"],
-            "last_used_at": e["last_used"].isoformat() if e["last_used"] else None,
+            "last_used_at": utc_iso(e["last_used"]),
         })
     return out

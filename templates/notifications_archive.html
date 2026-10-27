@@ -23,8 +23,8 @@
         <span class="block text-sm text-gray-500 mt-0.5">{{ n.body }}</span>
         {% endif %}
         <span class="block text-xs text-gray-400 mt-1">
-          {{ n.created_at.strftime("%d.%m.%Y, %H:%M") }}
-          · gelesen am {{ n.read_at.strftime("%d.%m.%Y, %H:%M") }}
+          <span data-ts="{{ utc_iso(n.created_at) }}"></span>
+          {% if n.read_at %}· gelesen am <span data-ts="{{ utc_iso(n.read_at) }}"></span>{% endif %}
         </span>
       </span>
       <span class="text-gray-300 mt-0.5">→</span>

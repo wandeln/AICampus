@@ -33,6 +33,7 @@ from services.auth_service import get_current_user, require_course_access
 from services import version_service
 from services.media_service import sync_media_usages
 from services.slides_service import SlideError, parse_slides, slide_count, strip_slide_notes
+from services.timeutil import utc_iso
 
 router = APIRouter(prefix="/api", tags=["Skript & Slides"])
 
@@ -78,7 +79,7 @@ def _material_to_dict(m: CourseMaterial, include_content: bool = False) -> dict:
         "material_type": m.material_type.value,
         "is_visible": m.is_visible,
         "display_order": m.display_order,
-        "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+        "updated_at": utc_iso(m.updated_at),
     }
     if m.material_type == MaterialType.SLIDES:
         d["slide_count"] = slide_count(m.content)

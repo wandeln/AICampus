@@ -38,6 +38,7 @@ from services.compute_client import (
 )
 from services.grading_service import GradingService
 from services.import_service import spawn_job
+from services.timeutil import deadline_iso, parse_deadline, utc_iso
 from services.mc_service import McValidationError, grade_mc, mc_report_summary, parse_mc_data
 from services.llm_service import LLMService
 from services.media_service import all_media_for_course
@@ -110,7 +111,7 @@ async def get_task_detail(
         "description": task.description,
         "max_points": task.max_points,
         "max_attempts": task.max_attempts,
-        "deadline": task.deadline,
+        "deadline": deadline_iso(task.deadline),
         "text_template": task.text_template if task.task_type.value == "text" else None,
         "hints_enabled": task.hints_enabled,
     }
@@ -153,15 +154,10 @@ async def submit_solution(
 
     body = await request.json()
 
-    # Deadline check
-    if task.deadline:
-        dl_str = task.deadline.replace("Z", "+00:00")
-        deadline = datetime.fromisoformat(dl_str)
-        # Ensure both datetimes are timezone-aware
-        if deadline.tzinfo is None:
-            deadline = deadline.replace(tzinfo=timezone.utc)
-        if datetime.now(timezone.utc) > deadline:
-            raise HTTPException(400, "Deadline ist verstrichen.")
+    # Deadline check (UTC-Moment; naive DB-Werte = Campus-Zone, s. timeutil)
+    deadline = parse_deadline(task.deadline)
+    if deadline is not None and datetime.now(timezone.utc) > deadline:
+        raise HTTPException(400, "Deadline ist verstrichen.")
 
     # Max attempts check
     existing_subs = session.exec(
@@ -549,7 +545,7 @@ def _build_graded_result(submission: Submission, task: Task, user: User,
         "submission_id": submission.id,
         "attempt_number": submission.attempt_number,
         "total_attempts": total_attempts,
-        "submitted_at": submission.submitted_at.isoformat() if submission.submitted_at else "",
+        "submitted_at": utc_iso(submission.submitted_at) or "",
         "points": points,
         "latest_points": latest_points,
         "max_points": task.max_points,
@@ -896,7 +892,7 @@ async def get_my_points(
             "max_points": task.max_points,
             "max_attempts": task.max_attempts,
             "attempts_used": len(subs),
-            "deadline": task.deadline,
+            "deadline": deadline_iso(task.deadline),
             "my_points": my_points,
             "has_feedback": has_feedback,
         })
@@ -1206,8 +1202,8 @@ async def request_hint(
         "question": hint_exchange.question,
         "llm_response": hint_text,
         "suggestion_type": llm_data.get("suggestion_type", "hint"),
-        "created_at": hint_exchange.created_at.isoformat(),
-        "response_at": hint_exchange.response_at.isoformat() if hint_exchange.response_at else None,
+        "created_at": utc_iso(hint_exchange.created_at),
+        "response_at": utc_iso(hint_exchange.response_at),
         "latency_ms": result.get("latency_ms", 0),
     }
 
@@ -1245,8 +1241,8 @@ async def get_hints(
             "question": h.question,
             "llm_response": h.llm_response,
             "current_solution": h.current_solution,
-            "created_at": h.created_at.isoformat(),
-            "response_at": h.response_at.isoformat() if h.response_at else None,
+            "created_at": utc_iso(h.created_at),
+            "response_at": utc_iso(h.response_at),
         }
         for h in hints
     ]

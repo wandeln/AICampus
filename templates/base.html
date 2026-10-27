@@ -643,6 +643,29 @@
        mitkommt. s. docs/LLM-plans/mcp-client-context.md -->
   <script src="{{ asset('js/mcp-context.js') }}"></script>
 
+  <!-- Lokale Zeit-Labels: Der Server rendert Zeitstempel als UTC-ISO (…Z),
+       dieses Script füllt [data-ts]-Elemente mit der lokalen Zeit des
+       Browsers. data-ts-format: "datetime" (Default) | "date" (YYYY-MM-DD) -->
+  <script>
+    (function () {
+      const p = n => String(n).padStart(2, "0");
+      function fill(el) {
+        const iso = el.dataset.ts;
+        if (!iso) return;
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) { el.textContent = iso; return; }
+        if (el.dataset.tsFormat === "date") {
+          el.textContent = d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+        } else {
+          el.textContent = p(d.getDate()) + "." + p(d.getMonth() + 1) + "." + d.getFullYear()
+            + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+        }
+      }
+      window.aicampusFillTs = (root) => (root || document).querySelectorAll("[data-ts]").forEach(fill);
+      window.aicampusFillTs();
+    })();
+  </script>
+
   <!-- LLM-Boxen: Strg+Enter (Mac: Cmd+Enter) startet die Generierung,
        solange der Fokus in einer LLM-Box liegt (z. B. im Thema-Textarea).
        Die Box trägt data-llm-box, der Start-Button data-llm-generate-btn. -->

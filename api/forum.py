@@ -46,6 +46,7 @@ from database.models import (
 )
 from services import notifications
 from services.auth_service import require_course_access
+from services.timeutil import campus_date, utc_iso
 
 router = APIRouter(prefix="/api", tags=["Forum"])
 
@@ -103,8 +104,8 @@ def _channel_dict(
         "name": ch.name,
         "description": ch.description,
         "can_manage": can_manage,
-        "last_message_at": last_message_at.isoformat() if last_message_at else None,
-        "last_message_label": last_message_at.strftime("%d.%m.%y") if last_message_at else "",
+        "last_message_at": utc_iso(last_message_at),
+        "last_message_label": campus_date(last_message_at),  # Datum in Campus-Zone
         "unread_count": unread_count,
     }
 
@@ -120,7 +121,7 @@ def _message_dict(
         "id": msg.id,
         "channel_id": msg.channel_id,
         "content": msg.content,
-        "created_at": msg.created_at.isoformat(),
+        "created_at": utc_iso(msg.created_at),
         "user_id": msg.user_id,
         "username": sender.username if sender else "unknown",
         "name": sender.name if sender else "unknown",

@@ -57,7 +57,7 @@ from database.models import (
     Submission,
 )
 from services.auth_service import get_current_user, hash_password, require_course_access
-from services import analytics, media_service, import_service, preview_proxy
+from services import analytics, media_service, import_service, preview_proxy, timeutil
 from services.mc_service import (
     McValidationError,
     parse_mc_data,
@@ -269,6 +269,11 @@ def _asset(path: str) -> str:
 
 
 templates.env.globals["asset"] = _asset
+
+# Zeit-Helper für Templates: [data-ts] wird client-seitig in die lokale
+# Zeit umgerechnet (s. base.html); Deadlines werden normalisiert (…Z).
+templates.env.globals["utc_iso"] = timeutil.utc_iso
+templates.env.globals["deadline_iso"] = timeutil.deadline_iso
 
 # Web Push (M3): Status + öffentlicher VAPID-Key für das Frontend
 # („Push aktivieren“-Button im Glocken-Menü + SW-Registration).
@@ -1262,7 +1267,7 @@ def _render_script_page(session, user, request, course_id):
             "title": s.title,
             "is_visible": s.is_visible,
             "display_order": s.display_order,
-            "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+            "updated_at": timeutil.utc_iso(s.updated_at),
         }
         for s in sections
     ]
@@ -1391,7 +1396,10 @@ async def slides_page(
             "title": d.title,
             "is_visible": d.is_visible,
             "slide_count": slide_count(d.content),
-            "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+            # ISO-UTC (…Z): Template gibt es per [data-ts] aus, JS rechnet
+            # client-seitig in lokale Zeit um. (Datetime hier wäre für das
+            # `decks | tojson` im extra_Scripts-Block nicht serialisierbar.)
+            "updated_at": timeutil.utc_iso(d.updated_at),
         }
         for d in decks
     ]
@@ -2441,7 +2449,7 @@ async def submission_review_page(
         {
             "question": h.question,
             "llm_response": h.llm_response,
-            "created_at": h.created_at.isoformat(),
+            "created_at": timeutil.utc_iso(h.created_at),
         }
         for h in hints
     ]

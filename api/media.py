@@ -32,6 +32,7 @@ from services import notifications
 from services import version_service
 from services.media_service import RefInfo
 from services.content_edits import ContentEditError, _resolve_span
+from services.timeutil import utc_iso
 
 router = APIRouter(prefix="/api", tags=["Medien"])
 llm_service = LLMService()
@@ -132,7 +133,7 @@ def _media_to_dict(
         "usages": [usage_dict(u) for u in usages],
         "ref_count": c["total"],
         "duplicate_in": c["duplicates"],
-        "created_at": m.created_at.isoformat() if m.created_at else None,
+        "created_at": utc_iso(m.created_at),
     }
 
 

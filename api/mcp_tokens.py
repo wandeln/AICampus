@@ -20,6 +20,7 @@ from database.base import get_session
 from database.models import Course, McpToken, McpTokenCourse, User, UserCourse
 from services.auth_service import get_current_user
 from services import mcp_token_service
+from services.timeutil import utc_iso
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +83,9 @@ def _token_dict(session: Session, token: McpToken) -> dict:
         "name": token.name,
         "courses": courses,
         "allow_write": token.allow_write is not False,
-        "created_at": token.created_at.isoformat() if token.created_at else None,
-        "last_used_at": token.last_used_at.isoformat() if token.last_used_at else None,
-        "expires_at": token.expires_at.isoformat() if token.expires_at else None,
+        "created_at": utc_iso(token.created_at),
+        "last_used_at": utc_iso(token.last_used_at),
+        "expires_at": utc_iso(token.expires_at),
     }
 
 

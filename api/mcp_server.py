@@ -88,6 +88,7 @@ from services.content_edits import ContentEditError, _resolve_span, apply_conten
 from services.mc_service import McValidationError, mc_total_points, parse_mc_data, student_view, tutor_view
 from services.media_service import sync_media_usages
 from services.slides_service import SlideError, apply_slide_edits, parse_slides
+from services.timeutil import deadline_from_local, deadline_iso
 
 logger = logging.getLogger(__name__)
 
@@ -823,7 +824,7 @@ async def read_task(course_id: int, ref: Union[int, str], ctx: Context) -> str:
             "title": task.title,
             "type": task.task_type.value,
             "max_points": task.max_points,
-            "deadline": task.deadline,
+            "deadline": deadline_iso(task.deadline),
             "description": task.description,
         }
         if task.text_template:
@@ -2261,11 +2262,22 @@ def _validate_deadline(deadline: Optional[str]) -> None:
     if not deadline:
         return
     try:
-        datetime.fromisoformat(deadline)
+        datetime.fromisoformat(deadline.replace("Z", "+00:00"))
     except ValueError:
         raise McpToolError(
             f"deadline ist kein gültiges ISO-Datum ('2025-02-15T23:59'): {deadline!r}"
         )
+
+
+def _normalize_deadline_mcp(deadline: Optional[str]) -> Optional[str]:
+    """Deadline → ISO-UTC (Z). Ohne Zonen-Marker gilt die Campus-Zone
+    (Europe/Berlin) — der Agent liefert lokale Wall-Clock-Zeiten."""
+    if not deadline:
+        return None
+    try:
+        return deadline_from_local(deadline)
+    except (ValueError, KeyError):
+        raise McpToolError(f"deadline ist nicht interpretierbar: {deadline!r}")
 
 
 def _mc_data_from_questions(existing: Optional[str], questions: list[dict]) -> dict:
@@ -2331,7 +2343,8 @@ async def create_task(
     richtige Option; multi_select=true → mind. 1 richtig UND mind. 1
     falsch; insgesamt mind. 1 Punkt.
     max_attempts: max. Versuchszahl (optional, weggelassen =
-    unlimitiert). deadline: "2025-02-15T23:59" (optional).
+    unlimitiert). deadline: "2025-02-15T23:59" (optional; ohne Zeitzone
+    = Campus-Zone Europe/Berlin, wird intern in UTC gespeichert).
     is_visible: für Studenten sichtbar (Default: False = Entwurf — erst bei
     fertiger Aufgabe auf True setzen). version_label: optionales kurzes
     Label für die Initial-Version (Default „Erstellt")."""
@@ -2374,7 +2387,7 @@ async def create_task(
             model_solution=(model_solution or "").strip() or None,
             max_points=mc_total_points(mc_data) if mc_data else max_points,
             max_attempts=max_attempts,
-            deadline=deadline,
+            deadline=_normalize_deadline_mcp(deadline),
             text_template=((text_template or "").strip() or None) if type == "text" else None,
             is_visible=bool(is_visible),
             display_order=(max_order or 0) + 1,
@@ -2432,7 +2445,7 @@ async def edit_task(
     - max_points: nur für Text-Aufgaben; bei MC-Aufgaben wird sie aus der
       Fragen-Punkte-Summe abgeleitet (→ mc_questions angeben)
     - max_attempts / hints_enabled / is_visible: neuer Wert
-    - deadline: neues ISO-Datum ("" = entfernen)
+    - deadline: neues ISO-Datum ("" = entfernen; ohne Zeitzone = Campus-Zone Europe/Berlin)
     - text_template: nur für Text-Aufgaben ("" = entfernen)
     - mc_questions: nur für MC-Aufgaben — KOMPLETTER Ersatz der Fragen
       (Format wie bei create_task)
@@ -2491,7 +2504,7 @@ async def edit_task(
             task.max_attempts = max_attempts
             changed.append("max_attempts")
         if deadline is not None:
-            task.deadline = deadline or None
+            task.deadline = _normalize_deadline_mcp(deadline)
             changed.append("deadline")
         if hints_enabled is not None:
             task.hints_enabled = bool(hints_enabled)

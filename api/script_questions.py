@@ -51,6 +51,7 @@ from services import notifications
 from services.auth_service import get_current_user, require_course_access
 from services.llm_service import LLMService
 from services.settings_resolver import get_effective_llm_config
+from services.timeutil import utc_iso
 from api.script import _check_member
 
 router = APIRouter(prefix="/api", tags=["Skript-Fragen"])
@@ -456,7 +457,7 @@ def load_questions_payload(
                     "id": r.id,
                     "source": r.source,
                     "content": r.content,
-                    "created_at": r.created_at.isoformat(),
+                    "created_at": utc_iso(r.created_at),
                     "name": r_name,
                     "role": r_role,
                     "avatar": r_avatar,
@@ -473,8 +474,8 @@ def load_questions_payload(
                 "quote_off": q.quote_off,
                 "question": q.question,
                 "status": q.status,
-                "created_at": q.created_at.isoformat(),
-                "updated_at": q.updated_at.isoformat() if q.updated_at else None,
+                "created_at": utc_iso(q.created_at),
+                "updated_at": utc_iso(q.updated_at),
                 "is_mine": is_mine,
                 "student": student_info,
                 "can_delete": is_mine or staff,
@@ -622,7 +623,7 @@ async def add_script_question_response(
         "id": r.id,
         "source": r.source,
         "content": content,
-        "created_at": r.created_at.isoformat(),
+        "created_at": utc_iso(r.created_at),
         "name": user.name,
         "role": _role_in_course(session, user, q.course_id) or "STUDENT",
         "avatar": _avatar_url(user),

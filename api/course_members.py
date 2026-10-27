@@ -22,6 +22,7 @@ from database.models import (
     UserCourse,
 )
 from services.auth_service import get_current_user
+from services.timeutil import utc_iso
 
 router = APIRouter(prefix="/api", tags=["Kurs-Mitglieder (PROF/Admin)"])
 
@@ -428,10 +429,10 @@ async def create_invite(
         "invite": {
             "id": invite.id,
             "token": invite.token,
-            "expires_at": invite.expires_at.isoformat() if invite.expires_at else None,
+            "expires_at": utc_iso(invite.expires_at),
             "max_uses": invite.max_uses,
             "used_count": invite.used_count,
-            "created_at": invite.created_at.isoformat(),
+            "created_at": utc_iso(invite.created_at),
         },
     }
 
@@ -453,10 +454,10 @@ async def list_invites(
         {
             "id": inv.id,
             "token": inv.token,
-            "expires_at": inv.expires_at.isoformat() if inv.expires_at else None,
+            "expires_at": utc_iso(inv.expires_at),
             "max_uses": inv.max_uses,
             "used_count": inv.used_count,
-            "created_at": inv.created_at.isoformat(),
+            "created_at": utc_iso(inv.created_at),
             "is_expired": inv.expires_at is not None and inv.expires_at < datetime.now(),
             "is_used_up": inv.max_uses is not None and inv.used_count >= inv.max_uses,
         }

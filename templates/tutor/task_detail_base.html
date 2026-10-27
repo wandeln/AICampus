@@ -205,7 +205,7 @@
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
-          <input type="datetime-local" name="deadline" value="{{ task.deadline[:16] if task and task.deadline else '' }}"
+          <input type="datetime-local" name="deadline" value="{{ task.deadline or '' }}"
                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
         </div>
       </div>
@@ -306,6 +306,19 @@
     if (taskTitleHeading) taskTitleHeading.textContent = shown ? shown + " — Bearbeiten" : "Neue Aufgabe erstellen";
     document.title = shown ? "AICampus - " + shown : originalTab;
   });
+  // Deadline-Input: Der Server liefert UTC (…Z), <input datetime-local>
+  // braucht wall-clock in der Client-Zone. Naive Werte (Auto-Save-Payload)
+  // interpretiert JS als Lokalzeit — die Umrechnung ist dann ein No-Op.
+  function toLocalInput(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d)) return "";
+    const p2 = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  }
+  // Initialer Jinja-Wert ist rohes UTC-ISO → beim Laden in Client-Zone umrechnen.
+  const deadlineInput = document.querySelector('input[name="deadline"]');
+  if (deadlineInput) deadlineInput.value = toLocalInput(deadlineInput.value);
   // Direktanlage auf der „Neue Aufgabe"-Seite: nach dem ersten Auto-Save
   // (createEntity) die Seite OHNE Reload umstellen — URL, task_id-Input
   // (LLM-Box & hasTaskId-Checks kennen ihn), Student-View-Link, Heading.
@@ -784,7 +797,11 @@
 
     const deadlineRaw = formData.get("deadline");
     if (deadlineRaw !== null && deadlineRaw !== "") {
-      body.deadline = deadlineRaw;
+      body.deadline = deadlineRaw;  // lokaler Wall-Clock-Wert (Browser-Zeit)
+      // Zonen-Info für den Server: IANA-Zone des Browsers (statt nur
+      // Offset: korrekt auch bei DST-Wechsel zwischen Anlege- und
+      // Deadline-Datum).
+      try { body.deadline_tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
     } else {
       body.deadline = null;
     }
@@ -856,7 +873,7 @@
     const ma = form.querySelector('input[name="max_attempts"]');
     if (ma) ma.value = p.max_attempts != null ? p.max_attempts : "";
     const dl = form.querySelector('input[name="deadline"]');
-    if (dl) dl.value = p.deadline || "";
+    if (dl) dl.value = toLocalInput(p.deadline);
     const hints = form.querySelector('[name="hints_enabled"]');
     if (hints) hints.checked = p.hints_enabled != null ? !!p.hints_enabled : true;
     setVisibilityToggle(!!p.is_visible);

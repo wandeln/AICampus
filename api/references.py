@@ -19,6 +19,7 @@ from services import bibtex as bib
 from services import notifications
 from services import version_service
 from services.auth_service import require_course_access
+from services.timeutil import utc_iso
 
 router = APIRouter(prefix="/api", tags=["Quellen"])
 
@@ -93,7 +94,7 @@ def _ref_to_dict(r: CourseReference) -> dict:
             r.authors or [], r.title or "", r.year or "",
             r.venue or "", r.detail or "", r.doi or "", r.url or "",
         ),
-        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "created_at": utc_iso(r.created_at),
     }
 
 

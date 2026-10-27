@@ -123,6 +123,13 @@ def push_enabled() -> bool:
     return bool(VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY and PUSH_APP_URL)
 
 
+# ─── Zeit ──────────────────────────────────────────────────────
+# Campus-Zone: interpretiert Deadlines ohne Zonen-Marker. Die Web-UI
+# liefert die Browser-Zone des Anlegers mit (deadline_tz); der MCP-Pfad
+# und alte DB-Einträge liefern naive Wall-Clock-Zeiten → Campus-Zone.
+# Alle übrigen Zeitstempel laufen durchgehend in UTC (s. services/timeutil.py).
+CAMPUS_TIMEZONE = os.getenv("CAMPUS_TIMEZONE", "Europe/Berlin")
+
 # ─── Frontend ───────────────────────────────────────────────────
 CODEMIRROR_THEME = os.getenv("CODEMIRROR_THEME", "dracula")
 CODEMIRROR_VERSION = "5.65.16"

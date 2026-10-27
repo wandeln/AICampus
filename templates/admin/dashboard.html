@@ -1944,7 +1944,7 @@
     }
     const rows = recent.map(v => {
       const when = v.created_at
-        ? new Date(v.created_at.slice(0, 19).replace(' ', 'T')).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+        ? new Date(v.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
         : '';
       const who = (v.username !== undefined && v.username !== null)
         ? `<span class="font-medium">${escHtml(v.name || v.username)}</span> <span class="text-gray-400 font-mono text-xs">${escHtml(v.username)}</span>`
@@ -1978,7 +1978,7 @@
     }
     const rows = recent.map(v => {
       const when = v.created_at
-        ? new Date(v.created_at.slice(0, 19).replace(' ', 'T')).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+        ? new Date(v.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
         : '';
       const who = (v.username !== undefined && v.username !== null)
         ? `<span class="font-medium">${escHtml(v.name || v.username)}</span> <span class="text-gray-400 font-mono text-xs">${escHtml(v.username)}</span>`

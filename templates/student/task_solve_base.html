@@ -74,7 +74,7 @@
       </span>
       {% if task.deadline %}
       <span class="badge px-2 py-0.5 rounded bg-orange-100 text-orange-700">
-        ⏰ Deadline: {{ task.deadline[:10] }}
+        ⏰ Deadline: <span data-ts="{{ deadline_iso(task.deadline) }}"></span>
       </span>
       {% endif %}
     </div>
@@ -218,7 +218,7 @@
                 {% if sub.solve_time_seconds and sub.solve_time_seconds > 0 %}
                 <span class="text-sm font-mono text-blue-600 tabular-nums">🕐 {{ (sub.solve_time_seconds // 60) | int }}:{{ '%02d' | format(sub.solve_time_seconds | int % 60) }}</span>
                 {% endif %}
-                <span class="text-sm text-gray-500">{{ sub.submitted_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                <span class="text-sm text-gray-500" data-ts="{{ utc_iso(sub.submitted_at) }}"></span>
               </div>
             </div>
 
@@ -305,7 +305,7 @@
                         {{ fb.points_earned }} / {{ task.max_points }} Punkte
                       </span>
                     </div>
-                    <span class="text-xs text-gray-400">{{ fb.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                    <span class="text-xs text-gray-400" data-ts="{{ utc_iso(fb.created_at) }}"></span>
                   </div>
                   <template class="markdown-feedback" type="application/json">{{ (fb.comment or '') | tojson }}</template>
                 </div>

@@ -37,6 +37,18 @@ from sqlmodel import Session, text
 from database.base import engine
 from database.models import McpEvent, PageView
 from services.auth_service import decode_access_token
+from services.timeutil import utc_iso
+
+
+def _ts_iso(ts: Any) -> str:
+    """Roher SQL-Zeitstempel → ISO-UTC (Z).
+
+    Je nach DB kommt created_at als datetime ODER String zurück;
+    ohne Zonen-Marker = UTC (unser DB-Format).
+    """
+    if hasattr(ts, "isoformat"):
+        return utc_iso(ts)
+    return utc_iso(datetime.fromisoformat(str(ts).replace("Z", "+00:00")))
 
 logger = logging.getLogger(__name__)
 
@@ -398,10 +410,8 @@ def mcp_recent(limit: int = 100) -> list[dict[str, Any]]:
         rows = session.execute(text(sql), {"limit": limit}).all()
     out = []
     for r in rows:
-        ts = r[0]
-        # Rohe SQL-Query: created_at kommt je DB als datetime ODER String zurück.
         out.append({
-            "created_at": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+            "created_at": _ts_iso(r[0]),
             "username": r[1],
             "name": r[2],
             "client": r[3],
@@ -431,10 +441,8 @@ def recent_views(limit: int = 100, user_id: Optional[int] = None) -> list[dict[s
         rows = session.execute(text(sql), params).all()
     out = []
     for r in rows:
-        ts = r[0]
-        # Rohe SQL-Query: created_at kommt je DB als datetime ODER String zurück.
         out.append({
-            "created_at": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+            "created_at": _ts_iso(r[0]),
             "user_id": r[1],
             "username": r[2],
             "name": r[3],

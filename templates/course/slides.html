@@ -72,7 +72,7 @@
       </div>
       <div class="flex items-center gap-2 mt-1 text-xs text-gray-400">
         <span>📄 {{ d.slide_count }} Folien</span>
-        {% if d.updated_at %}<span>· {{ d.updated_at[:10] }}</span>{% endif %}
+        {% if d.updated_at %}<span>· <span data-ts="{{ d.updated_at }}" data-ts-format="date"></span></span>{% endif %}
       </div>
       <div class="flex items-center gap-1.5 mt-3">
         {% if is_tutor or is_admin %}

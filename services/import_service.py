@@ -91,6 +91,7 @@ from services.llm_service import LLMService, SLIDES_MAX_TOKENS
 from services.mc_service import McValidationError, mc_total_points, validate_mc_data
 from services.references_service import build_references_text
 from services.settings_resolver import get_effective_llm_config
+from services.timeutil import utc_iso
 from services.slides_service import (
     SlideError,
     parse_slides,
@@ -5843,7 +5844,7 @@ def serialize_import(imp: CourseImport) -> dict:
         "course_id": imp.course_id,
         "job_id": imp.job_id,
         "zip_name": imp.zip_name,
-        "created_at": imp.created_at.isoformat() if imp.created_at else None,
+        "created_at": utc_iso(imp.created_at),
         "filemap_status": imp.filemap_status,
         "media_status": imp.media_status,
         "references_status": imp.references_status,

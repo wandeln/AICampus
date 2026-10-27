@@ -42,6 +42,7 @@ from services import media_service
 from services.media_service import sync_media_usages
 from services.references_service import build_references_text
 from services.settings_resolver import get_effective_llm_config
+from services.timeutil import utc_iso
 
 router = APIRouter(prefix="/api", tags=["Skript"])
 llm_service = LLMService()
@@ -401,7 +402,7 @@ def _section_to_dict(s: ScriptSection, include_content: bool = False, include_su
         "title": s.title,
         "is_visible": s.is_visible,
         "display_order": s.display_order,
-        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+        "updated_at": utc_iso(s.updated_at),
     }
     if include_content:
         d["content"] = s.content

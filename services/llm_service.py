@@ -26,6 +26,7 @@ from config import LLM_API_URL, LLM_API_KEY, LLM_MODEL, LLM_TEMPERATURE, LLM_TIM
 from database.base import engine
 from database.models import LLMDebugEntry, User
 from services.auth_service import get_current_user_id
+from services.timeutil import utc_iso
 from services.workspace_presets import IMAGE_SELECTION_FIELDS
 from prompts.grading_prompt import (
     GRADING_TEXT_PROMPT_TEMPLATE,
@@ -283,7 +284,7 @@ def get_llm_debug_log(offset: int = 0, limit: int = 20, user_id: Optional[int] =
             "entries": [
                 {
                     "id": row.id,
-                    "ts": row.ts.isoformat(),
+                    "ts": utc_iso(row.ts),
                     "label": row.label,
                     "user_id": row.user_id,
                     "user": user_names.get(row.user_id),
@@ -317,7 +318,7 @@ def get_llm_debug_entry(entry_id: int) -> Optional[dict]:
                 user_name = (u.name or u.username) if u else None
             return {
                 "id": row.id,
-                "ts": row.ts.isoformat(),
+                "ts": utc_iso(row.ts),
                 "label": row.label,
                 "user_id": row.user_id,
                 "user": user_name,

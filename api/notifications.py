@@ -26,6 +26,7 @@ from database.base import get_session
 from database.models import Notification, User
 from services import notifications
 from services.auth_service import get_current_user
+from services.timeutil import utc_iso
 
 router = APIRouter(prefix="/api/notifications", tags=["Benachrichtigungen"])
 
@@ -38,7 +39,7 @@ def _item_dict(n: Notification) -> dict:
         "body": n.body,
         "link": n.link,
         "course_id": n.course_id,
-        "created_at": n.created_at.isoformat(),
+        "created_at": utc_iso(n.created_at),
     }
 
 

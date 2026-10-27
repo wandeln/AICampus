@@ -59,6 +59,7 @@ from services.mc_service import (
 )
 from services.media_service import sync_media_usages
 from services.slides_service import SlideError, parse_slides
+from services.timeutil import utc_iso
 from services.workspace_service import (
     apply_workspace_env_fields,
     check_image_spec,
@@ -324,8 +325,8 @@ def _version_to_dict(v: ContentVersion, include_snapshot: bool = False) -> dict:
     d = {
         "id": v.id,
         "name": v.name,
-        "created_at": v.created_at.isoformat() if v.created_at else None,
-        "updated_at": v.updated_at.isoformat() if v.updated_at else None,
+        "created_at": utc_iso(v.created_at),
+        "updated_at": utc_iso(v.updated_at),
     }
     if include_snapshot:
         d["snapshot"] = v.snapshot

@@ -22,6 +22,7 @@ from sqlmodel import Session, select
 from config import PUSH_APP_URL, VAPID_PRIVATE_KEY, push_enabled
 from database.base import engine
 from database.models import Course, Notification, PushSubscription, User, UserCourse
+from services.timeutil import utc_iso
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ def _payload(n: Notification) -> dict[str, Any]:
         "link": n.link,
         "course_id": n.course_id,
         "read": n.read_at is not None,
-        "created_at": n.created_at.isoformat(),
+        "created_at": utc_iso(n.created_at),
     }
 
 
