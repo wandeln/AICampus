@@ -97,7 +97,8 @@
     if (mcState.questions.length) {
       mcState.questions.forEach((q, qi) => {
         const lbl = "Frage " + (qi + 1) + ":";
-        if (!String(q.question || "").trim()) errs.push(lbl + " Fragetext fehlt");
+        // Fragetext/Options-Texte dürfen leer bleiben (Zwischenstand) —
+        // wird wie die Feedback-Felder nicht mehr clientseitig geprüft.
         if (!(parseInt(q.points, 10) >= 0)) errs.push(lbl + " Punkte ≥ 0 nötig");
         if (q.options.length < 2) errs.push(lbl + " mind. 2 Optionen");
         const nc = q.options.filter((o) => o.correct).length;
@@ -107,9 +108,6 @@
         } else if (nc !== 1) {
           errs.push(lbl + " genau 1 richtige Antwort nötig");
         }
-        q.options.forEach((o, oi) => {
-          if (!String(o.text || "").trim()) errs.push(lbl + " Option " + (oi + 1) + ": Text fehlt");
-        });
       });
     }
     return errs;

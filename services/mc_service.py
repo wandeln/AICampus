@@ -105,9 +105,9 @@ def validate_mc_data(data: dict) -> None:
         if not isinstance(q, dict):
             raise McValidationError(f"{label}: ungültige Struktur.")
 
-        text = (q.get("question") or "").strip()
-        if not text:
-            raise McValidationError(f"{label}: Fragetext darf nicht leer sein.")
+        # Fragetext ist optional — Zwischenstände dürfen leer bleiben
+        # (wie die Feedback-Felder nur stripped und gespeichert).
+        q["question"] = (q.get("question") or "").strip()
 
         try:
             points = int(q.get("points", 0))
@@ -131,10 +131,8 @@ def validate_mc_data(data: dict) -> None:
             olabel = f"{label}, Option {oi + 1}"
             if not isinstance(opt, dict):
                 raise McValidationError(f"{olabel}: ungültige Struktur.")
-            otext = (opt.get("text") or "").strip()
-            if not otext:
-                raise McValidationError(f"{olabel}: Antworttext darf nicht leer sein.")
-            opt["text"] = otext
+            # Antworttext ist optional — Zwischenstände dürfen leer bleiben.
+            opt["text"] = (opt.get("text") or "").strip()
             # Feedback ist optional — bei leerem Feld zeigt die Anzeige
             # das System-Default („Richtig“/„Falsch“). feedback_wrong
             # wird bei Mehrfachauswahl-Fragen für falsch beantwortete
