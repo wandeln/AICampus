@@ -206,7 +206,11 @@
     // synchron (außer Mermaid-Blöcke). Nur bei Renderer-Fehler Rohtext —
     // besser als eine leere Nachricht.
     const md = el.querySelector('.forum-content');
-    renderMarkdown(m.content, md, { breaks: true }).catch((e) => {
+    // Rendering-Promise speichern (rejectet nie): der Scroll-Anker von
+    // appendForumMessages muss erst darauf warten, sonst wird in die noch
+    // leere/kurze Nachricht gescrolled und landet nach dem "Aufblähen"
+    // mitten im Verlauf.
+    el._renderDone = renderMarkdown(m.content, md, { breaks: true }).catch((e) => {
       console.warn('Forum: Markdown-Rendering fehlgeschlagen', e);
       md.textContent = m.content;
     });
@@ -263,11 +267,33 @@
     const nearBottom = forumIsNearBottom();
     const empty = document.getElementById('forum-empty');
     if (empty) empty.remove();
+    const els = [];
     for (const m of msgs) {
       renderedMessageIds.add(m.id);
-      forumList.appendChild(forumMessageEl(m));
+      const el = forumMessageEl(m);
+      forumList.appendChild(el);
+      els.push(el);
     }
-    if (nearBottom || forceScroll) forumList.scrollTop = forumList.scrollHeight;
+    // Erst NACH dem (async) Markdown-Rendering scrollen — vorher ist die
+    // Liste noch kürzer und der Endpunkt läge später mitten im Verlauf.
+    Promise.all(els.map((el) => el._renderDone)).then(() => {
+      if (nearBottom || forceScroll) forumList.scrollTop = forumList.scrollHeight;
+      // Bilder/Videos haben erst beim (asynchronen) Laden ihre endgültige
+      // Höhe → der untere Rand rückt nach. Solange der Nutzer unten ist
+      // (forceScroll = Initial-Load/eigene Nachricht: immer), neu pinnen.
+      const stickToBottom = () => {
+        if (forceScroll || forumIsNearBottom()) forumList.scrollTop = forumList.scrollHeight;
+      };
+      els.forEach((el) => {
+        el.querySelectorAll('img').forEach((img) => {
+          if (img.complete) return;
+          img.addEventListener('load', stickToBottom, { once: true });
+        });
+        el.querySelectorAll('video').forEach((v) => {
+          v.addEventListener('loadedmetadata', stickToBottom, { once: true });
+        });
+      });
+    });
     lastMessageId = Math.max(lastMessageId, msgs[msgs.length - 1].id);
     if (countAsUnread && chatVisible()) {
       // Initial-Load: Server-Zähler abziehen (lastMessageId markiert alles bis
@@ -479,9 +505,10 @@
     if (initialMessages.length) {
       document.getElementById('forum-empty').innerHTML = '<p>Nachrichten werden geladen…</p>';
     }
+    // forceScroll: nach Kanal-Klick immer direkt ans Ende des Verlaufs
+    // (der Scroll läuft erst nach dem Rendering, s. appendForumMessages).
     Promise.all([getCourseRefMap(), getCourseSlidesRefMap()]).then(() => {
-      appendForumMessages(initialMessages, false);
-      forumList.scrollTop = forumList.scrollHeight;
+      appendForumMessages(initialMessages, true);
     });
     // Sichtbarer Chat → aktiver Kanal wird als gelesen markiert (Badge weg);
     // unsichtbar (mobil, nur Kanal-Liste) → Badge und Ungelesen bleiben stehen.
