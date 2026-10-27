@@ -86,9 +86,11 @@
     mcTotalEl.textContent = total + " P gesamt";
     // Max.-Punkte-Feld mitziehen (Server überschreibt es ohnehin mit der Summe)
     const mp = document.querySelector('input[name="max_points"]');
-    // Nur bei total > 0 mitziehen — sonst würde bei neuen Aufgaben der
-    // Standard-Wert (10 P) sofort durch 0 überschrieben.
-    if (mp && total > 0 && parseInt(mp.value, 10) !== total) mp.value = total;
+    // Mitziehen, solange Fragen vorhanden sind (Summe inkl. 0).
+    // Ohne Fragen (neue Aufgabe) bleibt das Feld unangetastet — sonst
+    // würde der Standard-Wert (10 P) sofort durch 0 überschrieben.
+    if (mp && mcState.questions.length > 0
+        && parseInt(mp.value, 10) !== total) mp.value = total;
   }
 
   // Clientseitige Prüfung — nur anzeige, der Server validiert beim Speichern.
