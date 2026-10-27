@@ -19,7 +19,8 @@ AUFGABENTYP: Multiple-Choice-Aufgabe (mehrere Fragen, Single- oder Multiple-Sele
 THEMA: {{ topic }}
 SCHWIERIGKEIT: {{ difficulty }}
 PUNKTEBUDGET: Verteile die Punkte so über die Fragen, dass insgesamt
-ca. {{ max_points }} Punkte zusammenkommen (ganze Zahlen je Frage).
+ca. {{ max_points }} Punkte zusammenkommen (ganze Zahlen je Frage). Falls schon Fragen
+existieren (siehe unten) und der User weitere Fragen wünscht dürfen auch mehr Punkte zusammenkommen.
 
 ZULÄSSIGE FELDER — die Liste bestimmt, WELCHE Felder du in deiner Antwort
 bearbeiten darfst (nicht: welche du zwingend bearbeiten MUSST):
