@@ -127,7 +127,7 @@
             </div>
             <div class="w-full bg-gray-200 rounded-full h-2.5">
               <div id="points-bar" class="{% if latest_points >= max_points * 0.8 %}bg-green-500{% elif latest_points >= max_points * 0.5 %}bg-yellow-500{% else %}bg-red-500{% endif %} h-2.5 rounded-full transition-all"
-                   style="width: {{ (latest_points / max_points * 100) if latest_points else 0 }}%; max-width:100%"></div>
+                   style="width: {{ (latest_points / max_points * 100) if latest_points and max_points else 0 }}%; max-width:100%"></div>
             </div>
           </div>
 
