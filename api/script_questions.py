@@ -17,6 +17,8 @@ können. Der Status ist von Tutoren/PROFs auf „addressed“ umschaltbar.
 
 Sichtbarkeit: Fragesteller und Antwortende werden immer mit Klarnamen, Rolle
 und Avatar angezeigt (siehe load_questions_payload).
+Fragen zu versteckten Kapiteln können nur Tutoren/PROFs stellen; sie werden
+Studierenden nicht angezeigt (siehe load_questions_payload).
 
 Endpoints:
 - GET    /courses/{course_id}/script-questions
@@ -370,6 +372,12 @@ def load_questions_payload(
 
     Fragesteller und Antwortende werden immer mit Klarnamen/Rolle/Avatar
     angezeigt. Bulk-Load gegen N+1.
+
+    Sichtbarkeit nach Kapitel: Fragen zu (noch) versteckten Kapiteln werden
+    nur Staff (Tutor/PROF/Admin) angezeigt — für Studierende unsichtbar.
+    Allgemeine Fragen (section_id=None) und Fragen zu freigeschalteten
+    Kapiteln bleiben für alle sichtbar. Verwaiste Kapitel-Refs (Kapitel
+    gelöscht) zählen als allgemeine Fragen → sichtbar.
     """
     questions = session.exec(
         select(ScriptQuestion)
@@ -410,8 +418,8 @@ def load_questions_payload(
         ).all()
     }
     section_ids = {q.section_id for q in questions if q.section_id is not None}
-    section_titles: dict[int, str] = {
-        s.id: s.title
+    sections: dict[int, ScriptSection] = {
+        s.id: s
         for s in session.exec(
             select(ScriptSection).where(ScriptSection.id.in_(section_ids))  # type: ignore[attr-defined]
         ).all()
@@ -421,6 +429,10 @@ def load_questions_payload(
     payload: list[dict[str, Any]] = []
     for q in questions:
         if q.id is None:
+            continue
+        # Fragen zu versteckten Kapiteln: nur für Staff sichtbar
+        sec = sections.get(q.section_id) if q.section_id is not None else None
+        if not staff and sec is not None and not sec.is_visible:
             continue
         is_mine = q.student_id == viewer.id
         student = users.get(q.student_id)
@@ -455,7 +467,7 @@ def load_questions_payload(
             {
                 "id": q.id,
                 "section_id": q.section_id,
-                "section_title": section_titles.get(q.section_id) if q.section_id is not None else None,
+                "section_title": sec.title if sec is not None else None,
                 "quote": q.quote,
                 "quote_ctx": q.quote_ctx,
                 "quote_off": q.quote_off,
@@ -520,7 +532,11 @@ async def create_script_question(
     section = None
     if data.section_id is not None:
         section = session.get(ScriptSection, data.section_id)
-        if not section or section.course_id != course_id or not section.is_visible:
+        if not section or section.course_id != course_id:
+            raise HTTPException(404, "Kapitel nicht gefunden.")
+        # Studierende fragen nur zu freigeschalteten Kapiteln; Tutoren/PROFs
+        # dürfen auch versteckte wählen (die Frage bleibt dann staff-only).
+        if not section.is_visible and not _is_staff(session, viewer, course_id):
             raise HTTPException(404, "Kapitel nicht gefunden oder noch nicht freigeschaltet.")
 
     q = ScriptQuestion(
@@ -561,6 +577,12 @@ async def add_script_question_response(
     if not q:
         raise HTTPException(404, "Frage nicht gefunden.")
     _check_member(user, session, q.course_id)
+    # Frage zu einem versteckten Kapitel: für Studierende unsichtbar → auch
+    # dort nicht antworten (konsistent mit load_questions_payload).
+    if q.section_id is not None and not _is_staff(session, user, q.course_id):
+        sec = session.get(ScriptSection, q.section_id)
+        if sec is not None and not sec.is_visible:
+            raise HTTPException(404, "Frage nicht gefunden.")
 
     content = data.content.strip()
     if not content:
