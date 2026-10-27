@@ -1645,7 +1645,46 @@
     sqLiveFlash(card);
   }
 
+  // Quelle angelegt/geändert/umlager gelöscht (UI, anderer Tab oder MCP):
+  // gecachte Refmap neu laden und alle sichtbaren Previews neu rendern,
+  // damit @cite: sofort auflöst (kein Reload).
+  async function sqRerenderCitations() {
+    const jobs = [];
+    document.querySelectorAll('.script-chapter-card').forEach((card) => {
+      const sectionId = parseInt(card.getAttribute('data-section-id'));
+      const edit = card._edit;
+      if (edit) {
+        // Der frische Refmap-Stand enthält die ungespeicherten Labels des
+        // Kapitels noch nicht → Dry-Run-Sync neu triggern; dessen Abschluss
+        // rendert beide Editor-Previews mit frischen Quellen UND
+        // re-merge den Draft (sonst wären die eigenen Labels wieder ❓).
+        if (edit.contentEditor) {
+          sqScheduleRefMapSync(card, mdEditorVal(edit.contentEditor, edit.contentTa));
+        }
+        return;
+      }
+      // Reading: offene Karten in-place neu rendern, geschlossene beim
+      // nächsten Aufklappen frisch laden (wie sqLiveEditSection).
+      const body = card.querySelector('.script-chapter-body');
+      const md = card.querySelector('.markdown-preview');
+      if (!md || !md.hasAttribute('data-loaded')) return;
+      if (body && !body.classList.contains('hidden') && card._lastContent != null) {
+        jobs.push(renderMarkdown(card._lastContent, md, { sectionId, bibliography: true })
+          .then(() => sqApplyMarksToSection(md, sectionId)));
+      } else {
+        md.removeAttribute('data-loaded');
+      }
+    });
+    await Promise.all(jobs);
+    sqBuildToc(); // TOC-Figuren-Captions enthalten evtl. @cite:
+  }
+
   aicampusWatchContent(courseId, async (data) => {
+    if (data.entity_type === 'reference') {
+      await refreshCourseRefMap();
+      await sqRerenderCitations();
+      return;
+    }
     if (data.entity_type !== 'script_section') return;
     const force = data.origin_type === 'applet';
     if (await sqLiveEditSection(data.entity_id, force)) return;

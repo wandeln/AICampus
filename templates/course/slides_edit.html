@@ -1093,6 +1093,14 @@
   // (Cursor-Position verloren). Ungespeicherte Änderungen nicht
   // überschreiben — nur hinweisen; der Nutzer aktualisiert bewusst.
   aicampusWatchContent(courseId, async (data) => {
+    // Quelle angelegt/geändert (UI, anderer Tab oder MCP): gecachte Refmap
+    // aktualisieren + Previews neu rendern, damit @cite: sofort auflöst.
+    if (data.entity_type === "reference") {
+      await refreshCourseRefMap();
+      renderPreview(contentGet());
+      if (summaryEditor && summaryEditor.isPreview()) summaryEditor.renderPreview();
+      return;
+    }
     if (data.entity_type !== "slide_deck" || data.entity_id !== material.id) return;
     const force = data.origin_type === "applet";  // Applet geändert, Markdown identisch
     const res = await fetch(`/api/courses/${courseId}/materials/${material.id}`, { credentials: "same-origin" });

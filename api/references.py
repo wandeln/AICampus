@@ -16,6 +16,7 @@ from sqlmodel import Session, delete, select
 from database.base import get_session
 from database.models import ContentVersion, CourseReference, CourseRole, User
 from services import bibtex as bib
+from services import notifications
 from services import version_service
 from services.auth_service import require_course_access
 
@@ -185,6 +186,9 @@ async def update_reference(
     session.add(ref)
     session.commit()
     session.refresh(ref)
+    # Live-Update: offene Skript-/Slides-Previews aktualisieren die Refmap
+    # (Zitationen lösen sonst erst nach Reload auf).
+    notifications.push_content_updated(session, course_id, "reference", ref_id)
     return _ref_to_dict(ref)
 
 
@@ -197,13 +201,16 @@ async def delete_reference(
 ):
     """Quelle löschen (existierende @cite:-Referenzen im Inhalt zeigen ❓)."""
     ref = _get_ref(session, course_id, ref_id)
+    key = ref.key
     # Versions-History der Quelle mit aufräumen
     session.exec(delete(ContentVersion)
                  .where(ContentVersion.entity_type == "reference")
                  .where(ContentVersion.entity_id == ref_id))
     session.delete(ref)
     session.commit()
-    return {"message": f"Quelle '{ref.key}' gelöscht."}
+    # Live-Update: Zitationen in offenen Previews zeigen jetzt ❓.
+    notifications.push_content_updated(session, course_id, "reference", ref_id)
+    return {"message": f"Quelle '{key}' gelöscht."}
 
 
 @router.patch("/courses/{course_id}/references/reorder")
@@ -232,6 +239,9 @@ async def reorder_references(
             ref.display_order = idx
             session.add(ref)
     session.commit()
+    # Live-Update: Nummern = Position → alle Zitationen haben sich geändert.
+    # entity_id wird vom Client ignoriert (nur Trigger).
+    notifications.push_content_updated(session, course_id, "reference", int(ref_ids[0]))
     return {"message": "Quellen-Reihenfolge aktualisiert."}
 
 
