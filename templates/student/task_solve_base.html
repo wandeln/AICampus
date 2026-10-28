@@ -136,8 +136,14 @@
                 <div id="points-progress">
                 <div class="flex justify-between mb-1">
                     <span class="text-gray-600">Punkte</span>
-                    <span id="points-text" class="font-semibold {% if latest_points >= task.max_points * 0.8 %}text-green-600{% elif latest_points >= task.max_points * 0.5 %}text-yellow-600{% else %}text-red-600{% endif %}">
-                    {{ latest_points }} / {{ task.max_points }}
+                    {# Noch nicht bearbeitet → 0 (grau); abgegeben aber noch nicht
+                       korrigiert → ? (grau); bewertet → rot/gelb/grün (0 Punkte = rot) #}
+                    <span id="points-text" class="font-semibold
+                        {% if total_attempts == 0 or not my_submissions[0].feedback_list %}text-gray-400
+                        {% elif latest_points >= task.max_points * 0.8 %}text-green-600
+                        {% elif latest_points >= task.max_points * 0.5 %}text-yellow-600
+                        {% else %}text-red-600{% endif %}">
+                    {% if total_attempts > 0 and not my_submissions[0].feedback_list %}?{% else %}{{ latest_points }}{% endif %} / {{ task.max_points }}
                     </span>
                 </div>
                 <div class="w-full bg-gray-200 rounded-full h-2.5">
@@ -907,6 +913,18 @@
         progressDiv.classList.add("hidden");
         resetSolveTimer();
         btn.disabled = false;
+
+        // Punkte-Karte: „ausstehend“-Zustand (?/N grau, Balken leer)
+        const pointsText = document.getElementById('points-text');
+        const pointsBar = document.getElementById('points-bar');
+        if (pointsText) {
+            pointsText.textContent = '? / {{ task.max_points }}';
+            pointsText.className = 'font-semibold text-gray-400';
+        }
+        if (pointsBar) {
+            pointsBar.style.width = '0%';
+            pointsBar.className = 'bg-gray-300 h-2.5 rounded-full transition-all';
+        }
 
         // Schlanke Historie-Karte ohne Punkte/Feedback (nach Reload rendert
         // der Server dieselbe Ansicht aus der DB).

@@ -212,7 +212,7 @@
       if (submitted && !graded) {
         // Abgegeben, aber noch nicht korrigiert
         pointColor = 'text-gray-400';
-        pointDisplay = '?';
+        pointDisplay = '?/' + task.max_points;
       } else {
         pointDisplay = task.my_points + '/' + task.max_points;
         pointColor = 'text-gray-400'; // noch nicht bearbeitet
