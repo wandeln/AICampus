@@ -601,8 +601,10 @@ def _course_tab_context(
         )
     # Forum: für alle Kurs-Mitglieder (Student/Tutor/PROF) + Admins
     if membership is not None or is_admin:
-        # Ungelesen-Zähler (Summe über alle Kanäle) als Badge am Forum-Tab
-        forum_badge = sum(forum.load_unread_counts(session, course_id, user.id).values())  # type: ignore[arg-type]
+        # Ungelesen-Zähler (Summe über alle NICHT gemuteten Kanäle) als Badge am Forum-Tab
+        unread = forum.load_unread_counts(session, course_id, user.id)  # type: ignore[arg-type]
+        muted = forum.muted_channel_ids(session, user.id)  # type: ignore[arg-type]
+        forum_badge = sum(cnt for ch_id, cnt in unread.items() if ch_id not in muted)
         tabs.append(
             {
                 "key": "forum",

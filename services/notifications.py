@@ -21,7 +21,7 @@ from sqlmodel import Session, select
 
 from config import PUSH_APP_URL, VAPID_PRIVATE_KEY, push_enabled
 from database.base import engine
-from database.models import Course, Notification, PushSubscription, User, UserCourse
+from database.models import Course, ForumChannelMute, Notification, PushSubscription, User, UserCourse
 from services.timeutil import utc_iso
 
 logger = logging.getLogger(__name__)
@@ -210,7 +210,7 @@ def notify_forum_message(
     sender: User,
     content: str,
 ) -> None:
-    """Neue Forum-Nachricht → alle Kurs-Mitglieder außer dem Absender.
+    """Neue Forum-Nachricht → alle Kurs-Mitglieder außer Absender und Gemuteten.
 
     Alle erhalten die Benachrichtigung — auch User, die den Kanal gerade
     in einem (Hintergrund-)Tab offen haben. Wer den Kanal tatsächlich
@@ -219,9 +219,17 @@ def notify_forum_message(
     list_forum_messages). Präsenz-basiertes Unterdrücken hat sich als
     unzuverlässig erwiesen (gedrosselte Hintergrund-Tabs halten die
     Präsenz am Leben → gar keine Benachrichtigungen mehr).
+
+    Ausnahme: User, die den Kanal gemutet haben (forum_channel_mutes),
+    bekommen keine Benachrichtigung — Muten ist die Spam-Abmeldung.
     """
     try:
-        members = [uid for uid in course_member_ids(session, course_id) if uid != sender.id]
+        muted = set(
+            session.exec(
+                select(ForumChannelMute.user_id).where(ForumChannelMute.channel_id == channel_id)
+            ).all()
+        )
+        members = [uid for uid in course_member_ids(session, course_id) if uid != sender.id and uid not in muted]
         if not members:
             return
         course_name = _course_name(session, course_id)

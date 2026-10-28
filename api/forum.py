@@ -21,6 +21,10 @@ Nachrichten (im Kanal):
 Gelesen-Status (für Ungelesen-Zähler):
 - POST   /courses/{course_id}/forum/channels/{channel_id}/read
          - ?up_to_id=N: Kanal als gelesen bis Nachricht N markieren
+
+Muten (persönlich, keine Glocke-Benachrichtigungen mehr aus dem Kanal):
+- POST   /courses/{course_id}/forum/channels/{channel_id}/mute
+- DELETE /courses/{course_id}/forum/channels/{channel_id}/mute
 """
 
 from datetime import datetime
@@ -35,6 +39,7 @@ from database.models import (
     CourseRole,
     ForumChannel,
     ForumChannelCreate,
+    ForumChannelMute,
     ForumChannelReadState,
     ForumChannelUpdate,
     ForumMessage,
@@ -97,6 +102,7 @@ def _channel_dict(
     last_message_at: Optional[datetime],
     can_manage: bool,
     unread_count: int = 0,
+    muted: bool = False,
 ) -> dict[str, Any]:
     """Kanal als API-/Template-Dict (inkl. letzter Nachricht + Rechte)."""
     return {
@@ -104,6 +110,7 @@ def _channel_dict(
         "name": ch.name,
         "description": ch.description,
         "can_manage": can_manage,
+        "muted": muted,
         "last_message_at": utc_iso(last_message_at),
         "last_message_label": campus_date(last_message_at),  # Datum in Campus-Zone
         "unread_count": unread_count,
@@ -152,6 +159,15 @@ def load_unread_counts(session: Session, course_id: int, user_id: int) -> dict[i
     return {ch_id: cnt for ch_id, cnt in rows}
 
 
+def muted_channel_ids(session: Session, user_id: int) -> set[int]:
+    """Kanäle, die der User gemutet hat (forum_channel_mutes)."""
+    return set(
+        session.exec(
+            select(ForumChannelMute.channel_id).where(ForumChannelMute.user_id == user_id)
+        ).all()
+    )
+
+
 def load_channels_payload(
     session: Session,
     course_id: int,
@@ -178,12 +194,16 @@ def load_channels_payload(
         CourseRole.TUTOR.value,
     )
     unread = load_unread_counts(session, course_id, viewer.id)
+    muted = muted_channel_ids(session, viewer.id)
     return [
         _channel_dict(
             ch,
             last_msgs.get(ch.id),
             can_manage=is_staff or ch.created_by == viewer.id,
+            # Ungelesen-Zähler bleibt auch bei gemuteten Kanälen sichtbar (Frontend
+            # zeigt ihn grau); abgemeldet sind nur Glocke + Forum-Tab-Badge.
             unread_count=unread.get(ch.id, 0),
+            muted=ch.id in muted,
         )
         for ch in channels
     ]
@@ -360,6 +380,10 @@ async def delete_forum_channel(
         select(ForumChannelReadState).where(ForumChannelReadState.channel_id == channel_id)
     ).all():
         session.delete(read_state)
+    for mute in session.exec(
+        select(ForumChannelMute).where(ForumChannelMute.channel_id == channel_id)
+    ).all():
+        session.delete(mute)
     for note in session.exec(
         select(Notification).where(Notification.channel_id == channel_id)
     ).all():
@@ -516,3 +540,67 @@ async def mark_forum_channel_read(
         session.commit()
 
     return {"ok": True}
+
+
+# ─── Muten (persönliche Spam-Abmeldung) ───────────────────────────
+
+
+def _mute_state(session: Session, user_id: int, channel_id: int) -> Optional[ForumChannelMute]:
+    return session.exec(
+        select(ForumChannelMute)
+        .where(ForumChannelMute.user_id == user_id)
+        .where(ForumChannelMute.channel_id == channel_id)
+    ).first()
+
+
+@router.post("/courses/{course_id}/forum/channels/{channel_id}/mute")
+async def mute_forum_channel(
+    course_id: int,
+    channel_id: int,
+    session: Session = Depends(get_session),
+    viewer_and_course: tuple[User, int] = Depends(require_course_access(*_ALL_COURSE_ROLES)),
+):
+    """Kanal für den eigenen User muten (keine Glocke-Benachrichtigungen mehr).
+
+    Persönliche Einstellung — andere User sind nicht betroffen. Bestehende,
+    ungelesene forum_message-Benachrichtigungen des Kanals werden als gelesen
+    markiert, damit die Glocke sofort sauber wird.
+    """
+    viewer, _ = viewer_and_course
+    ch = _get_channel(session, course_id, channel_id)
+    if _mute_state(session, viewer.id, ch.id) is None:  # type: ignore[arg-type]
+        session.add(
+            ForumChannelMute(
+                user_id=viewer.id,  # type: ignore[arg-type]
+                channel_id=ch.id,  # type: ignore[arg-type]
+            )
+        )
+    result = session.exec(
+        update(Notification)
+        .where(Notification.user_id == viewer.id)
+        .where(Notification.type == "forum_message")
+        .where(Notification.channel_id == ch.id)
+        .where(Notification.read_at.is_(None))
+        .values(read_at=datetime.now())
+    )
+    session.commit()
+    if result.rowcount:  # Glocke sofort updaten (alle Tabs), statt Poll abzuwarten
+        notifications.notify_read(viewer.id)  # type: ignore[arg-type]
+    return {"ok": True, "muted": True}
+
+
+@router.delete("/courses/{course_id}/forum/channels/{channel_id}/mute")
+async def unmute_forum_channel(
+    course_id: int,
+    channel_id: int,
+    session: Session = Depends(get_session),
+    viewer_and_course: tuple[User, int] = Depends(require_course_access(*_ALL_COURSE_ROLES)),
+):
+    """Kanal für den eigenen User unmuten (Benachrichtigungen wieder an)."""
+    viewer, _ = viewer_and_course
+    ch = _get_channel(session, course_id, channel_id)
+    state = _mute_state(session, viewer.id, ch.id)  # type: ignore[arg-type]
+    if state is not None:
+        session.delete(state)
+        session.commit()
+    return {"ok": True, "muted": False}

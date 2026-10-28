@@ -25,24 +25,36 @@
 
     <div class="flex-1 overflow-y-auto p-2 space-y-0.5">
       {% for ch in forum_channels %}
-      <a href="?channel={{ ch.id }}"
-         class="forum-channel flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm transition
-                {% if active_channel and active_channel.id == ch.id %}bg-blue-50 text-blue-700 font-semibold
-                {% elif ch.unread_count %}font-semibold text-gray-900
-                {% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-        <span class="text-gray-400 select-none">#</span>
-        <span class="flex-1 truncate">{{ ch.name }}</span>
-        {# Ungelesen-Badge. Ist der Chat des aktiven Kanals sichtbar (Desktop
-           oder ?channel=), entfernt das Initial-Script das Badge vor dem ersten
-           Paint und markiert den Kanal als gelesen; auf Mobil ohne ?channel=
-           ist nur die Liste zu sehen und das Badge bleibt stehen. #}
-        {% if ch.unread_count %}
-        <span class="channel-unread inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none shrink-0">
-          {{ ch.unread_count if ch.unread_count <= 99 else '99+' }}
-        </span>
-        {% endif %}
-        {% if ch.last_message_label %}<span class="text-[10px] text-gray-400 shrink-0">{{ ch.last_message_label }}</span>{% endif %}
-      </a>
+      {# Zeile = Div (Button darf nicht in <a> verschachtelt werden).
+         Gemutete Kanäle: gedimmt, Ungelesen-Badge grau statt rot
+         (Glocke + Forum-Tab-Badge bleiben abgemeldet). #}
+      <div class="forum-channel flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm transition
+                  {% if active_channel and active_channel.id == ch.id %}bg-blue-50 text-blue-700 font-semibold
+                  {% elif ch.unread_count %}font-semibold text-gray-900 hover:bg-gray-100
+                  {% else %}text-gray-600 hover:bg-gray-100{% endif %}
+                  {% if ch.muted %}opacity-60{% endif %}"
+           data-channel-id="{{ ch.id }}" data-muted="{{ '1' if ch.muted else '0' }}">
+        <a href="?channel={{ ch.id }}"
+           class="flex items-center gap-1.5 flex-1 min-w-0">
+          <span class="text-gray-400 select-none">#</span>
+          <span class="flex-1 truncate">{{ ch.name }}</span>
+          {# Ungelesen-Badge. Ist der Chat des aktiven Kanals sichtbar (Desktop
+             oder ?channel=), entfernt das Initial-Script das Badge vor dem ersten
+             Paint und markiert den Kanal als gelesen; auf Mobil ohne ?channel=
+             ist nur die Liste zu sehen und das Badge bleibt stehen. #}
+          {% if ch.unread_count %}
+          <span class="channel-unread inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full {% if ch.muted %}bg-gray-400{% else %}bg-red-500{% endif %} text-white text-[10px] font-bold leading-none shrink-0">
+            {{ ch.unread_count if ch.unread_count <= 99 else '99+' }}
+          </span>
+          {% endif %}
+          {% if ch.last_message_label %}<span class="text-[10px] text-gray-400 shrink-0">{{ ch.last_message_label }}</span>{% endif %}
+        </a>
+        <button type="button" class="forum-channel-mute w-5 h-5 shrink-0 flex items-center justify-center rounded text-xs text-gray-400 hover:bg-gray-200/60 transition"
+                data-channel-id="{{ ch.id }}"
+                title="{{ 'Kanal unmuten (wieder Benachrichtigungen erhalten)' if ch.muted else 'Kanal muten (keine Benachrichtigungen mehr)' }}">
+          {{ '🔕' if ch.muted else '🔔' }}
+        </button>
+      </div>
       {% endfor %}
       {% if not forum_channels %}
       <p class="px-2.5 py-2 text-xs text-gray-400">Noch keine Kanäle vorhanden.</p>
@@ -77,6 +89,12 @@
       <h2 id="channel-title" class="text-base font-bold text-gray-800 truncate shrink-0"># {{ active_channel.name }}</h2>
       {% if active_channel.description %}<span class="text-xs text-gray-500 truncate">— {{ active_channel.description }}</span>{% endif %}
       <span class="flex-1"></span>
+      {# Mute-Toggle (alle Mitglieder; auf Mobil die einzige Stelle, da Sidebar verborgen) #}
+      <button type="button" class="forum-channel-mute-head px-2 py-1 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 text-sm transition shrink-0"
+              data-channel-id="{{ active_channel.id }}"
+              title="{{ 'Kanal unmuten (wieder Benachrichtigungen erhalten)' if active_channel.muted else 'Kanal muten (keine Benachrichtigungen mehr)' }}">
+        {{ '🔕' if active_channel.muted else '🔔' }}
+      </button>
       {% if active_channel.can_manage %}
       <button type="button" class="channel-manage px-2 py-1 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 text-sm transition" data-action="rename" title="Kanal umbenennen">✎</button>
       <button type="button" class="channel-manage px-2 py-1 rounded text-gray-400 hover:bg-red-50 hover:text-red-600 text-sm transition" data-action="delete" title="Kanal löschen">🗑</button>
@@ -132,6 +150,9 @@
   // Ungelesene im aktiven Kanal (Server-Ansicht vor dem Markieren) —
   // wird beim Initial-Load (nur bei sichtbarem Chat) vom Tab-Badge abgezogen.
   const activeChannelUnread = {% if active_channel %}{{ active_channel.unread_count }}{% else %}0{% endif %};
+  // Gemuteter aktiver Kanal zählt nicht auf das Forum-Tab-Badge (serverseitig
+  // ausgeblendet) → das Tab-Badge darf beim Lesen/Neuem darin nicht verringert werden.
+  const activeChannelMuted = {% if active_channel and active_channel.muted %}true{% else %}false{% endif %};
   const forumBase = `/api/courses/${courseId}/forum`;
 
   const forumList = document.getElementById('forum-messages');
@@ -253,8 +274,8 @@
   // Badge des aktiven Kanals in der Sidebar entfernen (Kanal wird gerade gesehen).
   function clearActiveChannelBadge() {
     if (activeChannelId == null) return;
-    const link = document.querySelector(`.forum-channel[href="?channel=${activeChannelId}"]`);
-    const badge = link ? link.querySelector('.channel-unread') : null;
+    const row = document.querySelector(`.forum-channel[data-channel-id="${activeChannelId}"]`);
+    const badge = row ? row.querySelector('.channel-unread') : null;
     if (badge) badge.remove();
   }
 
@@ -295,7 +316,7 @@
       });
     });
     lastMessageId = Math.max(lastMessageId, msgs[msgs.length - 1].id);
-    if (countAsUnread && chatVisible()) {
+    if (countAsUnread && chatVisible() && !activeChannelMuted) {
       // Initial-Load: Server-Zähler abziehen (lastMessageId markiert alles bis
       // zur letzten Nachricht als gelesen). Spätere Adds: nur die neuen zählen.
       reduceForumTabBadge(initialLoadDone ? msgs.length : activeChannelUnread);
@@ -492,6 +513,58 @@
           showToast('Fehler: ' + err.message, 'error');
         }
       }
+    });
+  });
+
+  // ─── Kanäle muten (persönliche Spam-Abmeldung) ─────────────────
+  // Muten ist pro User: keine Glocke-Benachrichtigungen mehr aus dem Kanal,
+  // Ungelesen-Badges (Sidebar + Forum-Tab) ignorieren ihn. Der Chat bleibt
+  // lesbar. UI-Update ohne Reload: Icon/Opacity wechseln sofort.
+  async function toggleChannelMute(channelId) {
+    const row = document.querySelector(`.forum-channel[data-channel-id="${channelId}"]`);
+    const wasMuted = row ? row.dataset.muted === '1' : false;
+    try {
+      const res = await fetch(`${forumBase}/channels/${channelId}/mute`, {
+        method: wasMuted ? 'DELETE' : 'POST',
+        credentials: 'same-origin',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.detail || 'Muten fehlgeschlagen.', 'error');
+        return;
+      }
+    } catch (err) {
+      showToast('Fehler: ' + err.message, 'error');
+      return;
+    }
+    const nowMuted = !wasMuted;
+    if (row) {
+      row.dataset.muted = nowMuted ? '1' : '0';
+      row.classList.toggle('opacity-60', nowMuted);
+      const badge = row.querySelector('.channel-unread');
+      if (badge) {
+        // Zähler bleibt sichtbar, wechselt nur die Farbe (rot → grau)
+        badge.classList.toggle('bg-red-500', !nowMuted);
+        badge.classList.toggle('bg-gray-400', nowMuted);
+      }
+      if (nowMuted && badge) {
+        // Das Forum-Tab-Badge zählt gemutete Kanäle nicht mehr → die noch
+        // enthaltenen Ungelesen hier korrigieren (Sidebar-Badge bleibt).
+        reduceForumTabBadge(parseInt(badge.textContent.replace('+', ''), 10));
+      }
+    }
+    document
+      .querySelectorAll(`.forum-channel-mute[data-channel-id="${channelId}"], .forum-channel-mute-head[data-channel-id="${channelId}"]`)
+      .forEach((b) => {
+        b.textContent = nowMuted ? '🔕' : '🔔';
+        b.title = nowMuted ? 'Kanal unmuten (wieder Benachrichtigungen erhalten)' : 'Kanal muten (keine Benachrichtigungen mehr)';
+      });
+  }
+  document.querySelectorAll('.forum-channel-mute, .forum-channel-mute-head').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault(); // Sicherheit: Button-Klick darf nie navigieren
+      e.stopPropagation();
+      toggleChannelMute(parseInt(btn.dataset.channelId, 10));
     });
   });
 

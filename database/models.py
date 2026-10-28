@@ -1067,6 +1067,26 @@ class ForumChannelReadState(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("user_id", "channel_id"),)
 
 
+class ForumChannelMute(SQLModel, table=True):
+    """Forum-Kanäle, die ein User gemutet hat (keine Glocke-Benachrichtigungen).
+
+    Das Muten ist rein persönlich: Der User kann den Kanal weiterhin lesen
+    (der Ungelesen-Zähler bleibt in der Sidebar sichtbar, grau statt rot),
+    bekommt aber keine forum_message-Benachrichtigungen mehr und der Kanal
+    zählt nicht auf das Forum-Tab-Badge. Neue Tabelle wird beim App-Start
+    per create_all angelegt.
+    """
+
+    __tablename__ = "forum_channel_mutes"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    channel_id: int = Field(foreign_key="forum_channels.id", index=True)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+    __table_args__ = (UniqueConstraint("user_id", "channel_id"),)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # SKRIPT-FRAGEN (Studenten-Fragen zum Skript, inkl. LLM- +
 # Human-Antworten; für Tutoren/Profs zur Skript-Verbesserung)

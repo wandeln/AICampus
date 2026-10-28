@@ -250,6 +250,10 @@ LLM-Calls (GPU-schonend limitierbar) und Vorschau-Bildern (PDF → PNG).
   Ersteller oder Tutor/Prof. Nachrichten löschen: eigene für alle,
   beliebige für Tutor/Prof.
 - **Ungelesen-Badge** am Forum-Tab; Lese-Status wird synchron gehalten.
+- **Kanäle muten** (persönlich, Glocke 🔔/🔕 in der Kanal-Leiste oder im
+  Kanal-Header): keine Benachrichtigungen (Glocke + Forum-Tab-Badge) mehr aus
+  dem Kanal; der Ungelesen-Zähler bleibt sichtbar (grau statt rot),
+  Chat bleibt lesbar. Betrifft nur den eigenen Account.
 
 ## 7. Übersicht & Korrektur (Tutor/Prof)
 
