@@ -206,10 +206,23 @@
     let html = '';
     tasks.forEach(task => {
       const pct = task.max_points > 0 ? task.my_points / task.max_points : 0;
-      let pointColor = 'text-gray-400';
-      if (pct >= 0.8) pointColor = 'text-green-600';
-      else if (pct >= 0.5) pointColor = 'text-yellow-600';
-      else if (task.my_points > 0) pointColor = 'text-orange-600';
+      const submitted = task.attempts_used > 0;
+      const graded = task.has_feedback || false;
+      let pointColor, pointDisplay;
+      if (submitted && !graded) {
+        // Abgegeben, aber noch nicht korrigiert
+        pointColor = 'text-gray-400';
+        pointDisplay = '?';
+      } else {
+        pointDisplay = task.my_points + '/' + task.max_points;
+        pointColor = 'text-gray-400'; // noch nicht bearbeitet
+        if (graded) {
+          if (pct >= 0.8) pointColor = 'text-green-600';
+          else if (pct >= 0.5) pointColor = 'text-yellow-600';
+          else if (task.my_points > 0) pointColor = 'text-orange-600';
+          else pointColor = 'text-red-600'; // tatsächlich mit 0 Punkten bewertet
+        }
+      }
 
       const typeBadge = task.task_type === 'workspace'
         ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-700">💻 Workspace</span>'
@@ -245,7 +258,7 @@
           <div class="flex items-center gap-6">
             <div class="text-right">
               <div class="text-lg font-bold ${pointColor}">
-                ${task.my_points}/${task.max_points}
+                ${pointDisplay}
               </div>
               <div class="text-xs text-gray-400">Punkte</div>
             </div>
