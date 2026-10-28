@@ -50,9 +50,10 @@
       <span class="px-2 py-0.5 rounded text-xs font-medium
         {% if task_type == 'workspace' %}bg-indigo-100 text-indigo-700
         {% elif task_type == 'mc' %}bg-emerald-100 text-emerald-700
+        {% elif task_type == 'upload' %}bg-amber-100 text-amber-700
         {% else %}bg-gray-100 text-gray-600
         {% endif %}" style="align-content: center;">
-        {{ '💻 Workspace' if task_type == 'workspace' else '🎯 Multiple Choice' if task_type == 'mc' else '📄 Text' }}
+        {{ '💻 Workspace' if task_type == 'workspace' else '🎯 Multiple Choice' if task_type == 'mc' else '📤 Upload' if task_type == 'upload' else '📄 Text' }}
       </span>
       <a href="{% if task_type == 'mc' %}/courses/{{ course_id }}/live/mc?task_id={{ task_id }}{% else %}/courses/{{ course_id }}/live?filter_text={{ task_title | urlencode }}{% endif %}"
          target="_blank" rel="noopener"
@@ -415,6 +416,19 @@
       renderMarkdown(data.task.model_solution, document.getElementById('model-solution'));
       document.getElementById('model-solution-card').classList.remove('hidden');
     }
+    // Upload: Musterlösungs-Datei (Markdown oben = Bewertungskriterien)
+    if (data.task.task_type === 'upload' && data.task.has_upload_solution_file) {
+      var modelCard = document.getElementById('model-solution-card');
+      modelCard.classList.remove('hidden');
+      var modelFileDiv = document.createElement('div');
+      modelFileDiv.className = 'mt-2 flex items-center gap-2 flex-wrap';
+      modelFileDiv.innerHTML =
+        '<a href="/api/tasks/' + data.task.id + '/upload/solution"' +
+        '   class="text-blue-700 hover:text-blue-900 border border-blue-300 hover:border-blue-500 px-2.5 py-1 rounded-lg text-xs transition inline-flex items-center gap-1">' +
+        '⬇️ Musterlösungs-Datei</a>' +
+        '<span class="text-xs text-gray-400 truncate max-w-[220px]">' + escapeHtml(data.task.upload_solution_file || '') + '</span>';
+      modelCard.appendChild(modelFileDiv);
+    }
 
     // Punktestand aktualisieren
     updateScoreDisplay(data);
@@ -429,6 +443,7 @@
 
     var isWorkspace = data.task.task_type === 'workspace';
     var isMc = data.task.task_type === 'mc';
+    var isUpload = data.task.task_type === 'upload';
 
     var subIndex = 0;
     data.submissions.forEach(function(sub) {
@@ -523,6 +538,53 @@
         mcContainer.className = 'solution-container';
         renderMcSubmission(sub, mcContainer);
         solSection.appendChild(mcContainer);
+      } else if (isUpload) {
+        // Upload: eingereichte Datei (read-only Ansicht; Zip → Baum)
+        var upBox = document.createElement('div');
+        upBox.className = 'text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3';
+        upBox.innerHTML = '📤 Eingereichte Datei: ' + escapeHtml(sub.upload_file || 'unbekannt') +
+          '<span class="block text-xs text-indigo-500 mt-0.5">Read-only — Stand zum Einreichzeitpunkt</span>';
+        solSection.appendChild(upBox);
+
+        if (sub.upload_file) {
+          var upWrap = document.createElement('div');
+          upWrap.className = 'ws-tree-editor-wrap flex flex-col sm:flex-row h-[540px] sm:h-[420px] border border-gray-200 rounded-lg overflow-hidden bg-white';
+          upWrap.innerHTML =
+            '<div class="flex flex-col h-[220px] sm:h-auto sm:w-56 shrink-0 border-b sm:border-b-0 sm:border-r border-gray-200 bg-gray-50">' +
+            '<div class="flex items-center gap-1 p-1.5 border-b border-gray-200 bg-gray-100">' +
+            '<span class="text-[11px] text-gray-500 truncate flex-1">Dateien zum Einreichzeitpunkt</span>' +
+            '<button type="button" id="ws-files-fullscreen-btn" title="Vollbild" class="ws-tree-btn">⛶</button>' +
+            '</div>' +
+            '<div id="ws-sub-' + sub.id + '-tree" class="flex-1 min-h-0 overflow-y-auto p-1 text-sm">' +
+            '<div class="text-gray-400 text-xs p-1">Dateien werden geladen …</div>' +
+            '</div>' +
+            '</div>' +
+            '<div id="ws-split-handle" class="ws-split-handle" role="separator" title="Ziehen: Baum/Editor vergrößern · Doppelklick: Standardgröße"></div>' +
+            '<div class="flex-1 min-h-0">' +
+            '<div class="ws-editor w-full h-full min-h-0">' +
+            '<textarea id="ws-sub-' + sub.id + '-editor" class="w-full h-full font-mono text-sm" spellcheck="false" placeholder="Datei links auswählen, um sie anzusehen …"></textarea>' +
+            '<div id="ws-sub-' + sub.id + '-media" class="hidden h-full"></div>' +
+            '</div>' +
+            '</div>' +
+            '</div>';
+          solSection.appendChild(upWrap);
+          if (window.WorkspaceUI) {
+            var upUi = WorkspaceUI.init({
+              treeEl: upWrap.querySelector('#ws-sub-' + sub.id + '-tree'),
+              editorEl: upWrap.querySelector('#ws-sub-' + sub.id + '-editor'),
+              mediaEl: upWrap.querySelector('#ws-sub-' + sub.id + '-media'),
+              apiBase: '/api/submissions/' + sub.id + '/upload',
+              readOnlyCheck: function () { return true; },
+              emptyMsg: '(keine Dateien in dieser Abgabe)',
+            });
+            upUi.refresh();
+          }
+        } else {
+          var noFile = document.createElement('p');
+          noFile.className = 'text-gray-400 text-sm italic';
+          noFile.textContent = 'Keine Datei erhalten.';
+          solSection.appendChild(noFile);
+        }
       } else {
         var solContainer = document.createElement('div');
         solContainer.className = 'solution-container';
@@ -561,6 +623,21 @@
           '</a>' +
           '</div>';
         card.appendChild(dlSection);
+      }
+
+      // ── Upload: Download-Button (Originaldatei) ─────────────────
+      if (isUpload && data.task.id && sub.id && sub.upload_file) {
+        var upDl = document.createElement('div');
+        upDl.className = 'mb-4';
+        upDl.innerHTML = '<div class="flex items-center gap-3">' +
+          '<span class="text-xs text-gray-500">⬇️ Download (diese Einreichung):</span>' +
+          '<a href="/api/tasks/' + data.task.id + '/submissions/' + sub.id + '/upload/download"' +
+          '  class="text-blue-700 hover:text-blue-900 border border-blue-300 hover:border-blue-500 px-3 py-1.5 rounded-lg transition text-sm"' +
+          '  title="Originaldatei wie eingereicht">' +
+          '  ⬇️ ' + escapeHtml(sub.upload_file) +
+          '</a>' +
+          '</div>';
+        card.appendChild(upDl);
       }
 
       // ── Separate LLM and human feedback ────────────────────────

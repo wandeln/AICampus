@@ -174,10 +174,14 @@ def migrate_schema():
             "mc_data": "TEXT",  # Multiple-Choice: Fragen/Optionen/Feedback als JSON
             "text_template": "TEXT",  # Text-Aufgabe: Antwort-Gerüst (Lückentext/Tabelle) als Markdown
             "auto_grading_enabled": "BOOLEAN DEFAULT 1",  # Automatische LLM-Korrektur (Default: AN)
+            # Upload-Aufgaben: Original-Dateinamen (Datei unter data/upload_tasks/{task_id}/)
+            "upload_template": "VARCHAR",  # Template-Datei (Download für Studenten)
+            "upload_solution_file": "VARCHAR",  # Musterlösungs-Datei (versteckt, LLM-Grading)
         },
         "submissions": {
             "workspace_snapshot": "VARCHAR",  # Pfad zu workspace.tar.gz
             "mc_result": "TEXT",  # MC: persistiertes Grading-Ergebnis (JSON)
+            "upload_file": "VARCHAR",  # Upload-Aufgabe: Original-Dateiname (submissions/{id}/<name>)
         },
         "task_workspace_files": {
             "sort_order": "INTEGER",  # manuelle Dateireihenfolge je Ordner (NULL = alphabetisch)

@@ -125,5 +125,66 @@ Bitte Antworte in der Sprache der Aufgabenstellung!
 """
 
 
+GRADING_UPLOAD_PROMPT_TEMPLATE = """\
+Du bist ein Tutor, der eine Aufgabenlösung bewertet, die der Student als
+Datei(en) hochgeladen hat (z. B. Code, Dokumente oder ein Zip-Archiv mit
+mehreren Dateien).
+
+AUFGABE:
+__TASK_DESCRIPTION__
+
+MUSTERLÖSUNG / BEWERTUNGSKRITERIEN:
+__MODEL_SOLUTION__
+
+MUSTERLÖSUNGS-DATEIEN (versteckte Dateien der Musterlösung):
+__MODEL_SOLUTION_FILES__
+
+== STUDENTEN-DATEIEN START ==
+__STUDENT_SOLUTION__
+== STUDENTEN-DATEIEN ENDE ==
+
+MAXIMALE PUNKTE: __MAX_POINTS__
+
+Hinweise:
+- Die Studenten-Dateien sind evtl. gekürzt; nicht lesbare (binäre) Dateien
+  fehlen und können nicht bewertet werden — bewerte nur, was vorliegt.
+- Bewerte die eingereichten Dateien insgesamt (Inhalt, nicht Form/Verzeichnis).
+
+Bewerte die Lösung fair und konstruktiv. Gib als Antwort EINZIG ein JSON-Objekt zurueck (NICHT in Code-Blocken, NICHT als Liste).
+
+WICHTIG: Deine gesamte Antwort MUSS ein gueltiges JSON-Objekt in geschweiften Klammern sein. Verwende KEINE Backticks und KEINE Code-Blcke.
+
+Das JSON hat NUR zwei Felder:
+- "feedback": Ein zusammenhaengender Text mit deiner Bewertung. Verwende Markdown / katex -Formatierung: **fett** fuer Wichtige Punkte, *kursiv* fuer Betonung, - Listen fuer Aufzaehlungen und $...$ bzw. $$...$$ fuer mathematische Ausdruecke (LaTeX).
+- "points": Zahl (0 bis __MAX_POINTS__)
+
+Beispiel-Antwortformat:
+{
+  "feedback": "**Gute Lösung.** Der Algorithmus ist korrekt implementiert und die Ausgabe stimmt. *Verbesserungsvorschlag:* Die Fehlerbehandlung bei leerer Eingabe fehlt noch.",
+  "points": 8
+}
+Achte dabei auf korrektes Escaping von special Characters. In Latex-Umgebungen muss insbesondere der Backslash escaped werden (z.B. $\\text{...}$ oder $$A \\rightarrow B$$). Dollar-Zeichen außerhalb von Code-Blöcken, die kein Latex triggern sollen können mit Backslash \\$ escaped werden.
+
+Verwende Markdown-Formatierung für bessere Lesbarkeit:
+- **fett** für wichtige Begriffe und Kernaussagen
+- *kursiv* für Betonungen
+- - Listen für Aufzählungen
+- $...$ für Inline-Mathematik und $$...$$ für Block-Mathematik (LaTeX)
+- ```code``` für kurze Code-Schnipsel
+
+Bewertungskriterien:
+- Vollstaendigkeit: Wurden alle Aspekte der Aufgabe adressiert?
+- Korrektheit: Sind die Ergebnisse/Argumente in den Dateien richtig?
+- Qualitaet: Ist die Loesung elegant und gut strukturiert?
+- Die Bewertungskriterien aus der Musterlösung (Text + Dateien)
+- eine leere Einreichung oder Referenzen auf die Musterlösung zählen nicht.
+
+Begründe in deinem motivierendem Feedback genau, wie die Punktebewertung zustande gekommen ist (insbesondere, wofür es wieviele Punkte Abzug gab).
+Sei nicht zu knauserig bei der Punktevergabe, halte dich aber dennoch an die Bewertungskriterien um fair zu bleiben.
+Sei lieber etwas großzügig und erkläre dafür auf motivierende Art, wie Dinge noch verbessert werden könnten, wenn man ganz penibel wäre.
+Bitte Antworte in der Sprache der Aufgabenstellung!
+"""
+
+
 # Kompatibilitaets-Alias (verwende GRADING_TEXT_PROMPT_TEMPLATE als Default)
 GRADING_PROMPT_TEMPLATE = GRADING_TEXT_PROMPT_TEMPLATE

@@ -38,6 +38,7 @@
           <option value="text">Textaufgaben</option>
           <option value="workspace">Workspace-Aufgaben</option>
           <option value="mc">Multiple-Choice-Aufgaben</option>
+          <option value="upload">Upload-Aufgaben</option>
         </select>
       </div>
       <div class="flex items-end">
@@ -187,7 +188,7 @@
 
     data.tasks.forEach((task, i) => {
       const typeBadge = {
-        text: '📝', workspace: '💻', mc: '🎯'
+        text: '📝', workspace: '💻', mc: '🎯', upload: '📤'
       }[task.task_type] || '📋';
       headerHtml += '<th data-sort="task-' + task.id + '" data-task-idx="' + i + '" class="text-center py-3 px-3 font-semibold text-gray-700 border-b text-xs min-w-[120px] cursor-pointer select-none hover:bg-gray-200" title="' + task.title + ' — klicken zum Sortieren">' +
         typeBadge + ' ' + task.title + ' ' + task.max_points + 'P<span class="sort-ind text-sm"></span>' +

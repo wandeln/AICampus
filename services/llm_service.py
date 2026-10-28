@@ -31,6 +31,7 @@ from services.workspace_presets import IMAGE_SELECTION_FIELDS
 from prompts.grading_prompt import (
     GRADING_TEXT_PROMPT_TEMPLATE,
     GRADING_WORKSPACE_PROMPT_TEMPLATE,
+    GRADING_UPLOAD_PROMPT_TEMPLATE,
 )
 from prompts.creation_prompt import UNIFIED_TASK_PROMPT_TEMPLATE
 from prompts.workspace_task_prompt import (
@@ -447,6 +448,30 @@ class LLMService:
 
         return await self._call_with_json(prompt, response_format={"type": "json_object"}, config=config)
 
+    async def grade_upload_task(
+        self,
+        task_description: str,
+        model_solution: str,
+        model_solution_files: str,
+        student_files: str,
+        max_points: int,
+        custom_prompt: Optional[str] = None,
+        config: Optional[dict] = None,
+    ):
+        """Korrigiert eine Upload-Aufgabe via LLM
+        (Musterlösung/-Dateien + hochgeladene Studenten-Dateien)."""
+
+        prompt = self._render_prompt(
+            custom_prompt or GRADING_UPLOAD_PROMPT_TEMPLATE,
+            task_description=task_description,
+            model_solution=model_solution,
+            model_solution_files=model_solution_files,
+            student_solution=student_files,
+            max_points=max_points,
+        )
+
+        return await self._call_with_json(prompt, response_format={"type": "json_object"}, config=config)
+
     async def generate_task_fields(
         self,
         topic: str,
@@ -478,7 +503,11 @@ class LLMService:
         Enthält keine sensitive Studentendaten — nutzt daher den Public
         Endpoint, falls konfiguriert.
         """
-        task_type_description = {"text": "Textaufgabe"}.get(task_type, task_type)
+        task_type_description = {
+            "text": "Textaufgabe",
+            "upload": ("Upload-Aufgabe (Studierende reichen ihre Lösung als Datei/Zip "
+                       "ein; der Musterlösungstext dient hier als Bewertungskriterien)"),
+        }.get(task_type, task_type)
         generate_list = ", ".join(f'"{f}"' for f in generate_fields)
 
         prompt = Template(UNIFIED_TASK_PROMPT_TEMPLATE).render(

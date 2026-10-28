@@ -51,6 +51,7 @@ class TaskType(str, Enum):
     TEXT = "text"
     WORKSPACE = "workspace"
     MC = "mc"  # Multiple Choice (mehrere Fragen, sofortiges Feedback)
+    UPLOAD = "upload"  # Datei-/Zip-Einreichung (Template + Musterlösungs-Datei)
 
 
 
@@ -226,6 +227,10 @@ class TaskBase(SQLModel):
     #   "multi_select": bool, "options": [{"text": str, "correct": bool, "feedback": str}]}]}
     # max_points = Summe der Fragen-Punkte (serverseitig synchron gehalten).
     mc_data: Optional[str] = Field(default=None)
+    # Upload-Aufgaben (task_type=upload): Original-Dateinamen; Disk-Pfad ist
+    # deterministisch data/upload_tasks/{task_id}/<name> (Datei wie hochgeladen).
+    upload_template: Optional[str] = Field(default=None, max_length=500)      # Template-Datei (Download für Studenten)
+    upload_solution_file: Optional[str] = Field(default=None, max_length=500)  # Musterlösungs-Datei (versteckt, LLM-Grading)
 
 
 class Task(TaskBase, table=True):
@@ -269,6 +274,9 @@ class TaskCreate(SQLModel):
     workspace_engines: Optional[str] = Field(default=None)
     workspace_image: Optional[str] = Field(default=None, max_length=50)
     mc_data: Optional[str] = Field(default=None)
+    # Upload-Aufgaben (s. TaskBase)
+    upload_template: Optional[str] = Field(default=None, max_length=500)
+    upload_solution_file: Optional[str] = Field(default=None, max_length=500)
 
 
 class TaskRead(TaskBase):
@@ -298,6 +306,9 @@ class TaskUpdate(SQLModel):
     workspace_disk_quota: Optional[float] = None
     workspace_internet: Optional[bool] = None
     workspace_main_file: Optional[str] = None
+    # Upload-Aufgaben (s. TaskBase)
+    upload_template: Optional[str] = None
+    upload_solution_file: Optional[str] = None
     workspace_assets_status: Optional[str] = None
     workspace_engines: Optional[str] = None
     workspace_image: Optional[str] = None
@@ -666,6 +677,7 @@ class SubmissionBase(SQLModel):
     solve_time_seconds: float = Field(default=0.0)  # Zeit in Sekunden bis zum Einreichen
     workspace_snapshot: Optional[str] = Field(default=None, max_length=500)  # Pfad zu workspace.tar.gz (Workspace-Aufgaben)
     mc_result: Optional[str] = Field(default=None)  # MC: persistiertes Grading-Ergebnis (JSON)
+    upload_file: Optional[str] = Field(default=None, max_length=500)  # Upload-Aufgaben: Original-Dateiname (data/submissions/{id}/<name>)
 
 
 class Submission(SubmissionBase, table=True):
@@ -687,6 +699,7 @@ class SubmissionCreate(SQLModel):
     mc_answers: str = Field(default="")
     solve_time_seconds: float = Field(default=0.0)
     workspace_snapshot: Optional[str] = Field(default=None, max_length=500)
+    upload_file: Optional[str] = Field(default=None, max_length=500)
 
 
 class SubmissionRead(SubmissionBase):

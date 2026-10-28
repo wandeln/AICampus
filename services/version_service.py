@@ -52,6 +52,7 @@ from database.models import (
 )
 from services import media_service
 from services import notifications
+from services import upload_service
 from services.mc_service import (
     McValidationError,
     mc_total_points,
@@ -236,6 +237,25 @@ def _task_apply(session: Session, entity: Task, snapshot: dict) -> None:
         entity.workspace_engines = parse_engine_list(snapshot.get("workspace_engines"))
         entity.workspace_image = check_image_spec(
             session, entity.course_id, snapshot.get("workspace_image"))
+    # Upload: Dateinamen anwenden — NUR wenn explizit im Snapshot
+    # (Versions-Restore; die UI-Payloads verwalten die Dateien über eigene
+    # Endpoints und liefern die Keys nicht). Stale-Dateien (nicht mehr
+    # referenziert) werden von der Platte entfernt.
+    if task_type == TaskType.UPLOAD:
+        if "upload_template" in snapshot or "upload_solution_file" in snapshot:
+            new_t = (snapshot.get("upload_template") or "").strip() or None
+            new_s = (snapshot.get("upload_solution_file") or "").strip() or None
+            for old in (entity.upload_template, entity.upload_solution_file):
+                if old and old not in (new_t, new_s):
+                    upload_service.remove_task_file(entity.id, old)
+            entity.upload_template = new_t
+            entity.upload_solution_file = new_s
+    elif entity.task_type == TaskType.UPLOAD:
+        # Typ-Wechsel weg von Upload: Dateien + Felder entsorgen
+        upload_service.remove_task_file(entity.id, entity.upload_template)
+        upload_service.remove_task_file(entity.id, entity.upload_solution_file)
+        entity.upload_template = None
+        entity.upload_solution_file = None
     validate_workspace_provided(session, entity)
     entity.updated_at = datetime.now(timezone.utc)
     session.add(entity)
@@ -411,6 +431,10 @@ def _current_snapshot(entity_type: str, entity) -> dict:
             "workspace_main_file": entity.workspace_main_file or "",
             "workspace_engines": entity.workspace_engines,
             "workspace_image": entity.workspace_image,
+            # Upload: Dateinamen (die Dateien selbst landen im
+            # File-Snapshot via _capture_task_files).
+            "upload_template": entity.upload_template or "",
+            "upload_solution_file": entity.upload_solution_file or "",
         }
     raise HTTPException(400, "Zustands-Snapshots sind für diesen Elementtyp nicht unterstützt.")
 
@@ -510,16 +534,31 @@ def _capture_task_files(session: Session, v: ContentVersion) -> None:
     if task is None:
         return
     try:
-        new_rel = workspace_service.capture_version_snapshot(
-            session, task, v.id)
+        if task.task_type == TaskType.WORKSPACE:
+            new_rel = workspace_service.capture_version_snapshot(
+                session, task, v.id)
+        elif task.task_type == TaskType.UPLOAD:
+            new_rel = upload_service.capture_version_snapshot(task, v.id)
+        else:
+            new_rel = None
     except Exception as e:  # noqa: BLE001
         logger.warning("Version-Dateibau (task %s, version %s): %s",
                        task.id, v.id, e)
         return
     if v.file_snapshot and not new_rel:
-        # Aufgabentyp ≠ Workspace: verwaister Snapshot-Ordner aufräumen
+        # Aufgabentyp ohne Dateibau: verwaister Snapshot-Ordner aufräumen
         shutil.rmtree(VERSION_SNAPSHOT_DIR / str(v.id), ignore_errors=True)
     v.file_snapshot = new_rel
+    # Upload: Dateinamen in die Versions-Snapshot-Daten nachpflegen — die
+    # UI-Payloads enthalten sie nicht (eigene Endpoints), der Restore
+    # (_task_apply + UI-Hook) braucht sie aber.
+    if task.task_type == TaskType.UPLOAD:
+        snap = dict(v.snapshot or {})
+        if (snap.get("upload_template") or "") != (task.upload_template or "") \
+                or (snap.get("upload_solution_file") or "") != (task.upload_solution_file or ""):
+            snap["upload_template"] = task.upload_template or ""
+            snap["upload_solution_file"] = task.upload_solution_file or ""
+            v.snapshot = snap
     session.add(v)
     session.commit()
     session.refresh(v)
@@ -610,15 +649,30 @@ def restore_version(session: Session, user: User, version_id: int) -> dict:
     # das Backup).
     restored_files = False
     backup = None
+    # Upload- vs. Workspace-Snapshot per Pfad erkennen (version_snapshots/
+    # {id}/upload_files vs. …/workspace.tar.gz) — die aktuelle Task-Typ
+    # stimmt mit dem des Snapshot-Zeitpunkts nicht immer überein.
+    is_upload_snap = v.file_snapshot is not None \
+        and v.file_snapshot.endswith("upload_files")
     if v.file_snapshot and v.entity_type == "task":
         try:
-            backup = workspace_service.restore_version_snapshot(
-                session, entity, v.file_snapshot)
+            if is_upload_snap:
+                backup = upload_service.restore_version_snapshot(
+                    entity.id, v.file_snapshot)
+            else:
+                backup = workspace_service.restore_version_snapshot(
+                    session, entity, v.file_snapshot)
             restored_files = True
             adapter.apply(session, entity, snapshot)
-            workspace_service.discard_version_snapshot_backup(backup)
+            if is_upload_snap:
+                upload_service.discard_restore_backup(backup)
+            else:
+                workspace_service.discard_version_snapshot_backup(backup)
         except Exception:
-            workspace_service.rollback_version_snapshot_backup(entity.id, backup)
+            if is_upload_snap:
+                upload_service.rollback_restore_backup(entity.id, backup)
+            else:
+                workspace_service.rollback_version_snapshot_backup(entity.id, backup)
             raise
     else:
         adapter.apply(session, entity, snapshot)
@@ -635,7 +689,10 @@ def restore_version(session: Session, user: User, version_id: int) -> dict:
     # eigene Kopie (einfache Delete-Semantik).
     if restored_files:
         try:
-            nv.file_snapshot = workspace_service.copy_version_snapshot(v.id, nv.id)
+            if is_upload_snap:
+                nv.file_snapshot = upload_service.copy_version_snapshot(v.id, nv.id)
+            else:
+                nv.file_snapshot = workspace_service.copy_version_snapshot(v.id, nv.id)
             session.add(nv)
             session.commit()
             session.refresh(nv)

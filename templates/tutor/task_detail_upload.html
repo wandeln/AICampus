@@ -1,0 +1,179 @@
+{% extends "tutor/task_detail_base.html" %}
+
+{% block type_section %}
+
+  <!-- ─── [Upload] Template- + Musterlösungs-Datei ─────────────── -->
+  <div id="upload-section" data-upload-section class="card">
+    <h2 class="font-semibold text-gray-800 mb-1">📤 Upload-Dateien</h2>
+    <p class="text-xs text-gray-400 mb-4">
+      Studierende reichen genau <span class="font-medium text-gray-500">eine Datei</span> ein
+      (Code/Text/HTML oder Zip-Archiv, max. 200 MB). Optional: eine
+      <span class="font-medium text-gray-500">Template-Datei</span>, die die Studierenden
+      herunterladen und bearbeiten können, sowie eine
+      <span class="font-medium text-gray-500">Musterlösungs-Datei</span> (nur für dich sichtbar,
+      geht zusammen mit den Bewertungskriterien ans LLM-Grading).
+    </p>
+
+    <!-- Noch keine gespeicherte Aufgabe: Dateien erst danach möglich -->
+    <div id="upload-no-task" class="hidden text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-3">
+      💡 Bitte zuerst die Aufgabe speichern (Titel angeben) — danach können hier
+      Template- und Musterlösungs-Datei hochgeladen werden.
+    </div>
+
+    <div id="upload-file-boxes" class="space-y-4">
+      <!-- Template -->
+      <div class="border border-gray-200 rounded-lg p-4">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <div class="min-w-0">
+            <p class="text-sm font-medium text-gray-700">Template-Datei <span class="text-xs text-gray-400">(optional — zum Bearbeiten für Studierende)</span></p>
+            <p id="upload-template-name" class="text-xs text-gray-500 truncate mt-0.5"></p>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <a id="upload-template-download" href="#"
+               class="hidden text-blue-700 hover:text-blue-900 border border-blue-300 hover:border-blue-500 px-3 py-1.5 rounded-lg text-sm transition">
+              ⬇️ Download
+            </a>
+            <button type="button" id="upload-template-remove"
+                    class="hidden text-red-600 hover:text-red-800 border border-red-300 hover:border-red-500 px-3 py-1.5 rounded-lg text-sm transition">
+              ✕ Entfernen
+            </button>
+          </div>
+        </div>
+        <input type="file" id="upload-template-input"
+               class="mt-3 block w-full text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 file:cursor-pointer">
+      </div>
+
+      <!-- Musterlösung -->
+      <div class="border border-gray-200 rounded-lg p-4">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <div class="min-w-0">
+            <p class="text-sm font-medium text-gray-700">Musterlösungs-Datei <span class="text-xs text-gray-400">(optional — nur für dich, LLM-Grading-Kontext)</span></p>
+            <p id="upload-solution-name" class="text-xs text-gray-500 truncate mt-0.5"></p>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <a id="upload-solution-download" href="#"
+               class="hidden text-blue-700 hover:text-blue-900 border border-blue-300 hover:border-blue-500 px-3 py-1.5 rounded-lg text-sm transition">
+              ⬇️ Download
+            </a>
+            <button type="button" id="upload-solution-remove"
+                    class="hidden text-red-600 hover:text-red-800 border border-red-300 hover:border-red-500 px-3 py-1.5 rounded-lg text-sm transition">
+              ✕ Entfernen
+            </button>
+          </div>
+        </div>
+        <input type="file" id="upload-solution-input"
+               class="mt-3 block w-full text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 file:cursor-pointer">
+      </div>
+    </div>
+  </div>
+
+{% endblock %}
+
+{% block type_scripts %}
+  // ══════════════════════════════════════════════════════════════
+  // Upload-Typ: Template-/Musterlösungs-Dateien (je 1 Datei,
+  // eigene Endpoints — nicht Teil des Auto-Save-Payloads).
+  // ══════════════════════════════════════════════════════════════
+  let UPLOAD_TASK_ID = {{ task.id if task and task.id else "null" }};
+
+  function _uploadSetState(kind, filename) {
+    // kind: "template" | "solution" → Dateiname + Buttons synchronisieren
+    const name = document.getElementById("upload-" + kind + "-name");
+    const dl = document.getElementById("upload-" + kind + "-download");
+    const rm = document.getElementById("upload-" + kind + "-remove");
+    if (name) name.textContent = filename ? "📎 " + filename : "— keine Datei —";
+    const has = !!filename && UPLOAD_TASK_ID != null;
+    if (dl) {
+      dl.classList.toggle("hidden", !has);
+      if (has) dl.href = "/api/tasks/" + UPLOAD_TASK_ID + "/upload/" + kind;
+    }
+    if (rm) rm.classList.toggle("hidden", !filename || UPLOAD_TASK_ID == null);
+  }
+
+  function _uploadRefreshTaskId() {
+    document.getElementById("upload-no-task").classList.toggle("hidden", UPLOAD_TASK_ID != null);
+    document.getElementById("upload-file-boxes").classList.toggle("hidden", UPLOAD_TASK_ID == null);
+    _uploadSetState("template", document.getElementById("upload-template-name").dataset.file || "");
+    _uploadSetState("solution", document.getElementById("upload-solution-name").dataset.file || "");
+  }
+
+  // In-Place-Anlage (Neue Aufgabe → erster Auto-Save): Task-ID übernehmen
+  window._uploadActivate = (taskId) => {
+    UPLOAD_TASK_ID = taskId;
+    _uploadRefreshTaskId();
+  };
+
+  // Versions-Restore: Dateinamen aus dem Snapshot übernehmen
+  // (die Dateien selbst kopiert version_service zurück auf die Platte).
+  window._uploadApplyEnv = (p) => {
+    _uploadSetState("template", p.upload_template || "");
+    _uploadSetState("solution", p.upload_solution_file || "");
+  };
+
+  // Initiales Dateistand aus dem Task-Context
+  (function () {
+    const initialTemplate = {{ (task.upload_template or none)|tojson if task else "null" }};
+    const initialSolution = {{ (task.upload_solution_file or none)|tojson if task else "null" }};
+    document.getElementById("upload-template-name").dataset.file = initialTemplate || "";
+    document.getElementById("upload-solution-name").dataset.file = initialSolution || "";
+    _uploadRefreshTaskId();
+  })();
+
+  async function _uploadPutFile(kind, input) {
+    const file = input.files && input.files[0];
+    input.value = "";
+    if (!file) return;
+    if (UPLOAD_TASK_ID == null) {
+      showToast("Bitte zuerst die Aufgabe speichern (Titel), dann Datei hochladen.", "warning");
+      return;
+    }
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/tasks/" + UPLOAD_TASK_ID + "/upload/" + kind, {
+        method: "POST",
+        body: fd,
+        credentials: "same-origin",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || res.status);
+      const el = document.getElementById("upload-" + kind + "-name");
+      el.dataset.file = data.filename;
+      _uploadSetState(kind, data.filename);
+      // Datei-Stand ist Teil der Version → Auto-Save anstoßen
+      if (window._avTouch) window._avTouch();
+    } catch (err) {
+      showToast("Datei-Upload fehlgeschlagen: " + err.message, "error");
+    }
+  }
+
+  document.getElementById("upload-template-input").addEventListener("change", (e) =>
+    _uploadPutFile("template", e.target));
+  document.getElementById("upload-solution-input").addEventListener("change", (e) =>
+    _uploadPutFile("solution", e.target));
+
+  async function _uploadRemoveFile(kind) {
+    if (UPLOAD_TASK_ID == null) return;
+    try {
+      const res = await fetch("/api/tasks/" + UPLOAD_TASK_ID + "/upload/" + kind, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || res.status);
+      }
+      const el = document.getElementById("upload-" + kind + "-name");
+      el.dataset.file = "";
+      _uploadSetState(kind, "");
+      if (window._avTouch) window._avTouch();
+    } catch (err) {
+      showToast("Datei konnte nicht entfernt werden: " + err.message, "error");
+    }
+  }
+
+  document.getElementById("upload-template-remove").addEventListener("click", () =>
+    _uploadRemoveFile("template"));
+  document.getElementById("upload-solution-remove").addEventListener("click", () =>
+    _uploadRemoveFile("solution"));
+{% endblock %}

@@ -187,6 +187,7 @@
             <option value="text" {% if tpl_type == 'text' %}selected{% endif %}>Textaufgabe</option>
             <option value="workspace" {% if tpl_type == 'workspace' %}selected{% endif %}>Workspace-Aufgabe (Container)</option>
             <option value="mc" {% if tpl_type == 'mc' %}selected{% endif %}>Multiple Choice</option>
+            <option value="upload" {% if tpl_type == 'upload' %}selected{% endif %}>Upload-Aufgabe (Datei/Zip)</option>
           </select>
         </div>
       </div>
@@ -352,6 +353,7 @@
     if (svl) svl.href = url + "?as_student=1";
     syncTaskTitle();  // Heading: „… — Bearbeiten“
     if (typeof window._wsActivate === "function") window._wsActivate(taskId);
+    if (typeof window._uploadActivate === "function") window._uploadActivate(taskId);
   }
   const av = AV.create({
     entityType: "task",
@@ -474,6 +476,7 @@
     const isWorkspace = e.target.value === "workspace";
     const isMc = e.target.value === "mc";
     const isText = e.target.value === "text";
+    const isUpload = e.target.value === "upload";
 
     const redirectWithSave = (type) => {
       setTimeout(async () => {
@@ -520,11 +523,20 @@
       return;
     }
 
+    // Upload-Sektionen fehlen (Text/Workspace/MC-Variante)? → Upload-Template
+    if (isUpload && !document.getElementById("upload-section")) {
+      redirectWithSave("upload");
+      return;
+    }
+
     const wsSections = document.querySelectorAll("[data-workspace-section]");
     wsSections.forEach(el => el.classList.toggle("hidden", !isWorkspace));
 
     const mcSections = document.querySelectorAll("[data-mc-section]");
     mcSections.forEach(el => el.classList.toggle("hidden", !isMc));
+
+    const uploadSections = document.querySelectorAll("[data-upload-section]");
+    uploadSections.forEach(el => el.classList.toggle("hidden", !isUpload));
 
     // Auto-Grading-Checkbox: nur für Text/Workspace (MC wird deterministisch bewertet)
     document.querySelectorAll(".auto-grading-section").forEach(el => el.classList.toggle("hidden", isMc));
@@ -929,6 +941,11 @@
     // MC-Fragen (Hook im MC-Template)
     if ((p.task_type || "text") === "mc" && typeof window._mcApplyEnv === "function") {
       window._mcApplyEnv(p);
+    }
+
+    // Upload: Dateistatus (Template/Musterlösung) aus dem Restore laden
+    if ((p.task_type || "text") === "upload" && typeof window._uploadApplyEnv === "function") {
+      window._uploadApplyEnv(p);
     }
   }
 

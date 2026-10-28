@@ -66,6 +66,8 @@ class GradingService:
         """
         if task.task_type.value == "workspace":
             result = await self._grade_workspace(task, submission, session, custom_prompt)
+        elif task.task_type.value == "upload":
+            result = await self._grade_upload(task, submission, session, custom_prompt)
         else:
             result = await self._grade_text(task, submission, session, custom_prompt)
 
@@ -253,6 +255,59 @@ class GradingService:
                               "(Keine privaten Dateien hinterlegt — bitte eigenstaendig bewerten)",
             student_files=self._format_files(ctx.get("student_files") or {}),
             test_results=test_output,
+            max_points=task.max_points,
+            custom_prompt=custom_prompt,
+            config=llm_cfg,
+        )
+
+        data = llm_result.get("data", {})
+        points = float(data.get("points", 0))
+        comment = data.get("feedback", "Kein Feedback generiert.")
+
+        feedback = Feedback(
+            submission_id=submission.id,
+            source=FeedbackSource.LLM,
+            points_earned=points,
+            comment=comment,
+        )
+        session.add(feedback)
+        session.commit()
+        session.refresh(feedback)
+
+        return {
+            "points": points,
+            "max_points": task.max_points,
+            "feedback": feedback,
+            "comment": comment,
+        }
+
+    async def _grade_upload(
+        self, task: Task, submission: Submission, session: Session,
+        custom_prompt: Optional[str] = None,
+    ) -> dict:
+        """Upload-Aufgabe: LLM korrigiert Musterlösung (+ Dateien) +
+        hochgeladene Studenten-Dateien (Binarys/Übergroßes aussortiert,
+        Jupyter-Outputs gestrippt — s. upload_service.collect_upload_texts)."""
+        from services import upload_service
+
+        student_path = upload_service.submission_upload_file(
+            submission.id, submission.upload_file)
+        student_files = (
+            upload_service.collect_upload_texts(student_path)
+            if student_path else {})
+        model_path = upload_service.task_upload_file(
+            task.id, task.upload_solution_file)
+        model_files = (
+            upload_service.collect_upload_texts(model_path) if model_path else {})
+
+        llm_cfg = self.get_llm_config(task, session)
+        llm_result = await self.llm.grade_upload_task(
+            task_description=task.description,
+            model_solution=task.model_solution or "(Keine Musterloesung hinterlegt — bitte eigenstaendig bewerten)",
+            model_solution_files=self._format_files(model_files) or
+                                  "(Keine Musterloesungs-Dateien hinterlegt)",
+            student_files=self._format_files(student_files) or
+                           "(Keine lesbaren Dateien eingereicht)",
             max_points=task.max_points,
             custom_prompt=custom_prompt,
             config=llm_cfg,

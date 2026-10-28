@@ -33,6 +33,7 @@ import json
 import logging
 import re
 import socket
+import zipfile
 from datetime import datetime, timezone
 from typing import Optional, Union
 from urllib.parse import unquote
@@ -51,7 +52,7 @@ from mcp_types import TextContent
 from sqlmodel import Session, func, select
 
 from api.mcp_oauth import AICampusAuthProvider
-from config import PUBLIC_DOMAIN
+from config import PUBLIC_DOMAIN, UPLOAD_MAX_FILE_BYTES
 from database.base import engine
 from database.models import (
     ContentVersion,
@@ -82,7 +83,7 @@ from services import bibtex as bib
 from services import mcp_oauth_service
 from services import mcp_token_service
 from services import notifications as notify
-from services import media_service, version_service
+from services import media_service, upload_service, version_service
 from services.auth_service import set_current_user_id
 from services.content_edits import ContentEditError, _resolve_span, apply_content_edits
 from services.mc_service import McValidationError, mc_total_points, parse_mc_data, student_view, tutor_view
@@ -317,9 +318,11 @@ server = MCPServer(
         "SVG-Dateien werden nicht rasterisiert, sondern als SVG-Applet "
         "gespeichert, Video-Dateien als Video-Medium). "
         "Übungsaufgaben: "
-        "create_task (type 'text' oder 'mc' — Workspace-Aufgaben nur in der "
-        "Kurs-Web-UI) "
-        "und edit_task (bestehende Aufgaben, inkl. MC-Fragen-Ersatz). "
+        "create_task (type 'text', 'mc' oder 'upload' — Workspace-Aufgaben nur "
+        "in der Kurs-Web-UI) und edit_task (bestehende Aufgaben, inkl. "
+        "MC-Fragen-Ersatz); Upload-Aufgaben: Template-/Musterlösungs-Datei "
+        "setzen mit set_upload_task_file (Text, data:-URL oder URL) und lesen "
+        "mit read_upload_task_file (Tutor/Prof). "
         "Quellen-Bibliothek: create_reference / edit_reference (einzelne) und "
         "import_bibtex (mehrere auf einmal aus BibTeX) — zitierbar mit "
         "@cite:shannon1948 (key der Quelle, OHNE Klammern; Liste: list_references). "
@@ -829,6 +832,17 @@ async def read_task(course_id: int, ref: Union[int, str], ctx: Context) -> str:
         }
         if task.text_template:
             out["text_template"] = task.text_template
+        if task.task_type.value == "upload":
+            # Template: alle sehen den Dateinamen (Studierende können die
+            # Datei in der Web-UI herunterladen); Musterlösung nur Tutor.
+            if task.upload_template:
+                out["upload_template"] = task.upload_template
+            if tutor and task.upload_solution_file:
+                out["upload_solution_file"] = task.upload_solution_file
+            if tutor:
+                out["hint"] = (
+                    "Datei-Inhalt lesen: read_upload_task_file(course_id, task_id, kind)"
+                )
         if tutor and task.model_solution:
             out["model_solution"] = task.model_solution
         if task.task_type.value == "mc" and task.mc_data:
@@ -1410,6 +1424,36 @@ async def _download_image_bytes(client: httpx.AsyncClient, url: httpx.URL, max_b
                 raise McpToolError(f"Datei zu groß (max. {max_bytes // (1024 * 1024)} MB).")
             chunks.append(chunk)
     return b"".join(chunks)
+
+
+async def _fetch_file_bytes(url_str: str, max_bytes: int, timeout: float = 20.0) -> bytes:
+    """Lädt eine Datei von einer öffentlichen http(s)-URL.
+
+    Sicherheit: keine Redirects, keine lokalen/internen Ziel-Adressen
+    (SSRF-Schutz via DNS-Auflösung vor dem Download)."""
+    url = httpx.URL(url_str.strip())
+    if url.scheme not in ("http", "https") or not url.host:
+        raise McpToolError("Die URL muss http(s) sein.")
+    try:
+        infos = socket.getaddrinfo(url.host, None)
+    except (socket.gaierror, OSError):
+        raise McpToolError(f"Hostname '{url.host}' konnte nicht aufgelöst werden.")
+    for _fam, _ty, _pr, _cn, sockaddr in infos:
+        ip = ipaddress.ip_address(sockaddr[0].split("%", 1)[0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+            raise McpToolError("Der Download von lokalen/internen Adressen ist nicht erlaubt.")
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=timeout,
+            headers={"User-Agent": _UA_IMAGE_DOWNLOAD},
+        ) as client:
+            return await _download_image_bytes(client, url, max_bytes)
+    except McpToolError:
+        raise
+    except (httpx.HTTPError, OSError):
+        raise McpToolError("Download fehlgeschlagen (Netzwerk-Fehler).")
 
 
 async def _fetch_image_bytes(url_str: str, max_bytes: int = media_service.MAX_UPLOAD_BYTES,
@@ -2315,9 +2359,11 @@ async def create_task(
 ) -> str:
     """Legt eine neue Übungsaufgabe am ENDE der Aufgaben-Liste des Kurses an.
 
-    type = "text" (Klassische Aufgabe, Abgabe als Text) oder "mc"
-    (Multiple Choice mit sofortigem Feedback). Workspace-Aufgaben
-    (Code-Runs) sind via MCP NICHT unterstützt — bitte Kurs-Web-UI.
+    type = "text" (Klassische Aufgabe, Abgabe als Text), "mc" (Multiple
+    Choice mit sofortigem Feedback) oder "upload" (Abgabe als Datei/Zip —
+    Template- und Musterlösungs-Datei danach mit set_upload_task_file
+    setzen). Workspace-Aufgaben (Code-Runs) sind via MCP NICHT
+    unterstützt — bitte Kurs-Web-UI.
 
     description / text_template / model_solution: AICampus-Markdown wie
     im Skript (Details: markdown_manual("script")) — **fett**, Listen,
@@ -2332,9 +2378,12 @@ async def create_task(
     für Studenten nur nach Abgabe sichtbar.
     text_template (nur type="text"): Antwort-Gerüst für die Studenten
     (Lückentext, Tabelle, …) — nur wenn ein Gerüst sinnvoll ist; die
-    Musterlösung zeigt die vollständig ausgefüllte Vorlage.
-    max_points: Pflicht bei type="text"; bei type="mc" wird sie aus der
-    Punkte-Summe der Fragen abgeleitet (Angabe wird ignoriert).
+    Musterlösung zeigt die vollständig ausgefüllte Vorlage. Bei
+    type="upload" dient model_solution als Bewertungskriterien-Text;
+    die eigentliche Musterlösung ist eine DATEI (set_upload_task_file,
+    kind="solution").
+    max_points: Pflicht bei type="text"/"upload"; bei type="mc" wird sie
+    aus der Punkte-Summe der Fragen abgeleitet (Angabe wird ignoriert).
     mc_questions (nur type="mc", Pflicht): Liste von Fragen im Format
     {"question": str, "points": int ≥ 0, "multi_select": bool (Default false),
      "options": [{"text": str, "correct": bool, "feedback": str (optional),
@@ -2350,10 +2399,10 @@ async def create_task(
     Label für die Initial-Version (Default „Erstellt")."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="create_task")
-        if type not in ("text", "mc"):
+        if type not in ("text", "mc", "upload"):
             raise McpToolError(
-                "type muss 'text' oder 'mc' sein (Workspace-Aufgaben werden via "
-                "MCP nicht unterstützt — bitte in der Kurs-Web-UI anlegen)."
+                "type muss 'text', 'mc' oder 'upload' sein (Workspace-Aufgaben "
+                "werden via MCP nicht unterstützt — bitte in der Kurs-Web-UI anlegen)."
             )
         if not (title or "").strip():
             raise McpToolError("Der Titel darf nicht leer sein.")
@@ -2374,8 +2423,10 @@ async def create_task(
         else:
             if mc_questions is not None:
                 raise McpToolError("mc_questions ist nur für type='mc' erlaubt.")
+            if type == "upload" and text_template is not None:
+                raise McpToolError("text_template ist nur für type='text' erlaubt.")
             if max_points is None:
-                raise McpToolError("type='text' erfordert max_points.")
+                raise McpToolError(f"type='{type}' erfordert max_points.")
         max_order = session.exec(
             select(func.max(Task.display_order)).where(Task.course_id == course_id)
         ).one()
@@ -2411,6 +2462,8 @@ async def create_task(
                 "Aufgabe am Ende der Aufgaben-Liste angelegt. "
                 + ("Für Studenten sichtbar." if task.is_visible
                    else "Noch NICHT für Studenten sichtbar (Entwurf) — nach Fertigstellung in der Kurs-Web-UI freischalten.")
+                + (" Template- und Musterlösungs-Datei mit set_upload_task_file setzen."
+                   if task.task_type.value == "upload" else "")
             ),
         })
 
@@ -2536,6 +2589,140 @@ async def edit_task(
             "changed": changed,
             "note": version_note,
         })
+
+
+@mcp_tool
+async def set_upload_task_file(
+    course_id: int,
+    task_id: int,
+    kind: str,
+    filename: str,
+    source: str,
+    ctx: Context,
+) -> str:
+    """Setzt die Datei einer Upload-Aufgabe: Template (kind="template",
+    von Studierenden zum Bearbeiten herunterladbar) oder Musterlösung
+    (kind="solution", nur für die LLM-Bewertung relevant). ERSETZT eine
+    bestehende Datei — ein Löschen gibt es nicht (neues Setzen =
+    Überschreiben).
+
+    source: die Datei als TEXT (Code/Text/Markdown — einfach der Inhalt)
+    ODER eine data:-URL (base64, für Binärdateien und Zips) ODER eine
+    öffentliche http(s)-URL. Max. 200 MB.
+
+    task_id: die Upload-Aufgabe (read_task zeigt bei type="upload" die
+    vorhandenen Dateinamen; Liste: course_overview)."""
+    with Session(engine) as session:
+        user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="set_upload_task_file")
+        task = _resolve(session, Task, course_id, task_id, "Aufgabe")
+        if task.task_type.value != "upload":
+            raise McpToolError("Das ist keine Upload-Aufgabe (type muss 'upload' sein).")
+        if kind not in ("template", "solution"):
+            raise McpToolError('kind muss "template" oder "solution" sein.')
+        try:
+            safe_name = upload_service.safe_filename(filename)
+        except ValueError:
+            raise McpToolError("filename: ungültiger Dateiname (nur Basisname ohne Pfade).")
+        src = (source or "").strip()
+        if not src:
+            raise McpToolError("source darf nicht leer sein.")
+        if src.startswith("data:"):
+            data = _decode_data_url(src)
+        elif src.startswith(("http://", "https://")):
+            data = await _fetch_file_bytes(src, UPLOAD_MAX_FILE_BYTES)
+        else:
+            data = src.encode("utf-8")
+        if len(data) > UPLOAD_MAX_FILE_BYTES:
+            raise McpToolError(f"Datei zu groß (max. {UPLOAD_MAX_FILE_BYTES // (1024 * 1024)} MB).")
+        field = "upload_template" if kind == "template" else "upload_solution_file"
+        old = getattr(task, field)
+        upload_service.save_task_file(int(task.id), safe_name, data)
+        if old and old != safe_name:
+            upload_service.remove_task_file(int(task.id), old)
+        setattr(task, field, safe_name)
+        task.updated_at = datetime.now(timezone.utc)
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+        # Datei kann sich bei gleichem Dateinamen geändert haben →
+        # bewusst OHNE skip_if_same_as_latest (Feld-Snapshot allein
+        # würde den no-op melden).
+        version_service.snapshot_current(
+            session, user, "task", int(task.id), name="MCP Edit")
+        return _json({
+            "id": task.id,
+            "kind": kind,
+            "filename": safe_name,
+            "size": len(data),
+            "note": (
+                'Automatisch angelegt: Version „MCP Edit“ (neuer Zustand). Zustand '
+                "vorher = die Version davor (Rückgängig: list_versions + restore_version)."
+            ),
+        })
+
+
+@mcp_tool
+async def read_upload_task_file(
+    course_id: int,
+    task_id: int,
+    kind: str,
+    ctx: Context,
+    path: Optional[str] = None,
+) -> str:
+    """Liest die Template- (kind="template") oder Musterlösungs-Datei
+    (kind="solution") einer Upload-Aufgabe (Inhalt als Text, gekürzt).
+
+    Bei ZIP-Dateien: ohne path = Dateiliste im Archiv; mit path = Inhalt
+    einer Datei aus dem Archiv (Pfade aus der Liste). Nur für Tutor/Prof."""
+    with Session(engine) as session:
+        user, _token, role = _auth(ctx, session, course_id, tool_name="read_upload_task_file")
+        if not _is_tutor(role):
+            raise McpToolError(
+                "Nur für Tutor/Prof (Studenten sehen die Template-Datei in der Web-UI).")
+        task = _resolve(session, Task, course_id, task_id, "Aufgabe")
+        if task.task_type.value != "upload":
+            raise McpToolError("Das ist keine Upload-Aufgabe (type muss 'upload' sein).")
+        if kind not in ("template", "solution"):
+            raise McpToolError('kind muss "template" oder "solution" sein.')
+        name = task.upload_template if kind == "template" else task.upload_solution_file
+        p = upload_service.task_upload_file(int(task.id), name)
+        if not p:
+            raise McpToolError(
+                f"Keine {kind}-Datei für diese Aufgabe (setzen: set_upload_task_file).")
+        truncated = False
+        if upload_service.is_zip_file(p):
+            if not path:
+                files = upload_service.list_upload_files(p)
+                return _json({
+                    "file": name,
+                    "type": "zip",
+                    "files": [{"path": f["path"], "size": f["size"]} for f in files],
+                    "hint": "Inhalt lesen: path = Pfad aus der Liste.",
+                })
+            try:
+                data = upload_service.read_upload_file(p, path)
+            except (ValueError, OSError, zipfile.BadZipFile):
+                raise McpToolError(
+                    f"Datei '{path}' nicht im Archiv (Liste: ohne path aufrufen).")
+        else:
+            if path:
+                raise McpToolError("path ist nur für ZIP-Dateien relevant.")
+            data = p.read_bytes()
+            if len(data) > 2_000_000:
+                data = data[:2_000_000]
+                truncated = True
+        if b"\x00" in data[:1024]:
+            return _json({
+                "file": name,
+                "path": path,
+                "binary": True,
+                "note": f"Binärdatei ({len(data)} Bytes) — Inhalt nicht als Text lesbar.",
+            })
+        text = data.decode("utf-8", errors="replace")
+        if len(text) > 100_000:
+            text = text[:100_000] + "\n… (gekürzt) …"
+            truncated = True
+        return _json({"file": name, "path": path, "truncated": truncated, "content": text})
 
 
 @mcp_tool

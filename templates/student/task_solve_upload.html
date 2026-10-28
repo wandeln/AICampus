@@ -1,0 +1,70 @@
+{% extends "student/task_solve_base.html" %}
+{% block extra_head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ asset('css/workspace.css') }}">
+<script src="{{ asset('js/workspace.js') }}"></script>
+{% endblock %}
+
+{% block solution_area %}
+        <!-- ─── UPLOAD-AUFGABE (Datei/Zip einreichen) ─────────────── -->
+        <div class="card">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="font-semibold text-gray-800">Deine Lösung</h2>
+            <span id="solve-timer" class="text-sm font-mono text-blue-600 tabular-nums">00:00</span>
+          </div>
+          <p class="text-xs text-gray-500 mb-3">
+            Reiche genau <span class="font-medium text-gray-700">eine Datei</span> ein
+            (Code, Text, HTML oder Zip-Archiv, max. 200&nbsp;MB).
+          </p>
+
+          {% if task.has_upload_template %}
+          <div class="mb-3 flex items-center gap-2 flex-wrap">
+            <a href="/api/tasks/{{ task.id }}/upload/template"
+               class="text-blue-700 hover:text-blue-900 border border-blue-300 hover:border-blue-500 px-3 py-1.5 rounded-lg text-sm transition inline-flex items-center gap-1.5"
+               title="Template-Datei der Aufgabe herunterladen und bearbeiten">
+              ⬇️ Template herunterladen
+            </a>
+            <span class="text-xs text-gray-400 truncate max-w-[300px]" title="{{ task.upload_template }}">{{ task.upload_template }}</span>
+          </div>
+          {% endif %}
+
+          <input type="file" id="upload-file-input"
+                 class="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 file:cursor-pointer">
+          <p id="upload-file-status" class="text-xs text-gray-400 mt-1.5"></p>
+
+          <button id="submit-btn"
+                  class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition mt-4">
+            📤 Lösung einreichen
+          </button>
+
+          <!-- ─── Grading Progress (wie Text) ────────────────────── -->
+          <div id="grading-progress" class="hidden mt-4">
+            <div class="flex items-center gap-2 text-sm text-green-700">
+              <span class="animate-spin">⏳</span>
+              <span>LLM korrigiert deine Lösung...</span>
+              <span id="grading-timer" class="font-mono">0s</span>
+            </div>
+            <div class="mt-2 w-full bg-green-200 rounded-full h-2">
+              <div id="grading-progress-bar" class="bg-green-600 h-2 rounded-full transition-all" style="width: 10%"></div>
+            </div>
+            <p class="mt-1.5 text-xs text-amber-600">⚠️ Warnung: LLMs können Fehler machen – wende dich bei Fragen an deinen Tutor.</p>
+          </div>
+        </div>
+{% endblock %}
+
+{% block solve_scripts %}
+  // Upload: Dateiauswahl live in den Status spiegeln
+  (function () {
+    const input = document.getElementById("upload-file-input");
+    const status = document.getElementById("upload-file-status");
+    if (!input || !status) return;
+    input.addEventListener("change", () => {
+      const f = input.files && input.files[0];
+      if (!f) { status.textContent = ""; return; }
+      const mb = (f.size / (1024 * 1024)).toFixed(1);
+      status.textContent = "📎 " + f.name + " (" + mb + " MB)";
+      status.classList.remove("text-gray-400");
+      status.classList.add("text-gray-600");
+    });
+  })();
+{% endblock %}

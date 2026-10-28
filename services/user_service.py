@@ -54,6 +54,7 @@ from database.models import (
     WorkspaceRun,
 )
 from services import course_service, import_service, media_service
+from services import upload_service
 from services.workspace_service import workspace_service
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,8 @@ def delete_user_with_data(session: Session, user: User) -> str:
         ).first() is not None
         if task.task_type.value == "workspace" or task_has_workspace_rows:
             workspace_service.discard_workspace_content(session, task)
+        if task.task_type.value == "upload":
+            upload_service.cleanup_task(task.id)
         # Media-Usages der Aufgabe vorher entfernen (NOT-NULL-FK task_id)
         for usage in session.exec(
             select(MediaUsage).where(MediaUsage.task_id == task.id)
@@ -201,7 +204,7 @@ def delete_user_with_data(session: Session, user: User) -> str:
             select(Feedback).where(Feedback.submission_id == sub.id)
         ).all():
             session.delete(fb)
-        if sub.workspace_snapshot:
+        if sub.workspace_snapshot or sub.upload_file:
             snapshot_dirs.append(SUBMISSION_DIR / str(sub.id))
         session.delete(sub)
     session.flush()

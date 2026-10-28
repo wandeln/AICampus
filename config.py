@@ -33,8 +33,18 @@ WORKSPACE_DIR = BASE_DIR / "data" / "workspaces"
 WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Einreichungs-Snapshots: data/submissions/{submission_id}/workspace.tar.gz
+# Upload-Aufgaben: eingereichte Datei (1 Datei) unter data/submissions/{id}/<name>
 SUBMISSION_DIR = BASE_DIR / "data" / "submissions"
 SUBMISSION_DIR.mkdir(parents=True, exist_ok=True)
+
+# Upload-Aufgaben: Template- + Musterlösungs-Dateien (Datei wie hochgeladen,
+# Name aus Task-Feldern) unter data/upload_tasks/{task_id}/<name>
+UPLOAD_TASK_DIR = BASE_DIR / "data" / "upload_tasks"
+UPLOAD_TASK_DIR.mkdir(parents=True, exist_ok=True)
+
+# Größenlimit Upload-Aufgaben (je hochgeladener Datei: Template,
+# Musterlösung, Student-Einreichung)
+UPLOAD_MAX_FILE_BYTES = 200 * 1024 * 1024  # 200 MB
 
 # Versions-Snapshots der Workspace-Dateibäume in Task-Versionen:
 # data/version_snapshots/{version_id}/workspace.tar.gz (+ meta.json)

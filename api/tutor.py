@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from sqlmodel import Session, SQLModel, delete, select
 
 from database.base import engine, get_session
@@ -61,6 +61,8 @@ from services.mc_service import (
     validate_mc_data as _mc_validate,
 )
 from services.media_service import all_media_for_course, sync_media_usages
+from services import upload_service
+from config import UPLOAD_MAX_FILE_BYTES
 from services.references_service import build_references_text
 from services.settings_resolver import get_effective_compute_config, get_effective_llm_config
 from services.task_filter import multi_keyword_matches
@@ -282,6 +284,10 @@ async def create_task(
     session.commit()
     session.refresh(task)
     sync_media_usages(session, course_id)
+    if task_type == TaskType.UPLOAD:
+        # Stale-Dir-Schutz: falls unter der neuen Task-ID noch alte
+        # Upload-Dateien liegen (ID-Wiederverwendung), muss der Task leer starten.
+        upload_service.cleanup_task(task.id)
     if task_type == TaskType.WORKSPACE:
         # Stale-Dir-Schutz: falls unter der neuen Task-ID noch ein alter
         # Workspace-Ordner liegt (ID-Wiederverwendung), muss der Task leer starten.
@@ -385,6 +391,15 @@ async def get_task(
             result["workspace_internet"] = task.workspace_internet
             result["workspace_assets_status"] = task.workspace_assets_status
     
+    if task.task_type.value == "upload":
+        result["upload_template"] = task.upload_template
+        result["has_upload_template"] = (
+            upload_service.task_upload_file(task.id, task.upload_template) is not None)
+        if is_tutor:
+            result["upload_solution_file"] = task.upload_solution_file
+            result["has_upload_solution_file"] = (
+                upload_service.task_upload_file(task.id, task.upload_solution_file) is not None)
+
     if is_tutor:
         result["model_solution"] = task.model_solution
 
@@ -472,6 +487,17 @@ async def update_task(
             and task.task_type != TaskType.WORKSPACE:
         workspace_service.discard_workspace_content(
             session, task, keep_version_snapshots=True)
+    # Typ-Wechsel weg von Upload: Dateien + Felder entsorgen
+    if "task_type" in body and old_task_type == TaskType.UPLOAD \
+            and task.task_type != TaskType.UPLOAD:
+        upload_service.remove_task_file(task.id, task.upload_template)
+        upload_service.remove_task_file(task.id, task.upload_solution_file)
+        task.upload_template = None
+        task.upload_solution_file = None
+    # Typ-Wechsel zu Upload: Stale-Dir-Schutz (alte Dateien anderer Tasks)
+    if "task_type" in body and old_task_type != TaskType.UPLOAD \
+            and task.task_type == TaskType.UPLOAD:
+        upload_service.cleanup_task(task.id)
 
     # Workspace-Felder (Umgebung + Dateien; nur explizit übergebene Keys)
     if task.task_type == TaskType.WORKSPACE:
@@ -533,10 +559,14 @@ async def delete_task(
         # Task aus der DB gelöscht wird (Instanz ist danach expired/detached)
         workspace_service.discard_workspace_content(session, task)
 
+    # Upload-Dateien (Task-Dateien + Einreichungs-Dateien) aufräumen
+    upload_service.cleanup_task(task.id)
+
     # Media-Usages der Aufgabe vorher entfernen (FK nach tasks.id)
     session.exec(delete(MediaUsage).where(MediaUsage.task_id == task.id))
 
     for sub in task.submissions:
+        upload_service.cleanup_submission(sub.id, sub.upload_file)
         for fb in sub.feedback_list:
             session.delete(fb)
         session.delete(sub)
@@ -655,6 +685,8 @@ async def duplicate_task(
         workspace_main_file=task.workspace_main_file,
         workspace_engines=task.workspace_engines,
         workspace_image=task.workspace_image,
+        upload_template=task.upload_template,
+        upload_solution_file=task.upload_solution_file,
         display_order=task.display_order + 1,
     )
     session.add(new_task)
@@ -665,6 +697,12 @@ async def duplicate_task(
             _copy_workspace_content(session, task, new_task)
         except Exception:
             shutil.rmtree(task_workspace_dir(new_task.id), ignore_errors=True)
+            raise
+    if task.task_type.value == "upload":
+        try:
+            upload_service.copy_task_files(task.id, new_task.id)
+        except Exception:
+            upload_service.cleanup_task(new_task.id)
             raise
 
     session.commit()
@@ -684,6 +722,254 @@ async def duplicate_task(
             "display_order": new_task.display_order,
         },
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# UPLOAD-AUFGABEN (Template + Musterlösungs-Datei)
+# ═══════════════════════════════════════════════════════════════════
+
+def _load_upload_task(task_id: int, session: Session, user: User) -> Task:
+    """Task laden + Tutor-Zugriff + Upload-Typ (Guard für Datei-Endpoints)."""
+    task = session.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Aufgabe nicht gefunden.")
+    membership = session.exec(
+        select(UserCourse)
+        .where(UserCourse.user_id == user.id)
+        .where(UserCourse.course_id == task.course_id)
+    ).first()
+    if user.role != GlobalUserRole.ADMIN and not (membership and
+            membership.role_in_course in (CourseRole.PROF, CourseRole.TUTOR)):
+        raise HTTPException(403, "Keine Berechtigung, diese Aufgabe zu bearbeiten.")
+    if task.task_type != TaskType.UPLOAD:
+        raise HTTPException(400, "Das ist keine Upload-Aufgabe.")
+    return task
+
+
+async def _save_upload_task_file(task: Task, kind: str, file: UploadFile) -> str:
+    """Template-/Musterlösungs-Datei speichern (1 Datei, ersetzt altes).
+    Liefert den neuen Dateinamen."""
+    data = await file.read()
+    if len(data) > UPLOAD_MAX_FILE_BYTES:
+        raise HTTPException(413, f"Datei zu groß (max. {UPLOAD_MAX_FILE_BYTES // (1024*1024)} MB).")
+    try:
+        name = upload_service.safe_filename(file.filename or "")
+    except ValueError:
+        raise HTTPException(400, "Ungültiger Dateiname.")
+    field = "upload_template" if kind == "template" else "upload_solution_file"
+    old = getattr(task, field)
+    upload_service.save_task_file(task.id, name, data)
+    if old and old != name:
+        upload_service.remove_task_file(task.id, old)
+    setattr(task, field, name)
+    return name
+
+
+def _serve_upload_file(path) -> FileResponse:
+    return FileResponse(path, filename=path.name, media_type="application/octet-stream")
+
+
+@router.post("/tasks/{task_id}/upload/template")
+async def upload_template_file(
+    task_id: int,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Template-Datei hochladen (eine Datei; ersetzt die bisherige)."""
+    task = _load_upload_task(task_id, session, user)
+    name = await _save_upload_task_file(task, "template", file)
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+    p = upload_service.task_upload_file(task.id, name)
+    return {"ok": True, "filename": name,
+            "size": p.stat().st_size if p else None}
+
+
+@router.delete("/tasks/{task_id}/upload/template")
+async def delete_template_file(
+    task_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Template-Datei entfernen."""
+    task = _load_upload_task(task_id, session, user)
+    if task.upload_template:
+        upload_service.remove_task_file(task.id, task.upload_template)
+        task.upload_template = None
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+    return {"ok": True}
+
+
+@router.get("/tasks/{task_id}/upload/template")
+async def download_template_file(
+    task_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Template-Datei herunterladen (Student zum Bearbeiten oder Tutor)."""
+    task = session.get(Task, task_id)
+    if not task or task.task_type != TaskType.UPLOAD:
+        raise HTTPException(404, "Aufgabe nicht gefunden.")
+    membership = session.exec(
+        select(UserCourse)
+        .where(UserCourse.user_id == user.id)
+        .where(UserCourse.course_id == task.course_id)
+    ).first()
+    if user.role != GlobalUserRole.ADMIN and not membership:
+        raise HTTPException(403, "Kein Zugriff auf diese Aufgabe.")
+    is_tutor = user.role == GlobalUserRole.ADMIN or (membership and
+                 membership.role_in_course in (CourseRole.PROF, CourseRole.TUTOR))
+    if not is_tutor and not task.is_visible:
+        raise HTTPException(404, "Aufgabe nicht gefunden.")
+    p = upload_service.task_upload_file(task.id, task.upload_template)
+    if not p:
+        raise HTTPException(404, "Keine Template-Datei für diese Aufgabe.")
+    return _serve_upload_file(p)
+
+
+@router.post("/tasks/{task_id}/upload/solution")
+async def upload_solution_file(
+    task_id: int,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Musterlösungs-Datei hochladen (eine Datei; ersetzt die bisherige)."""
+    task = _load_upload_task(task_id, session, user)
+    name = await _save_upload_task_file(task, "solution", file)
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+    p = upload_service.task_upload_file(task.id, name)
+    return {"ok": True, "filename": name,
+            "size": p.stat().st_size if p else None}
+
+
+@router.delete("/tasks/{task_id}/upload/solution")
+async def delete_solution_file(
+    task_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Musterlösungs-Datei entfernen."""
+    task = _load_upload_task(task_id, session, user)
+    if task.upload_solution_file:
+        upload_service.remove_task_file(task.id, task.upload_solution_file)
+        task.upload_solution_file = None
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+    return {"ok": True}
+
+
+@router.get("/tasks/{task_id}/upload/solution")
+async def download_solution_file(
+    task_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Musterlösungs-Datei herunterladen (nur Tutor)."""
+    task = _load_upload_task(task_id, session, user)
+    p = upload_service.task_upload_file(task.id, task.upload_solution_file)
+    if not p:
+        raise HTTPException(404, "Keine Musterlösungs-Datei für diese Aufgabe.")
+    return _serve_upload_file(p)
+
+
+@router.get("/tasks/{task_id}/submissions/{submission_id}/upload/download")
+async def download_submission_upload(
+    task_id: int,
+    submission_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Eingereichte Datei herunterladen (Tutor oder der Student selbst)."""
+    task = session.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Aufgabe nicht gefunden.")
+    submission = session.get(Submission, submission_id)
+    if not submission or submission.task_id != task.id:
+        raise HTTPException(404, "Einreichung nicht gefunden.")
+    membership = session.exec(
+        select(UserCourse)
+        .where(UserCourse.user_id == user.id)
+        .where(UserCourse.course_id == task.course_id)
+    ).first()
+    is_tutor = user.role == GlobalUserRole.ADMIN or (membership and
+                 membership.role_in_course in (CourseRole.PROF, CourseRole.TUTOR))
+    if not is_tutor and submission.student_id != user.id:
+        raise HTTPException(403, "Kein Zugriff auf diese Einreichung.")
+    p = upload_service.submission_upload_file(submission.id, submission.upload_file)
+    if not p:
+        raise HTTPException(404, "Keine Datei für diese Einreichung.")
+    return _serve_upload_file(p)
+
+
+# ─── Upload-Viewer (Dateiliste + Dateiinhalt, Tutor + Student) ──────
+
+def _load_submission_for_upload(submission_id: int, session: Session,
+                                user: User) -> tuple[Task, Submission]:
+    """Submission eines Upload-Tasks + Zugriff (Tutor oder eigener Student)."""
+    submission = session.get(Submission, submission_id)
+    if not submission:
+        raise HTTPException(404, "Einreichung nicht gefunden.")
+    task = session.get(Task, submission.task_id)
+    if not task or task.task_type != TaskType.UPLOAD:
+        raise HTTPException(404, "Einreichung nicht gefunden.")
+    membership = session.exec(
+        select(UserCourse)
+        .where(UserCourse.user_id == user.id)
+        .where(UserCourse.course_id == task.course_id)
+    ).first()
+    is_tutor = user.role == GlobalUserRole.ADMIN or (membership and
+                 membership.role_in_course in (CourseRole.PROF, CourseRole.TUTOR))
+    if not is_tutor and submission.student_id != user.id:
+        raise HTTPException(403, "Kein Zugriff auf diese Einreichung.")
+    return task, submission
+
+
+@router.get("/submissions/{submission_id}/upload/files")
+async def list_submission_upload_files(
+    submission_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Dateiliste der eingereichten Datei (Zip → entpackter Baum)."""
+    _, submission = _load_submission_for_upload(submission_id, session, user)
+    p = upload_service.submission_upload_file(submission.id, submission.upload_file)
+    if not p:
+        raise HTTPException(404, "Keine Datei für diese Einreichung.")
+    return {"files": upload_service.list_upload_files(p)}
+
+
+@router.get("/submissions/{submission_id}/upload/files/{path:path}")
+async def read_submission_upload_file(
+    submission_id: int,
+    path: str,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Inhalt einer Datei der eingereichten Datei (Viewer, max. 2 MB)."""
+    _, submission = _load_submission_for_upload(submission_id, session, user)
+    p = upload_service.submission_upload_file(submission.id, submission.upload_file)
+    if not p:
+        raise HTTPException(404, "Keine Datei für diese Einreichung.")
+    try:
+        data = upload_service.read_upload_file(p, path)
+    except FileNotFoundError:
+        raise HTTPException(404, "Datei nicht gefunden.")
+    except ValueError:
+        raise HTTPException(400, "Ungültiger Dateipfad.")
+    is_binary = b"\x00" in data[:1024]
+    return Response(
+        content=data,
+        media_type="application/octet-stream" if is_binary else "text/plain; charset=utf-8",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.patch("/tasks/{task_id}/visibility")
@@ -1234,8 +1520,10 @@ async def ai_generate_task(
     course_media = all_media_for_course(session, course_id)
     references = build_references_text(session, course_id)
 
-    if task_type == "text":
-        # ── Text-Aufgabe: Titel/Aufgabenstellung/Vorlage/Musterlösung ──
+    if task_type in ("text", "upload"):
+        # ── Text-/Upload-Aufgabe: Titel/Aufgabenstellung/Musterlösung ──
+        # (Upload: ohne text_template — die Dateien laufen über eigene
+        # Endpoints; der Musterlösungstext = Bewertungskriterien.)
         text_fields = [f for f, active in (
             ("title", gen_title),
             ("description", gen_description),
@@ -1791,6 +2079,7 @@ async def get_student_submissions(
             # Student-View (bleibt stabil bei späteren Aufgaben-Edits).
             "mc_result": sub.mc_result,
             "workspace_snapshot": bool(sub.workspace_snapshot),
+            "upload_file": sub.upload_file,
             "attempt_number": sub.attempt_number,
             "submitted_at": utc_iso(sub.submitted_at) or "",
             "status": sub.status.value,
@@ -1805,6 +2094,12 @@ async def get_student_submissions(
             "task_type": task.task_type.value,
             "description": task.description,
             "model_solution": task.model_solution,
+            "upload_template": task.upload_template,
+            "has_upload_template": (
+                upload_service.task_upload_file(task.id, task.upload_template) is not None),
+            "upload_solution_file": task.upload_solution_file,
+            "has_upload_solution_file": (
+                upload_service.task_upload_file(task.id, task.upload_solution_file) is not None),
             "max_points": task.max_points,
         },
         "student": {

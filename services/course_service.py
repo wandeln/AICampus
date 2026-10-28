@@ -42,6 +42,7 @@ from database.models import (
     UserCourse,
 )
 from services import import_service
+from services import upload_service
 from services.workspace_service import workspace_service
 
 logger = logging.getLogger(__name__)
@@ -182,6 +183,9 @@ def delete_course(session: Session, course: Course) -> str:
             # Agent-Ressourcen + lokale Dateien + Workspace-DB-Rows
             # (NOT NULL-FKs ohne Relationship-Cascade)
             workspace_service.discard_workspace_content(session, task)
+        if task.task_type.value == "upload":
+            # Template-/Musterlösungs-Dateien der Aufgabe
+            upload_service.cleanup_task(task_id)
         submissions = session.exec(
             select(Submission).where(Submission.task_id == task_id)
         ).all()
@@ -191,7 +195,7 @@ def delete_course(session: Session, course: Course) -> str:
             ).all()
             for fb in feedbacks:
                 session.delete(fb)
-            if sub.workspace_snapshot:
+            if sub.workspace_snapshot or sub.upload_file:
                 submission_dirs.append(SUBMISSION_DIR / str(sub.id))
             session.delete(sub)
         hints = session.exec(

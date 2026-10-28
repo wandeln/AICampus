@@ -25,6 +25,7 @@
           <option value="text">Textaufgaben</option>
           <option value="workspace">Workspace-Aufgaben</option>
           <option value="mc">Multiple-Choice-Aufgaben</option>
+          <option value="upload">Upload-Aufgaben</option>
         </select>
       </div>
       <div class="flex items-end">
@@ -228,6 +229,8 @@
         ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-700">💻 Workspace</span>'
         : task.task_type === 'mc'
         ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700">🎯 Multiple Choice</span>'
+        : task.task_type === 'upload'
+        ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">📤 Upload</span>'
         : '<span class="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">📄 Text</span>';
 
       let medalBadge = '';

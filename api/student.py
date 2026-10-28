@@ -22,7 +22,7 @@ from sqlmodel import Session, SQLModel, select
 from starlette.websockets import WebSocketDisconnect
 
 from compute_agent.auth import make_token
-from config import SUBMISSION_DIR
+from config import SUBMISSION_DIR, UPLOAD_MAX_FILE_BYTES
 from database.base import engine, get_session
 from database.models import (
     Notification,
@@ -31,6 +31,7 @@ from database.models import (
     Course, UserCourse, CourseRole, WorkspaceRun, GlobalUserRole,
 )
 from services import notifications
+from services import upload_service
 from services.auth_service import decode_access_token, get_current_user
 from services.compute_client import (
     ComputeAgentError,
@@ -104,7 +105,7 @@ async def get_task_detail(
     if not _check_course_access(session, user, task.course_id):
         raise HTTPException(403, "Kein Zugriff auf diese Aufgabe.")
 
-    return {
+    result = {
         "id": task.id,
         "title": task.title,
         "task_type": task.task_type.value,
@@ -115,6 +116,20 @@ async def get_task_detail(
         "text_template": task.text_template if task.task_type.value == "text" else None,
         "hints_enabled": task.hints_enabled,
     }
+    if task.task_type.value == "upload":
+        result["upload_template"] = task.upload_template
+        result["has_upload_template"] = (
+            upload_service.task_upload_file(task.id, task.upload_template) is not None)
+    return result
+
+
+def _check_submit_allowed(task: Task, existing_count: int) -> None:
+    """Deadline + Max-Attempts-Checks (Text/Workspace/Upload gemeinsam)."""
+    deadline = parse_deadline(task.deadline)
+    if deadline is not None and datetime.now(timezone.utc) > deadline:
+        raise HTTPException(400, "Deadline ist verstrichen.")
+    if task.max_attempts and existing_count >= task.max_attempts:
+        raise HTTPException(400, f"Maximal {task.max_attempts} Versuche erlaubt.")
 
 
 # =================================================================
@@ -141,6 +156,9 @@ async def submit_solution(
     task = session.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Aufgabe nicht gefunden.")
+    if task.task_type.value == "upload":
+        # Upload-Aufgaben haben ihr eigenes Endpoint (multipart, 1 Datei)
+        raise HTTPException(400, "Upload-Aufgabe: bitte die Datei über die Upload-Einreichung einreichen.")
 
     # Check course access
     membership = session.exec(
@@ -154,19 +172,13 @@ async def submit_solution(
 
     body = await request.json()
 
-    # Deadline check (UTC-Moment; naive DB-Werte = Campus-Zone, s. timeutil)
-    deadline = parse_deadline(task.deadline)
-    if deadline is not None and datetime.now(timezone.utc) > deadline:
-        raise HTTPException(400, "Deadline ist verstrichen.")
-
-    # Max attempts check
+    # Deadline + Max attempts check
     existing_subs = session.exec(
         select(Submission)
         .where(Submission.task_id == task.id)
         .where(Submission.student_id == user.id)
     ).all()
-    if task.max_attempts and len(existing_subs) >= task.max_attempts:
-        raise HTTPException(400, f"Maximal {task.max_attempts} Versuche erlaubt.")
+    _check_submit_allowed(task, len(existing_subs))
 
     # Type narrowing: session.get() gibt immer ein Objekt mit ID zurueck
     assert task.id is not None
@@ -285,6 +297,101 @@ async def submit_solution(
     )
 
     # Sofort zurueckgeben — Frontend pollt das Ergebnis
+    return {
+        "submission_id": submission.id,
+        "attempt_number": submission.attempt_number,
+        "status": "pending",
+        "message": "Loesung wird korrigiert... bitte warten.",
+        "max_points": task.max_points,
+        "max_attempts": task.max_attempts,
+    }
+
+
+@router.post("/tasks/{task_id}/upload/submit")
+async def submit_upload_solution(
+    task_id: int,
+    file: UploadFile = File(...),
+    solve_time_seconds: str = Form("0"),
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Upload-Aufgabe: EINE Datei (Code/Text/HTML oder Zip) einreichen →
+    original speichern, Grading im Hintergrund (Polling wie bei Text/Workspace)."""
+    task = session.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Aufgabe nicht gefunden.")
+    if task.task_type.value != "upload":
+        raise HTTPException(400, "Das ist keine Upload-Aufgabe.")
+
+    if not _check_course_access(session, user, task.course_id):
+        raise HTTPException(403, "Kein Zugriff auf diese Aufgabe.")
+
+    existing_subs = session.exec(
+        select(Submission)
+        .where(Submission.task_id == task.id)
+        .where(Submission.student_id == user.id)
+    ).all()
+    _check_submit_allowed(task, len(existing_subs))
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Leere Datei.")
+    if len(data) > UPLOAD_MAX_FILE_BYTES:
+        raise HTTPException(
+            413, f"Datei zu groß (max. {UPLOAD_MAX_FILE_BYTES // (1024*1024)} MB).")
+    try:
+        filename = upload_service.safe_filename(file.filename or "")
+    except ValueError:
+        raise HTTPException(400, "Ungültiger Dateiname.")
+    try:
+        solve_time = float(solve_time_seconds or 0)
+    except (TypeError, ValueError):
+        solve_time = 0.0
+
+    submission = Submission(
+        task_id=task.id,
+        student_id=user.id,
+        solution=filename,  # Label für Historie/Hints
+        upload_file=filename,
+        attempt_number=len(existing_subs) + 1,
+        solve_time_seconds=solve_time,
+        status=SubmissionStatus.PENDING,
+    )
+    session.add(submission)
+    session.commit()
+    session.refresh(submission)
+    assert submission.id is not None
+
+    try:
+        upload_service.save_submission_file(submission.id, filename, data)
+    except OSError:
+        session.delete(submission)
+        session.commit()
+        raise HTTPException(500, "Speichern der Datei fehlgeschlagen.")
+
+    # Automatische Korrektur deaktiviert: Einreichung bleibt PENDING
+    if not task.auto_grading_enabled:
+        return {
+            "submission_id": submission.id,
+            "attempt_number": submission.attempt_number,
+            "status": "no_grading",
+            "message": "Loesung eingereicht — sie wird manuell korrigiert.",
+            "max_points": task.max_points,
+            "max_attempts": task.max_attempts,
+        }
+
+    grading_task = spawn_job(
+        _run_grading_background(
+            task_id=task.id,
+            submission_id=submission.id,
+            attempt_number=submission.attempt_number,
+        )
+    )
+    _GRADING_TASKS[submission.id] = grading_task
+    grading_task.add_done_callback(
+        lambda t, sid=submission.id: _GRADING_TASKS.pop(sid, None)
+    )
+
     return {
         "submission_id": submission.id,
         "attempt_number": submission.attempt_number,
@@ -418,6 +525,9 @@ async def cancel_grading(
     if submission.workspace_snapshot:
         # Snapshot (data/submissions/{id}/) von der Platte räumen
         shutil.rmtree(SUBMISSION_DIR / str(submission.id), ignore_errors=True)
+    elif submission.upload_file:
+        # Upload-Datei + Extraktions-Cache von der Platte räumen
+        upload_service.cleanup_submission(submission.id, submission.upload_file)
     session.delete(submission)
     session.commit()
 

@@ -62,9 +62,10 @@
       <span class="px-2 py-0.5 rounded text-xs font-medium
         {% if task.task_type == 'workspace' %}bg-indigo-100 text-indigo-700
         {% elif task.task_type == 'mc' %}bg-emerald-100 text-emerald-700
+        {% elif task.task_type == 'upload' %}bg-amber-100 text-amber-700
         {% else %}bg-gray-100 text-gray-600
         {% endif %}" style="align-content: center;">
-        {{ '💻 Workspace' if task.task_type == 'workspace' else '🎯 Multiple Choice' if task.task_type == 'mc' else '📄 Text' }}
+        {{ '💻 Workspace' if task.task_type == 'workspace' else '🎯 Multiple Choice' if task.task_type == 'mc' else '📤 Upload' if task.task_type == 'upload' else '📄 Text' }}
       </span>
       <span class="badge px-2 py-0.5 rounded bg-gray-100 text-gray-600">
         {{ latest_points }} /  {{ task.max_points }} Punkte
@@ -281,6 +282,62 @@
                 </script>
                 {% else %}
                 <p class="text-gray-400 text-sm italic">Kein Snapshot erhalten.</p>
+                {% endif %}
+              {% elif task.task_type == 'upload' %}
+                {% if sub.upload_file %}
+                <div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3">
+                  📤 Eingereichte Datei: {{ sub.upload_file }}
+                  <span class="block text-xs text-indigo-500 mt-0.5">
+                    Read-only — Stand zum Einreichzeitpunkt
+                  </span>
+                </div>
+                <div class="mb-2">
+                  <a href="/api/tasks/{{ task.id }}/submissions/{{ sub.id }}/upload/download"
+                     class="text-blue-700 hover:text-blue-900 border border-blue-300 hover:border-blue-500 px-3 py-1.5 rounded-lg text-sm transition inline-flex items-center gap-1.5">
+                    ⬇️ Datei herunterladen
+                  </a>
+                </div>
+                <!-- Read-only Datei-Ansicht (gleiche Komponente wie Workspace) -->
+                <div class="ws-tree-editor-wrap flex flex-col sm:flex-row h-[540px] sm:h-[420px] border border-gray-200 rounded-lg overflow-hidden bg-white">
+                  <div class="flex flex-col h-[220px] sm:h-auto sm:w-56 shrink-0 border-b sm:border-b-0 sm:border-r border-gray-200 bg-gray-50">
+                    <div class="flex items-center gap-1 p-1.5 border-b border-gray-200 bg-gray-100">
+                      <span class="text-[11px] text-gray-500 truncate flex-1">Dateien zum Einreichzeitpunkt</span>
+                      <button type="button" id="ws-files-fullscreen-btn" title="Vollbild" class="ws-tree-btn">⛶</button>
+                    </div>
+                    <div id="ws-sub-{{ sub.id }}-tree" class="flex-1 min-h-0 overflow-y-auto p-1 text-sm">
+                      <div class="text-gray-400 text-xs p-1">Dateien werden geladen …</div>
+                    </div>
+                  </div>
+                  <div id="ws-split-handle"
+                       role="separator"
+                       title="Ziehen: Baum/Editor vergrößern · Doppelklick: Standardgröße"></div>
+                  <div class="flex-1 min-h-0">
+                    <div class="ws-editor w-full h-full min-h-0">
+                      <textarea id="ws-sub-{{ sub.id }}-editor" class="w-full h-full font-mono text-sm" spellcheck="false"
+                                placeholder="Datei links auswählen, um sie anzusehen …"></textarea>
+                      <div id="ws-sub-{{ sub.id }}-media" class="hidden h-full"></div>
+                    </div>
+                  </div>
+                </div>
+                <script>
+                  (function () {
+                    var t = document.getElementById("ws-sub-{{ sub.id }}-tree");
+                    var e = document.getElementById("ws-sub-{{ sub.id }}-editor");
+                    var m = document.getElementById("ws-sub-{{ sub.id }}-media");
+                    if (!t || !e || !window.WorkspaceUI) return;
+                    var ui = WorkspaceUI.init({
+                      treeEl: t,
+                      editorEl: e,
+                      mediaEl: m,
+                      apiBase: "/api/submissions/{{ sub.id }}/upload",
+                      readOnlyCheck: function () { return true; },
+                      emptyMsg: "(keine Dateien in dieser Abgabe)",
+                    });
+                    ui.refresh();  // init lädt keine Dateien selbst
+                  })();
+                </script>
+                {% else %}
+                <p class="text-gray-400 text-sm italic">Keine Datei erhalten.</p>
                 {% endif %}
               {% else %}
                 {% if task.task_type == 'mc' and sub.mc_result %}
@@ -811,6 +868,7 @@
 
     const body = {};
     let submittedText = "";
+    let uploadFile = null;
     {% if task.task_type == 'text' %}
       const textEd = window._textSolutionEditor;
       body.solution = textEd ? textEd.getValue() : document.getElementById("text-solution").value;
@@ -848,9 +906,19 @@
           const t = String((pos >= 0 && q.options[pos]) || "").replace(/\s+/g, " ").trim();
           return t.length > 50 ? t.slice(0, 49).trimEnd() + "…" : t;
         }).join(", ")).join(" | ");
+    {% elif task.task_type == 'upload' %}
+      // Upload: genau EINE Datei (Code/Text/HTML oder Zip) — wird als
+      // multipart an das eigene Submit-Endpoint gesendet.
+      const uploadFileInput = document.getElementById("upload-file-input");
+      uploadFile = uploadFileInput && uploadFileInput.files ? uploadFileInput.files[0] : null;
+      if (!uploadFile) {
+        showToast("Bitte wähle zuerst eine Datei aus.", "warning");
+        return;
+      }
+      submittedText = uploadFile.name;
     {% endif %}
 
-    {% if task.task_type not in ('workspace', 'mc') %}
+    {% if task.task_type not in ('workspace', 'mc', 'upload') %}
     if (!body.solution?.trim()) {
       showToast("Bitte trage zuerst eine Lösung ein.", "warning");
       return;
@@ -880,12 +948,23 @@
 
     try {
       // ── Step 1: Submit (returns immediately) ──
+      {% if task.task_type == 'upload' %}
+      const uploadFd = new FormData();
+      uploadFd.append("file", uploadFile);
+      uploadFd.append("solve_time_seconds", String(solvedTime));
+      const res = await fetch("/api/student/tasks/{{ task.id }}/upload/submit", {
+        method: "POST",
+        body: uploadFd,
+        credentials: "same-origin",
+      });
+      {% else %}
       const res = await fetch("/api/student/tasks/{{ task.id }}/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         credentials: "same-origin",
       });
+      {% endif %}
 
       let submitData;
       try {
@@ -937,6 +1016,9 @@
         let solutionHtml = '';
         {% if task.task_type == 'text' %}
         solutionHtml = '<div class="solution-container"><template class="markdown-solution" type="application/json" data-raw="' + encodeURIComponent(JSON.stringify(submittedText)) + '"></template></div>';
+        {% elif task.task_type == 'upload' %}
+        solutionHtml = '<div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3">📤 ' + escapeHtml(submittedText) +
+          '<span class="block text-xs text-indigo-500 mt-0.5">Eingereichte Datei — wird manuell korrigiert</span></div>';
         {% else %}
         solutionHtml = '<div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3">📦 ' + escapeHtml(submittedText) +
           '<span class="block text-xs text-indigo-500 mt-0.5">Stand zum Einreichzeitpunkt</span></div>';
@@ -1074,14 +1156,26 @@
       solutionHtml = data.mc_result
         ? '<div class="solution-container"><template class="markdown-mc" type="application/json" data-raw="' + encodeURIComponent(JSON.stringify(data.mc_result)) + '"></template></div>'
         : '<div class="solution-container"><template class="markdown-solution" type="application/json" data-raw="' + solutionJson + '"></template></div>';
-      {% elif task.task_type == 'workspace' %}
+      {% elif task.task_type in ('workspace', 'upload') %}
       // Workspace: eingebettete read-only Snapshot-Ansicht (gleiche
-      // Komponente wie die Live-IDE, ohne Terminals/Ports/Schreibrechte)
+      // Komponente wie die Live-IDE, ohne Terminals/Ports/Schreibrechte);
+      // Upload: read-only Datei-Ansicht der eingereichten Datei (gleiche
+      // Komponente, andere API).
       solutionHtml =
         '<div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3">' +
+        {% if task.task_type == 'upload' %}
+        '📤 Eingereichte Datei: ' + escapeHtml(submittedText) +
+        {% else %}
         '📦 Workspace-Abgabe (Snapshot des Containers: ' + escapeHtml(submittedText) + ')' +
+        {% endif %}
         '<span class="block text-xs text-indigo-500 mt-0.5">Read-only — Stand zum Einreichzeitpunkt</span>' +
         '</div>' +
+        {% if task.task_type == 'upload' %}
+        '<div class="mb-2">' +
+        '<a href="/api/tasks/' + taskId + '/submissions/' + submissionId + '/upload/download" ' +
+        'class="text-blue-700 hover:text-blue-900 border border-blue-300 hover:border-blue-500 px-3 py-1.5 rounded-lg text-sm transition inline-flex items-center gap-1.5">⬇️ Datei herunterladen</a>' +
+        '</div>' +
+        {% endif %}
         '<div class="ws-tree-editor-wrap flex flex-col sm:flex-row h-[540px] sm:h-[420px] border border-gray-200 rounded-lg overflow-hidden bg-white">' +
         '<div class="flex flex-col h-[220px] sm:h-auto sm:w-56 shrink-0 border-b sm:border-b-0 sm:border-r border-gray-200 bg-gray-50">' +
         '<div class="flex items-center gap-1 p-1.5 border-b border-gray-200 bg-gray-100">' +
@@ -1191,8 +1285,8 @@
         });
       }
 
-      {% if task.task_type == 'workspace' %}
-      // Read-only Snapshot-Workspace in der neuen Karte laden
+      {% if task.task_type in ('workspace', 'upload') %}
+      // Read-only Ansicht in der neuen Karte laden
       // (insertAdjacentHTML führt <script> nicht aus → init direkt rufen;
       // init lädt keine Dateien selbst, refresh() ist nötig)
       if (newCard && window.WorkspaceUI) {
@@ -1204,7 +1298,11 @@
             treeEl: wsTree,
             editorEl: wsEditor,
             mediaEl: wsMedia,
-            apiBase: '/api/student/submissions/' + submissionId + '/workspace',
+            apiBase: {% if task.task_type == 'upload' %}
+              '/api/submissions/' + submissionId + '/upload'
+            {% else %}
+              '/api/student/submissions/' + submissionId + '/workspace'
+            {% endif %},
             readOnlyCheck: function () { return true; },
             emptyMsg: '(keine Dateien in dieser Abgabe)',
           });
