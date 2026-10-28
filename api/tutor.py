@@ -45,6 +45,7 @@ from database.models import (
 )
 from services.auth_service import get_current_user, require_course_access
 from services import file_edits
+from services import notifications
 from services import version_service
 from services.export_service import ExportService
 from services.grading_service import GradingService
@@ -1872,6 +1873,12 @@ async def add_feedback_to_submission(
 
     session.commit()
     session.refresh(feedback)
+
+    # Glocke: Student über die (manuell überarbeitete) Korrektur informieren
+    notifications.notify_human_feedback(
+        session, task.course_id, submission.student_id, task.id, task.title,
+        points, task.max_points, user.id, user.name,
+    )
 
     # Berechne latest_points des Students für diese Aufgabe (wie student.py)
     student_subs = session.exec(

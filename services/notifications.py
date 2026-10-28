@@ -380,3 +380,34 @@ def notify_llm_feedback(
     except Exception:
         session.rollback()
         logger.exception("[Notifications] LLM-Feedback (Kurs %s, Aufgabe %s) fehlgeschlagen.", course_id, task_id)
+
+
+def notify_human_feedback(
+    session: Session,
+    course_id: int,
+    student_id: int,
+    task_id: int,
+    task_title: str,
+    points: float,
+    max_points: float,
+    giver_id: Optional[int],
+    giver_name: str,
+) -> None:
+    """Manuelle Korrektur (angelegt oder bearbeitet) → der Student."""
+    try:
+        course_name = _course_name(session, course_id)
+        title = f"Manuelle Korrektur: {task_title}"
+        body = f"{course_name}: {points:g} / {max_points:g} Punkte · {giver_name}"
+        _create_many(
+            session,
+            [student_id],
+            type_="human_feedback",
+            title=title,
+            body=body[:500],
+            link=f"/courses/{course_id}/tasks/{task_id}",
+            course_id=course_id,
+            actor_id=giver_id,
+        )
+    except Exception:
+        session.rollback()
+        logger.exception("[Notifications] Manuelle Korrektur (Kurs %s, Aufgabe %s) fehlgeschlagen.", course_id, task_id)
