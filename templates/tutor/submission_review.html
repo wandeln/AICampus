@@ -51,9 +51,10 @@
         {% if task_type == 'workspace' %}bg-indigo-100 text-indigo-700
         {% elif task_type == 'mc' %}bg-emerald-100 text-emerald-700
         {% elif task_type == 'upload' %}bg-amber-100 text-amber-700
+        {% elif task_type == 'extern' %}bg-rose-100 text-rose-700
         {% else %}bg-gray-100 text-gray-600
         {% endif %}" style="align-content: center;">
-        {{ '💻 Workspace' if task_type == 'workspace' else '🎯 Multiple Choice' if task_type == 'mc' else '📤 Upload' if task_type == 'upload' else '📄 Text' }}
+        {{ '💻 Workspace' if task_type == 'workspace' else '🎯 Multiple Choice' if task_type == 'mc' else '📤 Upload' if task_type == 'upload' else '🔗 Extern' if task_type == 'extern' else '📄 Text' }}
       </span>
       <a href="{% if task_type == 'mc' %}/courses/{{ course_id }}/live/mc?task_id={{ task_id }}{% else %}/courses/{{ course_id }}/live?filter_text={{ task_title | urlencode }}{% endif %}"
          target="_blank" rel="noopener"
@@ -433,17 +434,23 @@
     // Punktestand aktualisieren
     updateScoreDisplay(data);
 
+    var isWorkspace = data.task.task_type === 'workspace';
+    var isMc = data.task.task_type === 'mc';
+    var isUpload = data.task.task_type === 'upload';
+    var isExtern = data.task.task_type === 'extern';
+
     var container = document.getElementById('submissions-container');
     if (data.submissions.length === 0) {
-      container.innerHTML = '<div class="card text-center py-8 text-gray-500">Keine Einreichungen gefunden.</div>';
+      // Extern: es gibt keine Einreichung (Bewertung von außen) → Bewertungs-Formular
+      if (isExtern) {
+        renderExternForm(container, data.task.max_points);
+      } else {
+        container.innerHTML = '<div class="card text-center py-8 text-gray-500">Keine Einreichungen gefunden.</div>';
+      }
       return;
     }
 
     container.innerHTML = '';
-
-    var isWorkspace = data.task.task_type === 'workspace';
-    var isMc = data.task.task_type === 'mc';
-    var isUpload = data.task.task_type === 'upload';
 
     var subIndex = 0;
     data.submissions.forEach(function(sub) {
@@ -481,7 +488,7 @@
         var s = Math.floor(sub.solve_time_seconds % 60);
         timeHtml = ' <span class="text-xs font-mono text-blue-600 ml-auto tabular-nums">🕐 ' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0') + '</span>';
       }
-      solSection.innerHTML = '<h4 class="text-sm font-semibold text-gray-600 mb-2 flex items-baseline gap-2">Lösung des Students' + timeHtml + '</h4>';
+      solSection.innerHTML = '<h4 class="text-sm font-semibold text-gray-600 mb-2 flex items-baseline gap-2">' + (isExtern ? 'Externe Abgabe' : 'Lösung des Students') + timeHtml + '</h4>';
 
       if (isWorkspace) {
         // Read-only Snapshot-Ansicht (gleiche Komponente wie die
@@ -585,6 +592,13 @@
           noFile.textContent = 'Keine Datei erhalten.';
           solSection.appendChild(noFile);
         }
+      } else if (isExtern) {
+        // Externe Bewertung: keine Einreichung (z. B. Vortrag, Notenübertragung)
+        var extBox = document.createElement('div');
+        extBox.className = 'text-sm bg-rose-50 border border-rose-200 text-rose-800 rounded-lg p-3 mb-3';
+        extBox.innerHTML = '🔗 Externe Aufgabe — keine Einreichung' +
+          '<span class="block text-xs text-rose-600 mt-0.5">Bewertung erfolgt extern (z. B. Vortrag, Notenübertragung) — Punkte &amp; Feedback vom Tutor/Prof</span>';
+        solSection.appendChild(extBox);
       } else {
         var solContainer = document.createElement('div');
         solContainer.className = 'solution-container';
@@ -903,6 +917,74 @@
       loadData();
     } catch (err) {
       showToast('Fehler: ' + err.message, 'error');
+    }
+  }
+
+  // ─── Extern: Erstbewertung (keine Einreichung vorhanden) ─────
+  function renderExternForm(container, maxPoints) {
+    container.innerHTML =
+      '<div class="card p-6">' +
+        '<div class="text-sm text-rose-800 bg-rose-50 border border-rose-200 rounded-lg p-3 mb-4">' +
+          '🔗 <span class="font-medium">Externe Aufgabe</span> — der Student hat nichts eingereicht. ' +
+          'Die Bewertung erfolgt extern (z. B. Vortrag, Notenübertragung aus anderen Systemen); ' +
+          + 'lege hier die Bewertung an.' +
+        '</div>' +
+        '<div class="space-y-3">' +
+          '<div>' +
+            '<label class="block text-xs font-medium text-gray-600 mb-1">Punkte (0 — ' + maxPoints + ')</label>' +
+            '<input type="number" id="extern-points" min="0" max="' + maxPoints + '" step="0.5" value="0"' +
+                   ' class="w-32 border border-gray-300 rounded-lg px-3 py-2 text-sm">' +
+          '</div>' +
+          '<div>' +
+            '<label class="block text-xs font-medium text-gray-600 mb-1">Feedback-Text (Markdown + LaTeX)</label>' +
+            '<textarea id="extern-comment" rows="4" placeholder="z. B. Sehr gut strukturierter Vortrag, ..."' +
+                    ' class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-y"></textarea>' +
+          '</div>' +
+          '<div class="flex items-center gap-2 pt-1">' +
+            '<button id="extern-submit-btn"' +
+                    ' class="text-sm bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 transition shadow-sm">' +
+              '🔗 Bewertung anlegen' +
+            '</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.getElementById('extern-submit-btn').addEventListener('click', function () {
+      submitExternGrade(maxPoints);
+    });
+  }
+
+  async function submitExternGrade(maxPoints) {
+    var points = parseFloat(document.getElementById('extern-points').value || '0');
+    var comment = document.getElementById('extern-comment').value.trim();
+    if (!comment) {
+      showToast('Bitte gib einen Feedback-Text ein.', 'error');
+      return;
+    }
+    if (isNaN(points) || points < 0 || points > maxPoints) {
+      showToast('Punkte müssen zwischen 0 und ' + maxPoints + ' liegen.', 'error');
+      return;
+    }
+    var btn = document.getElementById('extern-submit-btn');
+    btn.disabled = true;
+    try {
+      var res = await fetch('/api/tasks/' + taskId + '/extern/feedback', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id: studentId, points_earned: points, comment: comment }),
+      });
+      var data = await res.json().catch(function () { return {}; });
+      if (!res.ok) {
+        showToast(data.detail || 'Fehler beim Speichern.', 'error');
+        btn.disabled = false;
+        return;
+      }
+      updateScoreFromServer(data.latest_points, data.max_points);
+      showToast('Bewertung angelegt.', 'success');
+      loadData();
+    } catch (err) {
+      showToast('Fehler: ' + err.message, 'error');
+      btn.disabled = false;
     }
   }
 

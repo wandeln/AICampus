@@ -27,6 +27,7 @@
           <option value="workspace">Workspace-Aufgaben</option>
           <option value="mc">Multiple-Choice-Aufgaben</option>
           <option value="upload">Upload-Aufgaben</option>
+          <option value="extern">Externe Aufgaben</option>
         </select>
       </div>
       <div class="flex items-end">
@@ -71,9 +72,10 @@
               {% if task.task_type == 'workspace' %}bg-indigo-100 text-indigo-700
               {% elif task.task_type == 'mc' %}bg-emerald-100 text-emerald-700
               {% elif task.task_type == 'upload' %}bg-amber-100 text-amber-700
+              {% elif task.task_type == 'extern' %}bg-rose-100 text-rose-700
               {% else %}bg-gray-100 text-gray-600
               {% endif %}" style="align-content: center;">
-              {{ '💻 Workspace' if task.task_type == 'workspace' else '🎯 Multiple Choice' if task.task_type == 'mc' else '📤 Upload' if task.task_type == 'upload' else '📄 Text' }}
+              {{ '💻 Workspace' if task.task_type == 'workspace' else '🎯 Multiple Choice' if task.task_type == 'mc' else '📤 Upload' if task.task_type == 'upload' else '🔗 Extern' if task.task_type == 'extern' else '📄 Text' }}
             </span>
           </div>
         </div>

@@ -1,0 +1,17 @@
+{% extends "tutor/task_detail_base.html" %}
+
+{% block type_section %}
+
+  <!-- ─── [Extern] Externe Bewertung (keine Abgabe, kein LLM-Grading) ─── -->
+  <div id="extern-section" class="card">
+    <h2 class="font-semibold text-gray-800 mb-1">🔗 Externe Bewertung</h2>
+    <p class="text-xs text-gray-400">
+      Diese Aufgabe wird <span class="font-medium text-gray-500">außerhalb des Systems</span>
+      bewertet (z. B. Vortrag oder Notenübertragung aus anderen Systemen):
+      Studierende geben <span class="font-medium text-gray-500">nichts</span> ab und es gibt
+      <span class="font-medium text-gray-500">kein LLM-Grading</span> — du vergibst in der
+      Bewertungsansicht direkt Punkte + Feedback pro Student.
+    </p>
+  </div>
+
+{% endblock %}

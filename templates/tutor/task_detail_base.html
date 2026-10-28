@@ -188,6 +188,7 @@
             <option value="workspace" {% if tpl_type == 'workspace' %}selected{% endif %}>Workspace-Aufgabe (Container)</option>
             <option value="mc" {% if tpl_type == 'mc' %}selected{% endif %}>Multiple Choice</option>
             <option value="upload" {% if tpl_type == 'upload' %}selected{% endif %}>Upload-Aufgabe (Datei/Zip)</option>
+            <option value="extern" {% if tpl_type == 'extern' %}selected{% endif %}>Externe Aufgabe (extern bewertet)</option>
           </select>
         </div>
       </div>
@@ -198,7 +199,7 @@
           <input type="number" name="max_points" min="0" required value="{{ task.max_points if task else 10 }}"
                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
         </div>
-        <div>
+        <div class="max-attempts-section{% if tpl_type == 'extern' %} hidden{% endif %}">
           <label class="block text-sm font-medium text-gray-700 mb-1">Max. Versuche</label>
           <input type="number" name="max_attempts" min="1" value="{{ task.max_attempts if task and task.max_attempts else '' }}"
                  placeholder="Leer = unlimitiert"
@@ -221,8 +222,8 @@
         </label>
         </div>
 
-      <!-- Auto-Korrektur: bei MC ausgeblendet (deterministische Bewertung ohne LLM) -->
-      <div class="mt-4 pt-4 auto-grading-section {% if tpl_type == 'mc' %}hidden{% endif %}">
+      <!-- Auto-Korrektur: bei MC ausgeblendet (deterministisch) und bei extern (kein LLM-Grading) -->
+      <div class="mt-4 pt-4 auto-grading-section{% if tpl_type in ('mc', 'extern') %} hidden{% endif %}">
         <label class="flex items-center gap-3 cursor-pointer">
           <input type="checkbox" name="auto_grading_enabled" value="true"
                  {% if not task or task.auto_grading_enabled %}checked{% endif %}
@@ -477,6 +478,7 @@
     const isMc = e.target.value === "mc";
     const isText = e.target.value === "text";
     const isUpload = e.target.value === "upload";
+    const isExtern = e.target.value === "extern";
 
     const redirectWithSave = (type) => {
       setTimeout(async () => {
@@ -529,6 +531,12 @@
       return;
     }
 
+    // Extern-Sektion fehlt (alle anderen Varianten)? → Extern-Template
+    if (isExtern && !document.getElementById("extern-section")) {
+      redirectWithSave("extern");
+      return;
+    }
+
     const wsSections = document.querySelectorAll("[data-workspace-section]");
     wsSections.forEach(el => el.classList.toggle("hidden", !isWorkspace));
 
@@ -538,8 +546,11 @@
     const uploadSections = document.querySelectorAll("[data-upload-section]");
     uploadSections.forEach(el => el.classList.toggle("hidden", !isUpload));
 
-    // Auto-Grading-Checkbox: nur für Text/Workspace (MC wird deterministisch bewertet)
-    document.querySelectorAll(".auto-grading-section").forEach(el => el.classList.toggle("hidden", isMc));
+    // Auto-Grading-Checkbox: nur für Text/Workspace (MC deterministisch, extern ohne LLM-Grading)
+    document.querySelectorAll(".auto-grading-section").forEach(el => el.classList.toggle("hidden", isMc || isExtern));
+
+    // Max. Versuche: bei extern unbedeutend (keine Einreichung)
+    document.querySelectorAll(".max-attempts-section").forEach(el => el.classList.toggle("hidden", isExtern));
 
     // Show/hide AI text-template checkbox (only for text tasks)
     document.querySelectorAll(".ai-text-field").forEach(el => el.classList.toggle("hidden", !isText));

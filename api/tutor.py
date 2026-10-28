@@ -1520,10 +1520,10 @@ async def ai_generate_task(
     course_media = all_media_for_course(session, course_id)
     references = build_references_text(session, course_id)
 
-    if task_type in ("text", "upload"):
-        # ── Text-/Upload-Aufgabe: Titel/Aufgabenstellung/Musterlösung ──
-        # (Upload: ohne text_template — die Dateien laufen über eigene
-        # Endpoints; der Musterlösungstext = Bewertungskriterien.)
+    if task_type in ("text", "upload", "extern"):
+        # ── Text-/Upload-/Extern-Aufgabe: Titel/Aufgabenstellung/Musterlösung ──
+        # (Upload/Extern: ohne text_template; der Musterlösungstext =
+        # Bewertungskriterien.)
         text_fields = [f for f, active in (
             ("title", gen_title),
             ("description", gen_description),
@@ -2202,6 +2202,135 @@ async def add_feedback_to_submission(
 
     return {
         "id": feedback.id,
+        "source": feedback.source.value,
+        "points_earned": feedback.points_earned,
+        "comment": feedback.comment,
+        "giver": user.name,
+        "created_at": utc_iso(feedback.created_at) or "",
+        "latest_points": latest_points,
+        "max_points": task.max_points,
+    }
+
+
+@router.post("/tasks/{task_id}/extern/feedback")
+async def add_extern_feedback(
+    task_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Externe Aufgabe: Tutor/Prof bewertet einen Student direkt — ohne
+    Student-Abgabe. Der erste Call legt eine leere Submission an
+    (s. docs/LLM-plans/extern-tasks.md), danach wird das HUMAN-Feedback
+    ersetzt. Request: {"student_id": int, "points_earned": float, "comment": str}
+    """
+    body = await request.json()
+    student_id = body.get("student_id")
+    points = float(body.get("points_earned", 0))
+    comment = (body.get("comment") or "").strip()
+
+    task = session.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Aufgabe nicht gefunden.")
+    if task.task_type.value != "extern":
+        raise HTTPException(400, "Keine externe Aufgabe.")
+
+    # Zugriff prüfen
+    _check_course_role(user, task.course_id, session)
+
+    if not student_id:
+        raise HTTPException(400, "student_id fehlt.")
+    student = session.get(User, student_id)
+    if not student:
+        raise HTTPException(404, "Student nicht gefunden.")
+    membership = session.exec(
+        select(UserCourse)
+        .where(UserCourse.user_id == student.id)
+        .where(UserCourse.course_id == task.course_id)
+    ).first()
+    if not membership:
+        raise HTTPException(404, "Student ist nicht in diesem Kurs.")
+
+    if not comment:
+        raise HTTPException(400, "Feedback-Text darf nicht leer sein.")
+    if points < 0 or points > task.max_points:
+        raise HTTPException(400, f"Punkte muessen zwischen 0 und {task.max_points} liegen.")
+
+    # Externe Aufgabe: max. eine (leere) Submission pro Student
+    assert task.id is not None
+    assert student.id is not None
+    submission = session.exec(
+        select(Submission)
+        .where(Submission.task_id == task.id)
+        .where(Submission.student_id == student.id)
+        .order_by(Submission.submitted_at.desc())  # type: ignore[attr-defined]
+    ).first()
+    if submission is None:
+        submission = Submission(
+            task_id=task.id,
+            student_id=student.id,
+            solution="",
+            attempt_number=1,
+        )
+        session.add(submission)
+        session.commit()
+        session.refresh(submission)
+    assert submission.id is not None
+
+    # HUMAN-Feedback ersetzen (gleiche Logik wie add_feedback_to_submission)
+    existing_feedbacks = session.exec(
+        select(Feedback)
+        .where(Feedback.submission_id == submission.id)
+        .where(Feedback.source == FeedbackSource.HUMAN)
+    ).all()
+    for existing in existing_feedbacks:
+        session.delete(existing)
+
+    feedback = Feedback(
+        submission_id=submission.id,
+        source=FeedbackSource.HUMAN,
+        points_earned=points,
+        comment=comment,
+        giver_id=user.id,
+    )
+    session.add(feedback)
+
+    submission.status = SubmissionStatus.OVERRIDDEN
+    session.add(submission)
+
+    session.commit()
+    session.refresh(feedback)
+
+    # Glocke: Student über die Korrektur informieren
+    notifications.notify_human_feedback(
+        session, task.course_id, student.id, task.id, task.title,
+        points, task.max_points, user.id, user.name,
+    )
+
+    # latest_points des Students für diese Aufgabe (wie add_feedback_to_submission)
+    student_subs = session.exec(
+        select(Submission)
+        .where(Submission.task_id == task_id)
+        .where(Submission.student_id == student.id)
+        .order_by(Submission.submitted_at.desc())  # type: ignore[attr-defined]
+    ).all()
+    latest_points = 0.0
+    if student_subs:
+        latest_sub = student_subs[0]  # newest
+        human_points = 0.0
+        llm_points = 0.0
+        override_exists = False
+        for fb in latest_sub.feedback_list:
+            if fb.source == FeedbackSource.HUMAN:
+                human_points = max(human_points, fb.points_earned)
+                override_exists = True
+            elif fb.source == FeedbackSource.LLM:
+                llm_points = max(llm_points, fb.points_earned)
+        latest_points = human_points if override_exists else llm_points
+
+    return {
+        "id": feedback.id,
+        "submission_id": submission.id,
         "source": feedback.source.value,
         "points_earned": feedback.points_earned,
         "comment": feedback.comment,

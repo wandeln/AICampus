@@ -63,9 +63,10 @@
         {% if task.task_type == 'workspace' %}bg-indigo-100 text-indigo-700
         {% elif task.task_type == 'mc' %}bg-emerald-100 text-emerald-700
         {% elif task.task_type == 'upload' %}bg-amber-100 text-amber-700
+        {% elif task.task_type == 'extern' %}bg-rose-100 text-rose-700
         {% else %}bg-gray-100 text-gray-600
         {% endif %}" style="align-content: center;">
-        {{ '💻 Workspace' if task.task_type == 'workspace' else '🎯 Multiple Choice' if task.task_type == 'mc' else '📤 Upload' if task.task_type == 'upload' else '📄 Text' }}
+        {{ '💻 Workspace' if task.task_type == 'workspace' else '🎯 Multiple Choice' if task.task_type == 'mc' else '📤 Upload' if task.task_type == 'upload' else '🔗 Extern' if task.task_type == 'extern' else '📄 Text' }}
       </span>
       <span class="badge px-2 py-0.5 rounded bg-gray-100 text-gray-600">
         {{ latest_points }} /  {{ task.max_points }} Punkte
@@ -231,7 +232,7 @@
 
             <!-- Solution -->
             <div class="mb-3">
-              <h4 class="text-sm font-semibold text-gray-600 mb-1">Eingereichte Lösung</h4>
+              <h4 class="text-sm font-semibold text-gray-600 mb-1">{% if task.task_type == 'extern' %}Externe Abgabe{% else %}Eingereichte Lösung{% endif %}</h4>
               {% if task.task_type == 'workspace' %}
                 {% if sub.workspace_snapshot %}
                 <div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3">
@@ -339,6 +340,13 @@
                 {% else %}
                 <p class="text-gray-400 text-sm italic">Keine Datei erhalten.</p>
                 {% endif %}
+              {% elif task.task_type == 'extern' %}
+                <div class="text-sm bg-rose-50 border border-rose-200 text-rose-800 rounded-lg p-3">
+                  🔗 Externe Aufgabe — keine Einreichung
+                  <span class="block text-xs text-rose-600 mt-0.5">
+                    Wird extern bewertet (z. B. Vortrag, Notenübertragung)
+                  </span>
+                </div>
               {% else %}
                 {% if task.task_type == 'mc' and sub.mc_result %}
                 <!-- MC: farbcodierte Ergebnis-Karte (tp/fp/fn/tn), dieselbe
@@ -918,7 +926,7 @@
       submittedText = uploadFile.name;
     {% endif %}
 
-    {% if task.task_type not in ('workspace', 'mc', 'upload') %}
+    {% if task.task_type not in ('workspace', 'mc', 'upload', 'extern') %}
     if (!body.solution?.trim()) {
       showToast("Bitte trage zuerst eine Lösung ein.", "warning");
       return;

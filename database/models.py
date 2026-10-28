@@ -52,6 +52,7 @@ class TaskType(str, Enum):
     WORKSPACE = "workspace"
     MC = "mc"  # Multiple Choice (mehrere Fragen, sofortiges Feedback)
     UPLOAD = "upload"  # Datei-/Zip-Einreichung (Template + Musterlösungs-Datei)
+    EXTERN = "extern"  # Externe Bewertung (keine Abgabe, kein LLM-Grading)
 
 
 

@@ -1927,7 +1927,7 @@ async def new_task_page(
 
     # Typ des Templates: Default „text“, per Query-Param umschaltbar (z. B. ?task_type=mc).
     # Workspace ist immer wählbar — ohne erreichbare Engine degradiert die View sauber.
-    allowed_types = ("text", "workspace", "mc", "upload")
+    allowed_types = ("text", "workspace", "mc", "upload", "extern")
     tpl_type = request.query_params.get("task_type", "text")
     if tpl_type not in allowed_types:
         tpl_type = "text"
@@ -2032,7 +2032,7 @@ async def task_page(
     if is_tutor and not is_student_view:
         tpl_type = task.task_type.value
         override = request.query_params.get("task_type")
-        if override in ("text", "workspace", "mc", "upload"):
+        if override in ("text", "workspace", "mc", "upload", "extern"):
             tpl_type = override
         template = _pick_task_template([f"tutor/task_detail_{tpl_type}.html", "tutor/task_detail_base.html"])
     else:
@@ -2447,7 +2447,8 @@ async def submission_review_page(
     task_type_display = {"text": "Textaufgabe",
                          "workspace": "Workspace-Aufgabe",
                          "mc": "Multiple-Choice-Aufgabe",
-                         "upload": "Upload-Aufgabe"}.get(
+                         "upload": "Upload-Aufgabe",
+                         "extern": "Externe Aufgabe"}.get(
         task.task_type.value, task.task_type.value
     )
 

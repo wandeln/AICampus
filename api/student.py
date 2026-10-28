@@ -159,6 +159,9 @@ async def submit_solution(
     if task.task_type.value == "upload":
         # Upload-Aufgaben haben ihr eigenes Endpoint (multipart, 1 Datei)
         raise HTTPException(400, "Upload-Aufgabe: bitte die Datei über die Upload-Einreichung einreichen.")
+    if task.task_type.value == "extern":
+        # Externe Aufgabe: keine Einreichung, Tutor/Prof bewertet direkt.
+        raise HTTPException(400, "Externe Aufgabe: keine Einreichung möglich.")
 
     # Check course access
     membership = session.exec(

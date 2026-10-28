@@ -507,6 +507,10 @@ class LLMService:
             "text": "Textaufgabe",
             "upload": ("Upload-Aufgabe (Studierende reichen ihre Lösung als Datei/Zip "
                        "ein; der Musterlösungstext dient hier als Bewertungskriterien)"),
+            "extern": ("Externe Aufgabe (wird außerhalb des Systems bewertet, z. B. "
+                       "Vortrag oder Notenübertragung aus anderen Systemen; "
+                       "Studierende geben nichts ab; der Musterlösungstext = "
+                       "Bewertungskriterien)"),
         }.get(task_type, task_type)
         generate_list = ", ".join(f'"{f}"' for f in generate_fields)
 

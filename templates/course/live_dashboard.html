@@ -74,6 +74,7 @@
           <option value="workspace">Workspace-Aufgaben</option>
           <option value="mc">Multiple-Choice-Aufgaben</option>
           <option value="upload">Upload-Aufgaben</option>
+          <option value="extern">Externe Aufgaben</option>
         </select>
       </div>
       <div class="flex items-end">
@@ -242,7 +243,7 @@
   function renderTaskCharts(data) {
     destroyTaskCharts();
     const grid = document.getElementById('task-charts');
-    const typeBadge = { text: '📝', workspace: '💻', mc: '🎯', upload: '📤' };
+    const typeBadge = { text: '📝', workspace: '💻', mc: '🎯', upload: '📤', extern: '🔗' };
     if (data.tasks.length === 0) {
       grid.innerHTML = '<p class="text-gray-400">Keine Aufgaben im Filter.</p>';
       return;

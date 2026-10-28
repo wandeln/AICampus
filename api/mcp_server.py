@@ -318,7 +318,7 @@ server = MCPServer(
         "SVG-Dateien werden nicht rasterisiert, sondern als SVG-Applet "
         "gespeichert, Video-Dateien als Video-Medium). "
         "Übungsaufgaben: "
-        "create_task (type 'text', 'mc' oder 'upload' — Workspace-Aufgaben nur "
+        "create_task (type 'text', 'mc', 'upload' oder 'extern' — Workspace-Aufgaben nur "
         "in der Kurs-Web-UI) und edit_task (bestehende Aufgaben, inkl. "
         "MC-Fragen-Ersatz); Upload-Aufgaben: Template-/Musterlösungs-Datei "
         "setzen mit set_upload_task_file (Text, data:-URL oder URL) und lesen "
@@ -2360,10 +2360,12 @@ async def create_task(
     """Legt eine neue Übungsaufgabe am ENDE der Aufgaben-Liste des Kurses an.
 
     type = "text" (Klassische Aufgabe, Abgabe als Text), "mc" (Multiple
-    Choice mit sofortigem Feedback) oder "upload" (Abgabe als Datei/Zip —
+    Choice mit sofortigem Feedback), "upload" (Abgabe als Datei/Zip —
     Template- und Musterlösungs-Datei danach mit set_upload_task_file
-    setzen). Workspace-Aufgaben (Code-Runs) sind via MCP NICHT
-    unterstützt — bitte Kurs-Web-UI.
+    setzen) oder "extern" (außerhalb des Systems bewertet, z. B. Vortrag
+    oder Notenübertragung — Studierende geben NICHTS ab; die Bewertung
+    erfolgt vom Tutor/Prof in der Kurs-Web-UI). Workspace-Aufgaben
+    (Code-Runs) sind via MCP NICHT unterstützt — bitte Kurs-Web-UI.
 
     description / text_template / model_solution: AICampus-Markdown wie
     im Skript (Details: markdown_manual("script")) — **fett**, Listen,
@@ -2382,8 +2384,9 @@ async def create_task(
     type="upload" dient model_solution als Bewertungskriterien-Text;
     die eigentliche Musterlösung ist eine DATEI (set_upload_task_file,
     kind="solution").
-    max_points: Pflicht bei type="text"/"upload"; bei type="mc" wird sie
-    aus der Punkte-Summe der Fragen abgeleitet (Angabe wird ignoriert).
+    max_points: Pflicht bei type="text"/"upload"/"extern"; bei type="mc"
+    wird sie aus der Punkte-Summe der Fragen abgeleitet (Angabe wird
+    ignoriert).
     mc_questions (nur type="mc", Pflicht): Liste von Fragen im Format
     {"question": str, "points": int ≥ 0, "multi_select": bool (Default false),
      "options": [{"text": str, "correct": bool, "feedback": str (optional),
@@ -2399,10 +2402,11 @@ async def create_task(
     Label für die Initial-Version (Default „Erstellt")."""
     with Session(engine) as session:
         user, _token, _role = _auth(ctx, session, course_id, write=True, tool_name="create_task")
-        if type not in ("text", "mc", "upload"):
+        if type not in ("text", "mc", "upload", "extern"):
             raise McpToolError(
-                "type muss 'text', 'mc' oder 'upload' sein (Workspace-Aufgaben "
-                "werden via MCP nicht unterstützt — bitte in der Kurs-Web-UI anlegen)."
+                "type muss 'text', 'mc', 'upload' oder 'extern' sein "
+                "(Workspace-Aufgaben werden via MCP nicht unterstützt — "
+                "bitte in der Kurs-Web-UI anlegen)."
             )
         if not (title or "").strip():
             raise McpToolError("Der Titel darf nicht leer sein.")
@@ -2423,7 +2427,7 @@ async def create_task(
         else:
             if mc_questions is not None:
                 raise McpToolError("mc_questions ist nur für type='mc' erlaubt.")
-            if type == "upload" and text_template is not None:
+            if type in ("upload", "extern") and text_template is not None:
                 raise McpToolError("text_template ist nur für type='text' erlaubt.")
             if max_points is None:
                 raise McpToolError(f"type='{type}' erfordert max_points.")
@@ -2464,6 +2468,8 @@ async def create_task(
                    else "Noch NICHT für Studenten sichtbar (Entwurf) — nach Fertigstellung in der Kurs-Web-UI freischalten.")
                 + (" Template- und Musterlösungs-Datei mit set_upload_task_file setzen."
                    if task.task_type.value == "upload" else "")
+                + (" Extern bewertet: Tutor/Prof vergibt in der Kurs-Web-UI Punkte + Feedback (keine Abgabe, kein LLM-Grading)."
+                   if task.task_type.value == "extern" else "")
             ),
         })
 

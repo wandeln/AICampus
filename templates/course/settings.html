@@ -1789,6 +1789,7 @@
     function taskTypeClass(v) {
       if (v === 'mc') return 'border border-blue-200 rounded px-1.5 py-0.5 text-xs font-semibold bg-blue-50 text-blue-700';
       if (v === 'workspace') return 'border border-purple-200 rounded px-1.5 py-0.5 text-xs font-semibold bg-purple-50 text-purple-700';
+      if (v === 'extern') return 'border border-rose-200 rounded px-1.5 py-0.5 text-xs font-semibold bg-rose-50 text-rose-700';
       return 'border border-gray-200 rounded px-1.5 py-0.5 text-xs bg-gray-50 text-gray-600';
     }
 
@@ -1923,6 +1924,7 @@
             <option value="text" ${t.task_type === 'text' ? 'selected' : ''}>Text</option>
             <option value="mc" ${t.task_type === 'mc' ? 'selected' : ''}>MC</option>
             <option value="workspace" ${t.task_type === 'workspace' ? 'selected' : ''}>Workspace</option>
+            <option value="extern" ${t.task_type === 'extern' ? 'selected' : ''}>Extern</option>
           </select>
           <input type="number" data-task="points" value="${esc(t.points != null ? t.points : 0)}" min="0" max="1000"
                  class="w-14 text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:border-blue-400 focus:outline-none"

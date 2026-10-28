@@ -3957,7 +3957,7 @@ def _normalize_tasks_plan(raw: Any) -> list[dict]:
         if not title:
             continue
         task_type = str(t.get("task_type") or "text").strip().lower()
-        if task_type not in ("text", "mc", "workspace"):
+        if task_type not in ("text", "mc", "workspace", "extern"):
             task_type = "text"
         try:
             points = int(float(t.get("points") or 0))
@@ -5788,6 +5788,14 @@ async def run_tasks_job(course_id: int, import_id: int) -> None:
                 append_report(import_id, warnings=[
                     f'„{title}“: Workspace-Aufgaben werden vom Import noch nicht unterstützt — '
                     f'übersprungen (im Plan stattdessen „Text“ oder „MC“ wählen).'
+                ])
+                continue
+            if str(tk.get("task_type") or "text") == "extern":
+                # Externe Aufgaben werden manuell angelegt (kein Quellen-Material)
+                update_tasks_entry(import_id, idx, {"tasks_status": "skipped", "tasks_error": None, "enabled": False})
+                append_report(import_id, warnings=[
+                    f'„{title}“: Externe Aufgaben werden vom Import nicht generiert — '
+                    f'übersprungen (in der Kurs-Web-UI anlegen).'
                 ])
                 continue
             try:
