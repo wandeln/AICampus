@@ -2182,6 +2182,7 @@ async def task_page(
                 "model_solution": task.model_solution if is_tutor else None,
                 "is_visible": task.is_visible if is_tutor else None,
                 "hints_enabled": task.hints_enabled,
+                "auto_grading_enabled": task.auto_grading_enabled,
                 # Workspace: Main-Datei für alle (Editor-Modus),
                 # Spec/Dataset/Status nur für Tutoren
                 "workspace_main_file": task.workspace_main_file,

@@ -11,6 +11,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from main import templates  # noqa: E402
 
+
+class _FakeUrl:
+    path = "/"
+    scheme = "http"
+    netloc = "localhost"
+
+
+class _FakeRequest:
+    """Minimaler Request-Stub — base.html braucht headers/url für das SEO-Head."""
+    headers = {}
+    url = _FakeUrl()
+
+
 COURSE = {"id": 1, "name": "ML-Kurs", "semester": "SS 2026", "description": "Dummy"}
 
 TASK_WS = {
@@ -24,6 +37,7 @@ TASK_WS = {
     "model_solution": None,
     "is_visible": True,
     "hints_enabled": True,
+    "auto_grading_enabled": True,
     "workspace_main_file": "main.py",
     "workspace_image": "python-ml",
     "workspace_engines": ["local"],
@@ -49,7 +63,7 @@ TABS = [
 
 def base_ctx(task, is_tutor, tpl_type):
     return {
-        "request": None,
+        "request": _FakeRequest(),
         "page_title": task.get("title") if task else "Neu",
         "current_user": {"id": 1, "name": "Test", "role": "PROF"},
         "courses": [COURSE],

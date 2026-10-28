@@ -219,6 +219,17 @@
             <p class="text-xs text-gray-400 ml-2 mt-1">Studenten können gezielte Hinweise bei einem KI-Tutor einholen, ohne die Lösung zu sehen.</p>
         </label>
         </div>
+
+      <!-- Auto-Korrektur: bei MC ausgeblendet (deterministische Bewertung ohne LLM) -->
+      <div class="mt-4 pt-4 auto-grading-section {% if tpl_type == 'mc' %}hidden{% endif %}">
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" name="auto_grading_enabled" value="true"
+                 {% if not task or task.auto_grading_enabled %}checked{% endif %}
+                 class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+          <span class="text-sm font-medium text-gray-700">🤖 Automatische Korrektur (lokales LLM)</span>
+          <p class="text-xs text-gray-400 ml-2 mt-1">Nach dem Einreichen wird die Abgabe automatisch von einem lokalen LLM korrigiert. Für Aufgaben mit rein menschlicher Bewertung deaktivieren.</p>
+        </label>
+      </div>
     </div>
 
     <!-- Task Description -->
@@ -428,6 +439,8 @@
   });
   const hintsChk = document.querySelector('[name="hints_enabled"]');
   if (hintsChk) hintsChk.addEventListener("change", () => av.onChange());
+  const autoGradingChk = document.querySelector('[name="auto_grading_enabled"]');
+  if (autoGradingChk) autoGradingChk.addEventListener("change", () => av.onChange());
   // Workspace-Umfeld (Elemente existieren nur im Workspace-Template)
   ["ws-env-timeout", "ws-env-cpu", "ws-env-memory", "ws-env-disk"].forEach((id) => {
     const el = document.getElementById(id);
@@ -512,6 +525,9 @@
 
     const mcSections = document.querySelectorAll("[data-mc-section]");
     mcSections.forEach(el => el.classList.toggle("hidden", !isMc));
+
+    // Auto-Grading-Checkbox: nur für Text/Workspace (MC wird deterministisch bewertet)
+    document.querySelectorAll(".auto-grading-section").forEach(el => el.classList.toggle("hidden", isMc));
 
     // Show/hide AI text-template checkbox (only for text tasks)
     document.querySelectorAll(".ai-text-field").forEach(el => el.classList.toggle("hidden", !isText));
@@ -851,6 +867,10 @@
     const hintsCheckbox = document.querySelector('[name="hints_enabled"]');
     body.hints_enabled = hintsCheckbox ? hintsCheckbox.checked : true;
 
+    // Auto-Grading - from checkbox (Default AN; MC wird deterministisch bewertet)
+    const autoGradingCheckbox = document.querySelector('[name="auto_grading_enabled"]');
+    body.auto_grading_enabled = autoGradingCheckbox ? autoGradingCheckbox.checked : true;
+
     return body;
   }
 
@@ -876,6 +896,8 @@
     if (dl) dl.value = toLocalInput(p.deadline);
     const hints = form.querySelector('[name="hints_enabled"]');
     if (hints) hints.checked = p.hints_enabled != null ? !!p.hints_enabled : true;
+    const autoGrading = form.querySelector('[name="auto_grading_enabled"]');
+    if (autoGrading) autoGrading.checked = p.auto_grading_enabled != null ? !!p.auto_grading_enabled : true;
     setVisibilityToggle(!!p.is_visible);
 
     // Markdown-Editoren (Aufgabenstellung + Musterlösung)

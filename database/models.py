@@ -205,6 +205,7 @@ class TaskBase(SQLModel):
     is_visible: bool = Field(default=False)            # Für Studenten sichtbar (Default: versteckt)
     display_order: int = Field(default=0)              # Anzeigereihenfolge im Kurs
     hints_enabled: bool = Field(default=True)          # Socratic-Hints fuer Studenten
+    auto_grading_enabled: bool = Field(default=True)   # Automatische LLM-Korrektur bei Einreichung (Default: AN; MC wird immer deterministisch bewertet)
     # Workspace-Aufgaben (task_type=workspace):
     # Skript-basiertes Modell: Run/Tests/Init laufen über Task-Dateien
     # (run.sh, test.sh, .test_private.sh, .init.sh, .init_hidden.sh, .test_solution.sh);
@@ -256,6 +257,7 @@ class TaskCreate(SQLModel):
     is_visible: bool = Field(default=False)
     display_order: int = Field(default=0)
     hints_enabled: bool = Field(default=True)
+    auto_grading_enabled: bool = Field(default=True)
     # Workspace-Aufgaben (s. TaskBase)
     workspace_timeout: int = Field(default=900)
     workspace_cpu: float = Field(default=2.0)

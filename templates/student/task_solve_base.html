@@ -900,6 +900,68 @@
       const submissionId = submitData.submission_id;
       const attemptNumber = submitData.attempt_number;
 
+      // Automatische Korrektur deaktiviert: kein Grading/Polling — die
+      // Einreichung wird manuell korrigiert.
+      if (submitData.status === "no_grading") {
+        clearInterval(gradingTimerInterval);
+        progressDiv.classList.add("hidden");
+        resetSolveTimer();
+        btn.disabled = false;
+
+        // Schlanke Historie-Karte ohne Punkte/Feedback (nach Reload rendert
+        // der Server dieselbe Ansicht aus der DB).
+        const now = new Date();
+        const timeDisplay = String(now.getDate()).padStart(2,'0') + '.' + String(now.getMonth()+1).padStart(2,'0') + '.' + now.getFullYear() + ' um ' + String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+        let solveTimeDisplay = '';
+        if (solvedTime > 0) {
+          solveTimeDisplay = '<span class="text-sm font-mono text-blue-600 tabular-nums">🕐 ' + String(Math.floor(solvedTime/60)).padStart(2, '0') + ':' + String(Math.floor(solvedTime%60)).padStart(2, '0') + '</span>';
+        }
+        let solutionHtml = '';
+        {% if task.task_type == 'text' %}
+        solutionHtml = '<div class="solution-container"><template class="markdown-solution" type="application/json" data-raw="' + encodeURIComponent(JSON.stringify(submittedText)) + '"></template></div>';
+        {% else %}
+        solutionHtml = '<div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3">📦 ' + escapeHtml(submittedText) +
+          '<span class="block text-xs text-indigo-500 mt-0.5">Stand zum Einreichzeitpunkt</span></div>';
+        {% endif %}
+
+        const feedbackArea = document.getElementById("feedback-area");
+        let hasExisting = feedbackArea.children.length > 0;
+        let cardClass = 'card' + (hasExisting ? ' mt-6 pt-6 border-b-2 border-gray-200' : '');
+        const noGradingHtml = `
+          <div class="${cardClass}">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-lg font-semibold text-gray-800">Versuch #${attemptNumber}</h3>
+              <div class="flex items-center gap-3">
+                ${solveTimeDisplay}
+                <span class="text-sm text-gray-500">${timeDisplay}</span>
+              </div>
+            </div>
+            <div class="mb-3">
+              <h4 class="text-sm font-semibold text-gray-600 mb-1">Eingereichte Lösung</h4>
+              ${solutionHtml}
+            </div>
+            <div class="text-sm text-gray-500">👤 Diese Abgabe wird manuell korrigiert — Feedback folgt von der Lehrperson.</div>
+          </div>`;
+        feedbackArea.insertAdjacentHTML('afterbegin', noGradingHtml);
+
+        const newCard = feedbackArea.firstElementChild;
+        if (newCard) {
+          newCard.querySelectorAll('template.markdown-solution[type="application/json"]').forEach(el => {
+            try {
+              const raw = JSON.parse(decodeURIComponent(el.getAttribute('data-raw') || ''));
+              const { wrapper, inner } = createSolutionWrapper(raw);
+              el.replaceWith(wrapper);
+              renderMarkdown(raw, inner, { bibliography: true });
+            } catch(e) {
+              console.warn('Failed to render solution markdown:', e);
+            }
+          });
+        }
+
+        showThanksModal();
+        return;
+      }
+
       let data = null;
       {% if task.task_type == 'mc' %}
       // MC: serverseitig SYNCHRON bewertet (kein LLM-Grading, kein
@@ -1403,6 +1465,7 @@
 
     // Wire up Feedback button: close overlay + scroll to LLM feedback
     const feedbackBtn = document.getElementById('badge-feedback-btn');
+    feedbackBtn.style.display = '';  // ggf. von showThanksModal() ausgeblendet
     feedbackBtn.onclick = () => {
       overlay.classList.remove('active');
       const feedbackArea = document.getElementById('feedback-area');
@@ -1416,6 +1479,23 @@
     };
 
     overlay.onclick = (e) => { if (e.target === overlay) overlay.classList.remove('active'); };
+  }
+
+  // "Danke"-Modal für Einreichungen ohne automatische Korrektur —
+  // gleiche Overlay-Komponente wie showMotivation, ohne Feedback-Button
+  // (es gibt noch kein Feedback).
+  function showThanksModal() {
+    const overlay = document.getElementById('badge-overlay');
+    document.getElementById('badge-emoji').textContent = '✅';
+    document.getElementById('badge-message').textContent = 'Danke für die Einreichung!';
+    document.getElementById('badge-sub').textContent = 'Die Abgabe wird manuell korrigiert.';
+    document.getElementById('badge-tier-container').innerHTML = '';
+    updateTierBadgeIcon(null);
+    const feedbackBtn = document.getElementById('badge-feedback-btn');
+    feedbackBtn.style.display = 'none';
+    feedbackBtn.onclick = () => overlay.classList.remove('active');
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.classList.remove('active'); };
+    overlay.classList.add('active');
   }
 
   function updateTierBadgeIcon(badgeClass) {

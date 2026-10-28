@@ -266,6 +266,8 @@ async def create_task(
         text_template=text_template,
         mc_data=mc_data_value,
         is_visible=body.get("is_visible", False),  # Default: für Studenten versteckt
+        hints_enabled=body.get("hints_enabled", True),
+        auto_grading_enabled=body.get("auto_grading_enabled", True),
         display_order=next_order,
     )
     if task_type == TaskType.WORKSPACE:
@@ -347,6 +349,7 @@ async def get_task(
         "deadline": deadline_iso(task.deadline),
         "text_template": task.text_template if task.task_type.value == "text" else None,
         "hints_enabled": task.hints_enabled,
+        "auto_grading_enabled": task.auto_grading_enabled,
     }
 
     # Multiple-Choice: Studenten sehen NUR Options-Texte (kein Correct-Flag,
@@ -439,6 +442,7 @@ async def update_task(
         task.text_template = None if val in (None, "") else val
     if "is_visible" in body: task.is_visible = body["is_visible"]
     if "hints_enabled" in body: task.hints_enabled = body["hints_enabled"]
+    if "auto_grading_enabled" in body: task.auto_grading_enabled = body["auto_grading_enabled"]
 
     # Multiple-Choice: mc_data validieren; bei Fragen wird max_points aus
     # der Punkte-Summe der Fragen berechnet (setzt eingegebene Punkte außer Kraft).
@@ -640,6 +644,7 @@ async def duplicate_task(
         mc_data=task.mc_data,
         is_visible=task.is_visible,
         hints_enabled=task.hints_enabled,
+        auto_grading_enabled=task.auto_grading_enabled,
         # Workspace-Einstellungen (für Text/MC-Tasks irrelevant)
         workspace_timeout=task.workspace_timeout,
         workspace_cpu=task.workspace_cpu,

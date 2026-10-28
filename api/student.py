@@ -255,6 +255,19 @@ async def submit_solution(
             raise HTTPException(
                 503, f"Workspace-Abgabe fehlgeschlagen: {e.message}")
 
+    # Automatische Korrektur deaktiviert: kein LLM-Grading, kein
+    # Background-Job — die Einreichung bleibt PENDING und wird vom Tutor
+    # manuell bewertet (Review-Seite: "Korrektur anlegen").
+    if not task.auto_grading_enabled:
+        return {
+            "submission_id": submission.id,
+            "attempt_number": submission.attempt_number,
+            "status": "no_grading",
+            "message": "Loesung eingereicht — sie wird manuell korrigiert.",
+            "max_points": task.max_points,
+            "max_attempts": task.max_attempts,
+        }
+
     # Grading im Hintergrund starten — spawn_job haelt eine starke Referenz
     # auf den Task, damit er nicht vom GC weggeraeumt wird, waehrend die
     # Antwort generiert wird (asyncio.haelt nur Weak-References auf Tasks).

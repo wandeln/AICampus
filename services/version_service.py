@@ -211,6 +211,7 @@ def _task_apply(session: Session, entity: Task, snapshot: dict) -> None:
     entity.text_template = None if tt in (None, "") else tt
     entity.is_visible = bool(snapshot.get("is_visible", False))
     entity.hints_enabled = bool(snapshot.get("hints_enabled", True))
+    entity.auto_grading_enabled = bool(snapshot.get("auto_grading_enabled", True))
     # Multiple-Choice: mc_data validieren (gleiche Regeln wie
     # create/update_task). Bei Fragen überschreibt die Punkte-Summe der
     # Fragen die eingegebenen Max.-Punkte; bei anderen Typen wird
@@ -398,6 +399,7 @@ def _current_snapshot(entity_type: str, entity) -> dict:
             "text_template": entity.text_template or "",
             "is_visible": entity.is_visible,
             "hints_enabled": entity.hints_enabled,
+            "auto_grading_enabled": entity.auto_grading_enabled,
             "mc_data": entity.mc_data or "",
             # Workspace-Konfig mitsichern: _task_apply setzt engines/image
             # beim Restore bedingungslos aus dem Snapshot.

@@ -169,6 +169,8 @@ async def duplicate_course(
             deadline=src_task.deadline,
             text_template=src_task.text_template,
             is_visible=src_task.is_visible,
+            hints_enabled=src_task.hints_enabled,
+            auto_grading_enabled=src_task.auto_grading_enabled,
             created_by=user.id,  # type: ignore[arg-type]
         )
         session.add(new_task)
