@@ -27,7 +27,7 @@ from database.base import engine, get_session
 from database.models import (
     Notification,
     User, Task, Submission, Feedback, HintExchange, ScriptSection,
-    TaskType, SubmissionStatus, FeedbackSource,
+    TaskDraft, TaskType, SubmissionStatus, FeedbackSource,
     Course, UserCourse, CourseRole, WorkspaceRun, GlobalUserRole,
 )
 from services import notifications
@@ -64,6 +64,10 @@ logger = logging.getLogger(__name__)
 # Aktive Grading-Jobs: submission_id → asyncio-Task. Ermöglicht den Abbruch
 # eines laufenden LLM-Gradings (POST /submissions/{id}/cancel).
 _GRADING_TASKS: dict[int, asyncio.Task] = {}
+
+# Max. Größe eines Text-Drafts (Zeichen) — Schutz vor pathologisch großen
+# Payloads (Markdown-Texte sind klein, 1 MB ist weit über jeden Bedarf).
+MAX_DRAFT_CHARS = 1_000_000
 
 
 # Helper: Ueberprueft Kurs-Zugriff (Student, Tutor oder PROF)
@@ -121,6 +125,72 @@ async def get_task_detail(
         result["has_upload_template"] = (
             upload_service.task_upload_file(task.id, task.upload_template) is not None)
     return result
+
+
+# ─── TEXT-DRAFT (Autosave, KEINE Einreichung) ───────────────────
+
+def _load_text_task_checked(task_id: int, session: Session, user: User) -> Task:
+    """Text-Aufgabe laden + Kurs-Zugriff (gemeinsam für die Draft-Endpoints)."""
+    task = session.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "Aufgabe nicht gefunden.")
+    if task.task_type.value != "text":
+        raise HTTPException(400, "Drafts gibt es nur für Text-Aufgaben.")
+    if not _check_course_access(session, user, task.course_id):
+        raise HTTPException(403, "Kein Zugriff auf diese Aufgabe.")
+    return task
+
+
+def _get_task_draft(session: Session, task_id: int, user_id: int) -> Optional[TaskDraft]:
+    return session.exec(
+        select(TaskDraft)
+        .where(TaskDraft.task_id == task_id)
+        .where(TaskDraft.user_id == user_id)
+    ).first()
+
+
+@router.get("/tasks/{task_id}/draft")
+async def get_task_draft(
+    task_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Draft einer Text-Aufgabe (Autosave, keine Einreichung)."""
+    task = _load_text_task_checked(task_id, session, user)
+    assert task.id is not None and user.id is not None  # Type narrowing
+    draft = _get_task_draft(session, task.id, user.id)
+    if not draft:
+        return {"solution": None, "updated_at": None}
+    return {"solution": draft.solution, "updated_at": draft.updated_at.isoformat()}
+
+
+@router.put("/tasks/{task_id}/draft")
+async def put_task_draft(
+    task_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Draft speichern (Upsert, last-write-wins). Keine Deadline-Prüfung —
+    nach der Deadline darf weitergetippt werden, nur submit prüft sie."""
+    task = _load_text_task_checked(task_id, session, user)
+    body = await request.json()
+    solution = body.get("solution")
+    if not isinstance(solution, str):
+        raise HTTPException(422, "Feld 'solution' (String) fehlt.")
+    if len(solution) > MAX_DRAFT_CHARS:
+        raise HTTPException(413, "Draft zu groß (max. 1 MB).")
+    assert task.id is not None and user.id is not None  # Type narrowing
+    draft = _get_task_draft(session, task.id, user.id)
+    if draft:
+        draft.solution = solution
+        draft.updated_at = datetime.now()
+    else:
+        draft = TaskDraft(task_id=task.id, user_id=user.id, solution=solution)
+        session.add(draft)
+    session.commit()
+    session.refresh(draft)
+    return {"solution": draft.solution, "updated_at": draft.updated_at.isoformat()}
 
 
 def _check_submit_allowed(task: Task, existing_count: int) -> None:

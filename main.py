@@ -52,6 +52,7 @@ from database.models import (
     Notification,
     ScriptSection,
     Task,
+    TaskDraft,
     TaskType,
     User,
     UserCourse,
@@ -2128,7 +2129,20 @@ async def task_page(
 
     my_submissions = []
     latest_points = 0
+    # Text-Aufgabe: Draft (Autosave) für den Editor-Startzustand —
+    # ohne Draft fällt das Template auf text_template zurück.
+    draft_solution: Optional[str] = None
+    draft_updated_at = None
     if not is_tutor or is_student_view:
+        if task.task_type.value == "text":
+            draft = session.exec(
+                select(TaskDraft)
+                .where(TaskDraft.task_id == task.id)
+                .where(TaskDraft.user_id == user.id)
+            ).first()
+            if draft:
+                draft_solution = draft.solution
+                draft_updated_at = draft.updated_at
         subs = session.exec(
             select(Submission)
             .where(Submission.task_id == task.id)
@@ -2284,6 +2298,8 @@ async def task_page(
             },
             "is_tutor": is_tutor,
             "is_student_view": is_student_view,
+            "draft_solution": draft_solution,
+            "draft_updated_at": draft_updated_at,
             "tabs": tab_ctx["tabs"],
             "tpl_type": tpl_type,
             "code_editor": is_tutor or is_workspace,  # Tutoren + Workspace-IDE: CodeMirror

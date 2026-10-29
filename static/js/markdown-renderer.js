@@ -3502,6 +3502,34 @@ function createMarkdownEditor(containerId, options = {}) {
     const wrapper = cm.getWrapperElement();
     wrapper.classList.add('md-codemirror', 'w-full');
     wrapper.style.height = wrapperHeight + 'px';
+    // Optional: Höhe anpassbar (Ziehhgriff unten rechts). Der Griff
+    // verlangt overflow != visible; der Inhalt passt sich der neuen Höhe
+    // automatisch an (CM6-ResizeObserver). resizableKey: Höhe pro Seite
+    // merken (localStorage, überlebt Reloads).
+    if (options.resizable) {
+      wrapper.style.overflow = "auto";
+      wrapper.style.resize = "vertical";
+      if (options.resizableKey) {
+        const stored = localStorage.getItem(options.resizableKey);
+        if (stored) wrapper.style.height = stored + "px";
+        wrapper.addEventListener("resize", () => {
+          localStorage.setItem(options.resizableKey, String(wrapper.offsetHeight));
+        });
+      }
+    }
+  }
+
+  // resizable ohne CodeMirror: natives Textarea-Resize (overflow ist
+  // bereits auto).
+  if (options.resizable && !cm) {
+    textarea.style.resize = "vertical";
+    if (options.resizableKey) {
+      const stored = localStorage.getItem(options.resizableKey);
+      if (stored) textarea.style.height = stored + "px";
+      textarea.addEventListener("resize", () => {
+        localStorage.setItem(options.resizableKey, String(textarea.offsetHeight));
+      });
+    }
   }
 
   const previewDiv = document.createElement('div');

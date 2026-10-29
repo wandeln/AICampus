@@ -4,7 +4,19 @@
         <!-- ─── TEXTAUFGABE ─────────────────────────────────── -->
         <div id="text-editor-container" class="card">
           <div class="flex items-center justify-between mb-3">
-            <h2 class="font-semibold text-gray-800">Deine Lösung</h2>
+            <div class="flex items-center gap-3">
+              <h2 class="font-semibold text-gray-800">Deine Lösung</h2>
+              <!-- Draft-Autosave-Status; Initialwert = letzter gespeicherter Stand
+                   (UTC-ISO per data-Attribut → JS rechnet in Browser-Lokalzeit um,
+                   identisch zur Live-Anzeige; s. [data-ts]-Muster in base.html) -->
+              <span id="text-draft-state" class="text-xs text-gray-400"
+                    {% if draft_updated_at %}data-updated-at="{{ utc_iso(draft_updated_at) }}"{% endif %}></span>
+              <button id="reset-template-btn" type="button"
+                      class="text-xs text-gray-400 hover:text-gray-600 transition"
+                      title="Deinen Text auf die Aufgaben-Vorlage zurücksetzen">
+                ↺ Vorlage wiederherstellen
+              </button>
+            </div>
             <span id="solve-timer" class="text-sm font-mono text-blue-600 tabular-nums">00:00</span>
           </div>
           {% if task.text_template %}
@@ -12,7 +24,7 @@
           {% endif %}
           <textarea id="text-solution"
                     class="w-full h-64 border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="Schreibe hier deine Lösung...&#10;&#10;Du kannst Markdown verwenden: **fett**, *kursiv*, - Listen, $Math$, $$Display-Math$$">{{ task.text_template or '' }}</textarea>
+                    placeholder="Schreibe hier deine Lösung...&#10;&#10;Du kannst Markdown verwenden: **fett**, *kursiv*, - Listen, $Math$, $$Display-Math$$">{% if draft_solution is not none %}{{ draft_solution }}{% else %}{{ task.text_template or '' }}{% endif %}</textarea>
 
           <!-- Unified toolbar: Preview + LaTeX-Upload -->
           <div id="text-editor-toolbar" class="flex items-center gap-2 mt-2">
@@ -153,7 +165,27 @@
 {% endblock %}
 
 {% block solve_scripts %}
-  // ─── LaTeX Image Upload ──────────────────────────────
+  // ─── Reset auf Vorlage ─────────────────────────────────────
+  const TEXT_TEMPLATE = {{ (task.text_template or '') | tojson }};
+  (function () {
+    document.getElementById("reset-template-btn")?.addEventListener("click", () => {
+      const ed = window._textSolutionEditor;
+      if (!ed) return;
+      const msg = TEXT_TEMPLATE
+        ? "Deinen aktuellen Text auf die Aufgaben-Vorlage zurücksetzen? Der jetzige Stand geht verloren."
+        : "Deinen aktuellen Text komplett löschen?";
+      if (!confirm(msg)) return;
+      ed.setValue(TEXT_TEMPLATE);
+      // Textarea-Fallback (ohne CodeMirror) feuert kein input-Event →
+      // Autosave (onValueChange) würde sonst nicht greifen.
+      if (!ed.cm) ed.textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      // CM: setValue feuert change → Autosave läuft. Flush triggert beides
+      // sofort, statt das 3-s-Debounce abwarten zu müssen.
+      if (window._textDraftSave) window._textDraftSave.flush();
+    });
+  })();
+
+  // ─── LaTeX Image Upload ─────────────────────────────
   (function() {
     const togglePhoto = document.getElementById("latex-toggle-photo");
     const toggleDraw = document.getElementById("latex-toggle-draw");

@@ -613,12 +613,74 @@
       }
     });
 
-    // ─── Create Markdown editors for text tasks ─────────────
+    // ─── Create Markdown editors for text tasks ───────────
     // CodeMirror-Editor (GFM + AICampus-Annotationen-Highlighting).
     // Instanz global exponieren: Submit, Hint & LaTeX-Insert müssen den
     // Wert über getValue() lesen (das versteckte Textarea ist nicht aktuell).
     {% if task.task_type == 'text' %}
-    window._textSolutionEditor = createMarkdownEditor('text-editor-container', { buttonAnchor: 'text-editor-toolbar' });
+    // Draft-Autosave (serverseitig, analog Workspace-3-s-Debounce):
+    // 3 s nach der letzten Änderung wird der Editor-Stand per PUT als
+    // TaskDraft gespeichert — ohne dass etwas eingereicht wird.
+    window._textDraftSave = (function () {
+      const stateEl = document.getElementById("text-draft-state");
+      const DRAFT_URL = "/api/student/tasks/{{ task.id }}/draft";
+      let timer = null;
+      let chain = Promise.resolve();  // Saves seriell (kein paralleles PUT-Duell)
+
+      function setState(text, cls) {
+        if (!stateEl) return;
+        stateEl.textContent = text;
+        stateEl.className = "text-xs " + cls;
+      }
+      const hm = (d) => String(d.getHours()).padStart(2, "0") + ":" +
+                        String(d.getMinutes()).padStart(2, "0");
+
+      function doSave() {
+        const ed = window._textSolutionEditor;
+        if (!ed) return Promise.resolve(false);
+        return fetch(DRAFT_URL, {
+          method: "PUT", credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ solution: ed.getValue() }),
+        }).then(async (res) => {
+          if (!res.ok) throw new Error("Draft-Speichern fehlgeschlagen");
+          setState("✓ automatisch gespeichert " + hm(new Date()), "text-gray-400");
+          return true;
+        }).catch(() => {
+          setState("⚠ Speicherung fehlgeschlagen", "text-red-500");
+          return false;
+        });
+      }
+
+      function schedule() {
+        setState("● ungespeichert", "text-amber-600");
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => { timer = null; flush(); }, 3000);
+      }
+
+      // Synchronen Flush (vor Submit / nach Reset): pendelnden Timer
+      // verwerfen und den aktuellen Stand sofort speichern.
+      function flush() {
+        if (timer) { clearTimeout(timer); timer = null; }
+        chain = chain.then(doSave);
+        return chain;
+      }
+
+      // Initial-Status nach Reload: gespeicherter Stand (UTC-ISO aus
+      // data-updated-at) in Browser-Lokalzeit anzeigen — wie die Live-Anzeige.
+      if (stateEl && stateEl.dataset.updatedAt) {
+        const d = new Date(stateEl.dataset.updatedAt);
+        if (!isNaN(d.getTime())) setState("✓ gespeichert " + hm(d), "text-gray-400");
+      }
+
+      return { schedule, flush };
+    })();
+    window._textSolutionEditor = createMarkdownEditor('text-editor-container', {
+      buttonAnchor: 'text-editor-toolbar',
+      onValueChange: () => window._textDraftSave.schedule(),
+      resizable: true,
+      resizableKey: 'text-solution-height-' + {{ task.id }}
+    });
     {% endif %}
   })();
 
@@ -876,6 +938,9 @@
       const textEd = window._textSolutionEditor;
       body.solution = textEd ? textEd.getValue() : document.getElementById("text-solution").value;
       submittedText = body.solution;
+      // Pendelnden Draft-Autosave synchron abschließen → Draft bleibt mit
+      // der Einreichung konsistent (wenn der Tab danach sofort zu geht).
+      if (window._textDraftSave) await window._textDraftSave.flush();
     {% elif task.task_type == 'workspace' %}
       // Workspace: Lösung = Container-Snapshot (serverseitig beim Submit).
       // Debounced Autosave vorher flushen — sonst fehlt im Snapshot die

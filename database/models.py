@@ -253,6 +253,24 @@ class Task(TaskBase, table=True):
     workspace_files: List["TaskWorkspaceFile"] = Relationship(back_populates="task")
 
 
+class TaskDraft(SQLModel, table=True):
+    """Draft (Autosave) einer Text-Aufgabe pro Student: ungespeicherter
+    Zwischenstand im Editor, unabhängig von Submissions (kein Versuch —
+    zählt nicht in max_attempts, taucht nirgends in History/Tutor-View
+    auf). Analog zum Workspace-Autosave (dort: per-Student-Volume auf
+    der Compute-Engine, hier: eine Row pro (task, user)).
+    Neue Tabelle wird beim App-Start per create_all angelegt."""
+    __tablename__ = "task_drafts"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    task_id: int = Field(foreign_key="tasks.id", index=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    solution: str = Field(default="")
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+    __table_args__ = (UniqueConstraint("task_id", "user_id", name="uq_draft_task_user"),)
+
+
 class TaskCreate(SQLModel):
     course_id: int
     title: str
