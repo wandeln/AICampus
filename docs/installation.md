@@ -196,35 +196,67 @@ Record).
 
 **Variante A (empfohlen): DNS-Plugin — automatische Erneuerung.**
 certbot setzt den TXT-Record selbst über eine DNS-API. Für eigenen
-BIND/PowerDNS (typisch Uni) ist das `dns-rfc2136`-Plugin (DNS-Update
-mit TSIG-Key):
+BIND/PowerDNS (typisch Uni) ist das `dns-rfc2136`-Plugin
+(RFC-2136-Update mit TSIG-Key):
 
 ```bash
 sudo apt install python3-certbot-dns-rfc2136   # oder: pip install certbot-dns-rfc2136
 ```
 
-```ini
-# /etc/letsencrypt/dns-rfc2136.ini
-[main]
-authenticator = dns-rfc2136
-dns_rfc2136_server = <DNS-Server-IP>:53
-dns_rfc2136_tcp = true
-dns_rfc2136_reg_type = TSIG
-dns_rfc2136_tsig_keyname = aicampus
-dns_rfc2136_tsig_algorithm = hmac-sha256
-dns_rfc2136_tsig_key = <TSIG-Key>
+**1) TSIG-Key auf dem DNS-Master freischalten** (Admin). Die
+`update-policy` soll nur TXT-Records unter `_acme-challenge.*` ändern
+lassen (Key-Name/-Secret: eigene Wahl, danach an certbot übergeben):
+
+```text
+# named.conf
+key "acme-update" {
+    algorithm   hmac-sha256;
+    secret      "<TSIG-Secret>";
+};
+
+# in der Zone-Definition:
+    update-policy {
+        grant "acme-update" self +subdomain _acme-challenge . TXT;
+    };
 ```
+
+**2) Credentials-Datei anlegen** (Key-Name/-Secret vom DNS-Admin;
+**nie im Repo committen**):
+
+```ini
+# /etc/letsencrypt/dns-rfc2136.ini   (chmod 600)
+plugin = dns-rfc2136
+dns_rfc2136_server = <DNS-Master-IP>    # IP, kein Hostname!
+dns_rfc2136_port = 53
+dns_rfc2136_name = <TSIG-Key-Name>
+dns_rfc2136_secret = <TSIG-Secret>
+dns_rfc2136_algorithm = HMAC-SHA256
+```
+
+**3) Zertifikat ausstellen** (schreibt die Renewal-Config mit):
 
 ```bash
-sudo certbot certonly --config /etc/letsencrypt/dns-rfc2136.ini \
-    -d aicampus.uni.example.edu -d *.aicampus.uni.example.edu
+sudo certbot certonly --authenticator dns-rfc2136 \
+    --dns-rfc2136-credentials /etc/letsencrypt/dns-rfc2136.ini \
+    -d DOMAIN -d *.DOMAIN
 ```
 
-Der TSIG-Key darf im DNS (BIND: `update-policy` in der Zone) idealer
-Weise nur `_acme-challenge.DOMAIN` aktualisieren. Bei Provider-DNS
-(Delegierung) gibt es äquivalente Plugins (`dns-cloudflare`,
-`dns-google`, `dns-ovh`, …) — gleiche Vorgehensweise. `certbot renew`
-(Timer) erneuert dann alles ohne Zutun.
+Vor der Abnahme testen: `certbot renew --dry-run --force-renewal
+--cert-name DOMAIN --no-random-sleep-on-renew` (setzt echte
+TXT-Records und räumt sie danach auf; ohne
+`--no-random-sleep-on-renew` schläft `renew` im Nicht-Interaktiven-
+Modus bis zu ~7,5 min ein). ⚠️ Die Property-Namen des
+Credentials-Files variieren zwischen Plugin-Versionen (`tsig_*` vs.
+`name`/`secret`) — im Zweifel Plugin-Quelltext prüfen.
+
+Damit nginx die erneuerten Zertifikate aktiviert, Renewal-Config
+(`/etc/letsencrypt/renewal/DOMAIN.conf`) um eine Zeile ergänzen:
+`deploy_hook = /usr/sbin/nginx -s reload`.
+
+Bei Provider-DNS (Delegierung) gibt es äquivalente Plugins
+(`dns-cloudflare`, `dns-google`, `dns-ovh`, …) — gleiche
+Vorgehensweise. `certbot renew` (Timer) erneuert dann alles ohne
+Zutun.
 
 **Variante B: manuell — ohne automatische Erneuerung.**
 Ohne DNS-API: certbot fragt interaktiv den TXT-Wert ab, ihr legt den
