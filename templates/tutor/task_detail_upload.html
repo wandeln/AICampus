@@ -64,6 +64,20 @@
         <input type="file" id="upload-solution-input"
                class="mt-3 block w-full text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 file:cursor-pointer">
       </div>
+
+      <!-- Alle Einreichungen als Zip (Tutor) -->
+      <div class="border border-gray-200 rounded-lg p-4">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <div class="min-w-0">
+            <p class="text-sm font-medium text-gray-700">Alle Einreichungen <span class="text-xs text-gray-400">(je Student die neueste Abgabe, Ordner = Username)</span></p>
+            <p id="upload-all-count" class="text-xs text-gray-500 mt-0.5"></p>
+          </div>
+          <a id="upload-download-all" href="#"
+             class="hidden text-blue-700 hover:text-blue-900 border border-blue-300 hover:border-blue-500 px-3 py-1.5 rounded-lg text-sm transition">
+            ⬇️ Als Zip herunterladen
+          </a>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -75,6 +89,7 @@
   // eigene Endpoints — nicht Teil des Auto-Save-Payloads).
   // ══════════════════════════════════════════════════════════════
   let UPLOAD_TASK_ID = {{ task.id if task and task.id else "null" }};
+  const STUDENT_COUNT = {{ (task.upload_submitter_count or 0) if task else 0 }};
 
   function _uploadSetState(kind, filename) {
     // kind: "template" | "solution" → Dateiname + Buttons synchronisieren
@@ -95,6 +110,24 @@
     document.getElementById("upload-file-boxes").classList.toggle("hidden", UPLOAD_TASK_ID == null);
     _uploadSetState("template", document.getElementById("upload-template-name").dataset.file || "");
     _uploadSetState("solution", document.getElementById("upload-solution-name").dataset.file || "");
+    _uploadRefreshAll();
+  }
+
+  // „Alle als Zip“: Link erst bei vorhandenen Abgaben (Zählung aus dem
+  // Seiten-Render — nach neuen Abgaben Seite neu laden).
+  function _uploadRefreshAll() {
+    const cnt = document.getElementById("upload-all-count");
+    const dl = document.getElementById("upload-download-all");
+    const has = STUDENT_COUNT > 0;
+    if (cnt) cnt.textContent = has
+      ? (STUDENT_COUNT === 1
+        ? "1 Student hat eingereicht"
+        : STUDENT_COUNT + " Studierende haben eingereicht")
+      : "Noch keine Abgaben eingereicht";
+    if (dl) {
+      dl.classList.toggle("hidden", !has);
+      if (has) dl.href = "/api/tasks/" + UPLOAD_TASK_ID + "/submissions/upload/download-all";
+    }
   }
 
   // In-Place-Anlage (Neue Aufgabe → erster Auto-Save): Task-ID übernehmen

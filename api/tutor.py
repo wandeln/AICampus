@@ -9,14 +9,18 @@ import io
 import json
 import logging
 import mimetypes
-
+import os
+import re
 import shutil
 import statistics
+import tempfile
+import zipfile
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from sqlmodel import Session, SQLModel, delete, select
 
 from database.base import engine, get_session
@@ -907,6 +911,50 @@ async def download_submission_upload(
     if not p:
         raise HTTPException(404, "Keine Datei für diese Einreichung.")
     return _serve_upload_file(p)
+
+
+@router.get("/tasks/{task_id}/submissions/upload/download-all")
+async def download_all_upload_submissions(
+    task_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Alle Einreichungen als ein Zip herunterladen (nur Tutor/PROF/ADMIN):
+    je Student die neueste Abgabe, jeweils in einem Ordner nach dem
+    eindeutigen Username."""
+    task = _load_upload_task(task_id, session, user)
+    subs = session.exec(select(Submission).where(Submission.task_id == task.id)).all()
+    # Neueste Einreichung pro Student (submitted_at, Fallback: id)
+    latest: dict[int, Submission] = {}
+    for s in subs:
+        cur = latest.get(s.student_id)
+        if cur is None or (s.submitted_at, s.id) > (cur.submitted_at, cur.id):
+            latest[s.student_id] = s
+    if not latest:
+        raise HTTPException(400, "Keine Einreichungen vorhanden.")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+        tmp_name = tmp.name
+    try:
+        count = 0
+        with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as zf:
+            for student_id, sub in latest.items():
+                p = upload_service.submission_upload_file(sub.id, sub.upload_file)
+                student = session.get(User, student_id)
+                if p and student:
+                    folder = student.username.replace("/", "_")
+                    zf.write(p, arcname=f"{folder}/{p.name}")
+                    count += 1
+        if count == 0:
+            raise HTTPException(400, "Keine Einreichungs-Dateien gefunden.")
+    except Exception:
+        os.unlink(tmp_name)
+        raise
+    safe_title = re.sub(r"[^\w\- ]", "", task.title).strip() or f"Aufgabe-{task.id}"
+    return FileResponse(
+        tmp_name, media_type="application/zip",
+        filename=f"{safe_title}_abgaben.zip",
+        background=BackgroundTask(os.unlink, tmp_name),
+    )
 
 
 # ─── Upload-Viewer (Dateiliste + Dateiinhalt, Tutor + Student) ──────

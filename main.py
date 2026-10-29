@@ -2217,6 +2217,10 @@ async def task_page(
                 "has_upload_solution_file": (
                     upload_service.task_upload_file(task.id, task.upload_solution_file) is not None
                     if is_tutor else False),
+                # Anzahl der Studierenden mit Abgabe (nur Tutor) —
+                # „Alle als Zip“-Button (passt zur Ordner-Anzahl im Zip)
+                "upload_submitter_count": (
+                    len({s.student_id for s in task.submissions}) if is_tutor else 0),
             },
             "is_tutor": is_tutor,
             "is_student_view": is_student_view,
