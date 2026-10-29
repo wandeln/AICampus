@@ -219,10 +219,13 @@
         const graded = data.has_feedback?.[student.id]?.[task.id] || false;
         totalPoints += points;
         const pct = task.max_points > 0 ? points / task.max_points : 0;
-        const cellClass = pct >= 0.8 ? 'score-pass' : pct >= 0.5 ? 'score-warning' : 'score-fail';
-        const bgClass = submitted
-            ? (graded ? (pct >= 0.8 ? 'bg-green-50' : pct >= 0.5 ? 'bg-yellow-50' : 'bg-red-50') : 'bg-gray-100')
-            : 'bg-gray-50';
+        let bgClass;
+        if (!submitted) bgClass = 'bg-gray-50';                       // keine Einreichung
+        else if (!graded) bgClass = 'bg-gray-100';                    // wird noch korrigiert
+        else if (task.max_points <= 0) bgClass = 'bg-gray-50';        // 0-Punkte-Aufgabe: neutral
+        else if (pct >= 0.8) bgClass = 'bg-green-50';
+        else if (pct >= 0.5) bgClass = 'bg-yellow-50';
+        else bgClass = 'bg-red-50';                                   // tatsächlich mit 0 Punkten bewertet
         const pendingClass = submitted && !graded ? ' text-gray-500' : '';
 
         const overrideBadge = overridden ? ' 🖊️' : '';
