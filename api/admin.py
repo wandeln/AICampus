@@ -13,6 +13,7 @@ from sqlmodel import Session, select
 
 from config import COMPUTE_AGENT_KEY, COMPUTE_AGENT_URL, COMPUTE_AGENT_URL_EXPLICIT
 from database.base import get_session
+from database.soft_delete import SOFT_DELETE_BYPASS
 from database.models import (
     Course,
     CourseCreate,
@@ -297,13 +298,35 @@ async def delete_course(
     session: Session = Depends(get_session),
     user: User = Depends(require_global_admin()),
 ):
-    """Kurs löschen (inkl. aller abhängigen Daten)."""
+    """Kurs in den Papierkorb legen (reversibel, ohne Kaskade).
+
+    Wiederherstellung: Admin-Konsole (♻️) oder per `POST .../restore`.
+    Endgültige Löschung nur via CLI-Purge (scripts/purge_trash.py).
+    """
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(404, "Kurs nicht gefunden.")
 
-    course_name = course_service.delete_course(session, course)
-    return {"message": f"Kurs '{course_name}' gelöscht."}
+    course_name = course_service.soft_delete_course(session, course)
+    return {"message": f"Kurs '{course_name}' in den Papierkorb gelegt."}
+
+
+@router.post("/courses/{course_id}/restore")
+async def restore_course(
+    course_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(require_global_admin()),
+):
+    """Soft gelöschten Kurs wiederherstellen (Inhalt blieb erhalten)."""
+    course = session.get(
+        Course, course_id, execution_options=SOFT_DELETE_BYPASS
+    )
+    if not course:
+        raise HTTPException(404, "Kurs nicht gefunden.")
+    if course.deleted_at is None:
+        return {"message": f"Kurs '{course.name}' ist nicht gelöscht."}
+    course_service.restore_course(session, course)
+    return {"message": f"Kurs '{course.name}' wiederhergestellt."}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -424,7 +447,11 @@ async def delete_user(
     session: Session = Depends(get_session),
     current_user: User = Depends(require_global_admin()),
 ):
-    """User löschen — samt allen referenzierenden Daten."""
+    """User in den Papierkorb legen: anonymisiert + persönliche Daten hart
+    gelöscht (Art. 17). Eigene Kurse und erstellter Kurs-Inhalt bleiben dem
+    Institut erhalten. Wiederherstellung: Admin-Konsole (♻️) — Username/Name/
+    Email müssen dann über den Edit-Dialog wieder eingetragen werden.
+    """
     if user_id == current_user.id:
         raise HTTPException(400, "Du kannst dich selbst nicht löschen.")
 
@@ -432,8 +459,25 @@ async def delete_user(
     if not user:
         raise HTTPException(404, "User nicht gefunden.")
 
-    username = user_service.delete_user_with_data(session, user)
-    return {"message": f"User '{username}' samt allen referenzierenden Daten gelöscht."}
+    username = user_service.soft_delete_user(session, user)
+    return {"message": f"User '{username}' gelöscht (anonymisiert, persönliche Daten entfernt)."}
+
+
+@router.post("/users/{user_id}/restore")
+async def restore_user(
+    user_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_global_admin()),
+):
+    """Soft gelöschten User wiederherstellen (Anker-Zeile bleibt anonymisiert;
+    Username/Name/Email per Edit-Dialog neu eintragen)."""
+    user = session.get(User, user_id, execution_options=SOFT_DELETE_BYPASS)
+    if not user:
+        raise HTTPException(404, "User nicht gefunden.")
+    if user.deleted_at is None:
+        return {"message": f"User '{user.username}' ist nicht gelöscht."}
+    user_service.restore_user(session, user)
+    return {"message": f"User (ID {user.id}) wiederhergestellt — bitte Username/Name/Email im Edit-Dialog eintragen."}
 
 
 # ═══════════════════════════════════════════════════════════════════

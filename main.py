@@ -35,6 +35,7 @@ from sqlmodel import Session, func, select
 
 from config import BASE_DIR, DEBUG, LLM_TIMEOUT, PREVIEW_BASE_DOMAIN, PUBLIC_DOMAIN, VAPID_PUBLIC_KEY, push_enabled
 from database.base import create_db_and_tables, engine, get_session, migrate_schema
+from database.soft_delete import SOFT_DELETE_BYPASS
 from database.models import (
     Course,
     CourseInvite,
@@ -57,7 +58,8 @@ from database.models import (
     Submission,
 )
 from services.auth_service import get_current_user, hash_password, require_course_access
-from services import analytics, media_service, import_service, preview_proxy, timeutil
+from services import analytics, media_service, import_service, preview_proxy, timeutil, notifications
+from services.media_service import sync_media_usages
 from services.mc_service import (
     McValidationError,
     parse_mc_data,
@@ -66,6 +68,7 @@ from services.mc_service import (
 )
 from services import image_spec_service
 from services import upload_service
+from services import trash_service
 from services.workspace_service import workspace_service
 from services.slides_service import (
     ASPECT_LABELS,
@@ -1756,8 +1759,65 @@ async def course_settings_page(
     )
     if not (ctx["is_prof"] or ctx["is_admin"]):
         raise HTTPException(403, "Nur PROFs und Administratoren dürfen die Einstellungen bearbeiten.")
+
+    # Papierkorb: soft gelöschte Kurs-Inhalte (Bypass, damit die Filter sie sehen)
+    trash = []
+    trash_queries = [
+        ("task", Task, "Aufgabe"),
+        ("material", CourseMaterial, "Slides"),
+        ("section", ScriptSection, "Kapitel"),
+        ("media", CourseMedia, "Medium"),
+    ]
+    for kind, model, label in trash_queries:
+        for row in session.exec(
+            select(model)
+            .where(model.course_id == course_id)
+            .where(model.deleted_at.is_not(None))
+            .execution_options(**SOFT_DELETE_BYPASS)
+        ).all():
+            trash.append(
+                {"kind": kind, "id": row.id, "title": row.title, "label": label,
+                 "deleted_at": row.deleted_at}
+            )
+    ctx["trash"] = trash
+
     ctx["page_title"] = f"Einstellungen — {ctx['course']['name']}"
     return templates.TemplateResponse("course/settings.html", ctx)
+
+
+@app.post("/api/courses/{course_id}/trash/{kind}/{entity_id}")
+async def trash_restore(
+    course_id: int,
+    kind: str,
+    entity_id: int,
+    session: Session = Depends(get_session),
+    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
+):
+    """Soft gelöschtes Kurs-Item aus dem Papierkorb wiederherstellen (PROF/Admin)."""
+    kind_model = {
+        "task": Task,
+        "material": CourseMaterial,
+        "section": ScriptSection,
+        "media": CourseMedia,
+    }
+    if kind not in kind_model:
+        raise HTTPException(404, "Unbekannter Papierkorb-Typ.")
+    model = kind_model[kind]
+    entity = session.get(model, entity_id, execution_options=SOFT_DELETE_BYPASS)
+    if entity is None or entity.course_id != course_id:
+        raise HTTPException(404, "Element nicht gefunden.")
+    if entity.deleted_at is None:
+        raise HTTPException(409, "Element ist nicht im Papierkorb.")
+
+    trash_service.restore(session, entity)
+    # Usages aus dem Markdown-Scan neu aufbauen (gelöschte Usages tauchen wieder auf)
+    sync_media_usages(session, course_id)
+    if kind == "media":
+        # Live-Update: offene Medien-Listen/Studio-Tabs zeigen die Kachel wieder.
+        notifications.push_content_updated(
+            session, course_id, "applet" if entity.media_type == "applet" else "media", entity.id
+        )
+    return {"message": f"{kind.title()} wiederhergestellt.", "kind": kind, "id": entity.id}
 
 
 @app.get("/join/{token}")
@@ -2586,8 +2646,10 @@ async def admin_page(
     if user.role != GlobalUserRole.ADMIN:
         raise HTTPException(403, "Nur für Administratoren.")
 
-    # Alle Kurse für den Überblick
-    all_courses = session.exec(select(Course)).all()
+    # Alle Kurse für den Überblick (inkl. Papierkorb, für Restore)
+    all_courses = session.exec(
+        select(Course).execution_options(**SOFT_DELETE_BYPASS)
+    ).all()
 
     # Memberships des Users sammeln (für Link-Logik)
     user_memberships = session.exec(
@@ -2604,11 +2666,14 @@ async def admin_page(
             "semester": c.semester,
             "role_in_course": membership_roles.get(c.id, "NONE"),
             "is_member": c.id in member_course_ids,
+            "deleted": c.deleted_at is not None,
         }
         for c in all_courses
     ]
 
-    all_users = session.exec(select(User)).all()
+    all_users = session.exec(
+        select(User).execution_options(**SOFT_DELETE_BYPASS)
+    ).all()
 
     return templates.TemplateResponse(
         "admin/dashboard.html",
@@ -2626,6 +2691,7 @@ async def admin_page(
                     "name": u.name,
                     "email": u.email,
                     "role": u.role.value,
+                    "deleted": u.deleted_at is not None,
                 }
                 for u in all_users
             ],

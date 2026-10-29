@@ -222,10 +222,9 @@
     </p>
     {% else %}
     <p class="text-sm text-gray-600 mb-4">
-      Löscht deinen Account <strong>endgültig</strong> — inkl. aller Einreichungen,
-      Foren-Beiträge, Skript-Fragen und Kurs-Mitgliedschaften. Inhalt, den du in
-      Kursen erstellt hast (eigene Kurse, Aufgaben, Materialien, Medien), wird
-      mitgelöscht.
+      Dein Account wird <strong>anonymisiert</strong> und deine persönlichen Daten
+      (Einreichungen, Foren-Beiträge, Skript-Fragen, Tokens, …) endgültig
+      gelöscht. Von dir erstellte Kurse und Kurs-Inhalte bleiben erhalten.
     </p>
     <div class="flex flex-col sm:flex-row gap-3">
       <input
@@ -701,7 +700,7 @@
 
       const data = await res.json();
       if (res.ok) {
-        showToast(data.message || 'Dein Account wurde gelöscht.', "success");
+        showToast(data.message || 'Dein Account wurde anonymisiert.', "success");
         // Session-Cookie entfernen und zur Login-Seite weiterleiten
         await fetch('/api/auth/logout', {
           method: 'POST',

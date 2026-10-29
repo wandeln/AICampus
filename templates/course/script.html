@@ -255,7 +255,7 @@
     const sectionId = card.getAttribute('data-section-id');
     const title = card.getAttribute('data-section-title') || 'dieses Kapitel';
 
-    const msg = 'Möchtest du "' + title + '" wirklich löschen?\n\nDer Markdown-Inhalt dieses Kapitels wird endgültig entfernt. Zugehörige Fragen bleiben als „Allgemein“ erhalten.';
+    const msg = 'Möchtest du "' + title + '" wirklich in den Papierkorb verschieben?\n\nDer Inhalt und die zugehörigen Fragen bleiben erhalten. Der PROF kann das Kapitel über Kurs-Einstellungen → Papierkorb wiederherstellen.';
     if (!confirm(msg)) return;
 
     try {

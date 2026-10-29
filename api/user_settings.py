@@ -165,7 +165,11 @@ async def delete_account(
     user: User = Depends(get_current_user),
 ):
     """
-    Eigene Account endgültig löschen (inkl. aller referenzierenden Daten).
+    Eigenen Account löschen (Soft Delete + Anonymisierung, DSGVO-konform).
+
+    Persönliche Daten (Foren-Posts, Einreichungen, Tokens, …) werden
+    endgültig gelöscht, der Account wird anonymisiert. Von dem User
+    erstellte Kurse und Kurs-Inhalte bleiben erhalten (Institutsdaten).
 
     Sicherheit: Username muss als Bestätigung mitgeschickt werden.
     Admin-Accounts können nicht selbst gelöscht werden (letzter-Admin-
@@ -184,6 +188,11 @@ async def delete_account(
             "Der eingegebene Username stimmt nicht mit deinem Account überein.",
         )
 
-    username = user_service.delete_user_with_data(session, user)
+    username = user_service.soft_delete_user(session, user)
     logger.info("[Account] User '%s' hat seinen Account selbst gelöscht.", username)
-    return {"message": "Dein Account wurde gelöscht."}
+    return {
+        "message": (
+            "Dein Account wurde anonymisiert und deine persönlichen Daten gelöscht. "
+            "Von dir erstellte Kurse und Kurs-Inhalte bleiben erhalten."
+        )
+    }

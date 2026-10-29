@@ -46,9 +46,12 @@
 
         <div id="courses-list" class="space-y-3">
           {% for course in courses %}
-          <div class="card flex items-center justify-between">
+          <div class="card flex items-center justify-between {% if course.deleted %}opacity-60{% endif %}">
             <div>
-              {% if course.is_member %}
+              {% if course.deleted %}
+              <span class="font-semibold text-gray-400">{{ course.name }}
+                <span class="text-xs font-normal">(im Papierkorb)</span></span>
+              {% elif course.is_member %}
               <a href="/courses/{{ course.id }}" class="font-semibold text-blue-600 hover:underline">{{ course.name }}</a>
               {% else %}
               <span class="font-semibold text-gray-400">{{ course.name }}</span>
@@ -56,6 +59,12 @@
               <div class="text-sm text-gray-500">{{ course.semester }}</div>
             </div>
             <div class="flex items-center gap-3">
+              {% if course.deleted %}
+              <button onclick="restoreCourse({{ course.id }})"
+                      class="text-green-600 hover:text-green-800 text-sm transition" title="Kurs wiederherstellen">
+                ♻️
+              </button>
+              {% else %}
               <button onclick="showDuplicateCourseModal(this)"
                       data-course-id="{{ course.id }}"
                       data-course-name="{{ course.name | e }}"
@@ -65,9 +74,10 @@
                 📋
               </button>
               <button onclick="deleteCourse({{ course.id }}, '{{ course.name }}')"
-                      class="text-red-500 hover:text-red-700 text-sm transition" title="Kurs löschen">
+                      class="text-red-500 hover:text-red-700 text-sm transition" title="Kurs in den Papierkorb legen">
                 🗑️
               </button>
+              {% endif %}
             </div>
           </div>
           {% else %}
@@ -100,12 +110,16 @@
             </thead>
             <tbody>
               {% for user in all_users %}
-              <tr class="hover:bg-gray-50 border-t">
-                <td class="py-2 px-4 text-sm">{{ user.name }}</td>
-                <td class="py-2 px-4 text-sm font-mono">{{ user.username }}</td>
-                <td class="py-2 px-4 text-sm text-gray-500">{{ user.email }}</td>
+              <tr class="hover:bg-gray-50 border-t {% if user.deleted %}opacity-60{% endif %}">
+                <td class="py-2 px-4 text-sm {% if user.deleted %}text-gray-400{% endif %}">
+                  {% if user.deleted %}{{ user.name }} <span class="text-xs font-normal">(im Papierkorb)</span>{% else %}{{ user.name }}{% endif %}
+                </td>
+                <td class="py-2 px-4 text-sm font-mono {% if user.deleted %}text-gray-400{% endif %}">{{ user.username }}</td>
+                <td class="py-2 px-4 text-sm text-gray-500">{{ user.email or '—' }}</td>
                 <td class="py-2 px-4 text-center">
-                  {% if user.id != current_user.id %}
+                  {% if user.deleted %}
+                  <span class="inline-block px-2 py-1 rounded text-xs font-semibold bg-gray-100 text-gray-500">gelöscht</span>
+                  {% elif user.id != current_user.id %}
                   <select
                     class="role-select border rounded px-2 py-1 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500
                       {% if user.role.lower() == 'admin' %}border-red-200 bg-red-50 text-red-700{% else %}border-gray-200 bg-gray-50 text-gray-700{% endif %}"
@@ -123,11 +137,17 @@
                   {% endif %}
                 </td>
                 <td class="py-2 px-4 text-center">
+                  {% if user.deleted %}
+                  <button onclick="restoreUser({{ user.id }})"
+                          title="User wiederherstellen"
+                          class="text-green-600 hover:text-green-800 text-sm">♻️</button>
+                  {% else %}
                   <button onclick="editUser({{ user.id }}, '{{ user.username }}', '{{ user.name }}', '{{ user.email }}', '{{ user.role }}')"
                           class="text-blue-600 hover:text-blue-800 text-sm mr-2">✏️</button>
                   {% if user.id != current_user.id %}
                   <button onclick="deleteUser({{ user.id }}, '{{ user.username }}')"
                           class="text-red-500 hover:text-red-700 text-sm">🗑️</button>
+                  {% endif %}
                   {% endif %}
                 </td>
               </tr>
@@ -832,7 +852,7 @@
 
   // ─── Delete User ─────────────────────────────────────────────
   async function deleteUser(userId, username) {
-    if (!confirm(`User "${username}" wirklich löschen?`)) return;
+    if (!confirm(`User "${username}" in den Papierkorb legen?\n\nDer User wird anonymisiert, seine persönlichen Daten (Einreichungen, Foren-Posts, …) endgültig gelöscht. Von ihm erstellte Kurse bleiben erhalten.`)) return;
 
     try {
       const res = await fetch(`/api/admin/users/${userId}`, {
@@ -852,7 +872,36 @@
         return;
       }
 
-      showToast(`User "${username}" gelöscht.`, 'success');
+      showToast(`User "${username}" in den Papierkorb gelegt.`, 'success');
+      window.location.reload();
+
+    } catch (err) {
+      showToast(`Fehler: ${err.message}`, 'error');
+    }
+  }
+
+  async function restoreUser(userId) {
+    if (!confirm('User wiederherstellen?\n\nAchtung: der Account bleibt anonymisiert — Name, Email und Zugangsdaten müssen anschließend per Bearbeiten-Dialog wieder eingetragen werden.')) return;
+
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/restore`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+
+      let detail;
+      try {
+        detail = (await res.json()).detail;
+      } catch (_) {
+        detail = null;
+      }
+
+      if (!res.ok) {
+        showToast(detail || `Fehler bei der Wiederherstellung (HTTP ${res.status}).`, 'error');
+        return;
+      }
+
+      showToast('User wiederhergestellt.', 'success');
       window.location.reload();
 
     } catch (err) {
@@ -1511,9 +1560,9 @@
 
 
 
-  // ─── Delete Course ───────────────────────────────────────────
+  // ─── Delete Course ───────────────────────────────────────────────
   async function deleteCourse(courseId, courseName) {
-    if (!confirm(`Kurs "${courseName}" wirklich löschen?\n\nAlle Aufgaben, Einreichungen und Feedbacks des Kurses werden ebenfalls gelöscht.`)) return;
+    if (!confirm(`Kurs "${courseName}" in den Papierkorb legen?\n\nAlle Daten bleiben erhalten und der Kurs kann später wiederhergestellt werden. Eine endgültige Löschung ist nur per CLI möglich.`)) return;
 
     try {
       const res = await fetch(`/api/admin/courses/${courseId}`, {
@@ -1533,7 +1582,37 @@
         return;
       }
 
-      showToast(`Kurs "${courseName}" gelöscht.`, 'success');
+      showToast(`Kurs "${courseName}" in den Papierkorb gelegt.`, 'success');
+      window.location.reload();
+
+    } catch (err) {
+      showToast(`Fehler: ${err.message}`, 'error');
+    }
+  }
+
+  // ─── Restore Course ──────────────────────────────────────────────
+  async function restoreCourse(courseId) {
+    if (!confirm('Kurs wiederherstellen?')) return;
+
+    try {
+      const res = await fetch(`/api/admin/courses/${courseId}/restore`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+
+      let detail;
+      try {
+        detail = (await res.json()).detail;
+      } catch (_) {
+        detail = null;
+      }
+
+      if (!res.ok) {
+        showToast(detail || `Fehler bei der Wiederherstellung (HTTP ${res.status}).`, 'error');
+        return;
+      }
+
+      showToast('Kurs wiederhergestellt.', 'success');
       window.location.reload();
 
     } catch (err) {

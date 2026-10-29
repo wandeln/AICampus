@@ -128,6 +128,7 @@ def migrate_schema():
     column_migrations = {
         "users": {
             "avatar": "VARCHAR",  # relatives Pfad des Profilbilds (avatars/<uuid>.<ext>)
+            "deleted_at": "DATETIME",  # Soft Delete (null = aktiv)
         },
         "global_settings": {
             "llm_api_url_public": "VARCHAR",
@@ -142,6 +143,7 @@ def migrate_schema():
         },
         "course_script_sections": {
             "summary": "TEXT",  # Interne LLM-Zusammenfassung (nicht für Studenten)
+            "deleted_at": "DATETIME",  # Soft Delete (null = aktiv)
         },
         "forum_messages": {
             "channel_id": "INTEGER",  # Forum-Kanal, dem die Nachricht zugeordnet ist
@@ -155,6 +157,7 @@ def migrate_schema():
         },
         "courses": {
             "toc_visible": "BOOLEAN DEFAULT 1",  # Inhaltsverzeichnis für Studenten sichtbar
+            "deleted_at": "DATETIME",  # Soft Delete (null = aktiv)
         },
         "tasks": {
             # (Legacy-Spalten workspace_spec/workspace_dataset wurden mit dem
@@ -177,6 +180,7 @@ def migrate_schema():
             # Upload-Aufgaben: Original-Dateinamen (Datei unter data/upload_tasks/{task_id}/)
             "upload_template": "VARCHAR",  # Template-Datei (Download für Studenten)
             "upload_solution_file": "VARCHAR",  # Musterlösungs-Datei (versteckt, LLM-Grading)
+            "deleted_at": "DATETIME",  # Soft Delete (null = aktiv)
         },
         "submissions": {
             "workspace_snapshot": "VARCHAR",  # Pfad zu workspace.tar.gz
@@ -201,6 +205,7 @@ def migrate_schema():
         "course_materials": {
             "display_order": "INTEGER DEFAULT 0",  # Reihenfolge (mehrere Slide-Decks pro Kurs)
             "summary": "TEXT",  # Interne LLM-Zusammenfassung (nicht für Studenten; Slide-Decks)
+            "deleted_at": "DATETIME",  # Soft Delete (null = aktiv)
         },
         "course_imports": {
             "slides_plan": "JSON NOT NULL DEFAULT '[]'",  # Folien-Plan (separat vom Skript-Plan)
@@ -214,6 +219,7 @@ def migrate_schema():
         },
         "course_media": {
             "content_hash": "VARCHAR(64)",  # SHA256 der Quelldatei (Medien-Import-Dedup)
+            "deleted_at": "DATETIME",  # Soft Delete (null = aktiv)
         },
         "llm_debug_entries": {
             "user_id": "INTEGER",  # auslösender User (NULL = kein User-Kontext)
@@ -399,3 +405,7 @@ def get_session():
     """Yield a DB session. Use as FastAPI dependency: `Depends(get_session)`"""
     with Session(engine) as session:
         yield session
+
+
+# Soft-Delete-Read-Filter registrieren (muss vor den ersten Queries laufen)
+from database import soft_delete  # noqa: E402,F401

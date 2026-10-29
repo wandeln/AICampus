@@ -221,6 +221,10 @@
 (function() {
   let mediaList = [];   // Alle bisher geladenen Medien (Seiten kumuliert)
   let editingId = null;
+  // Per Delete lokal entfernte IDs → die dazugehörigen SSE-Pushes (eigener
+  // Delete vom Server) werden im Content-Watch ignoriert, sonst würde
+  // loadMedia() die Seite gleich nach dem Löschen komplett neu laden.
+  const locallyRemoved = new Set();
 
   // ─── Laden (server-seitig paginiert, Infinite Scroll) ──────────
   // Bei 100–1000 Medien würde die komplette Liste pro Aufruf Server und
@@ -293,8 +297,11 @@
       // Bilder erhalten eine stabile URL (Browser-Cache + ETag-Revalidierung,
       // ersetzte Dateien kommen trotzdem ohne Re-Download pro Seite an).
       const ts = Date.now();
-      items.forEach(m => grid.appendChild(mediaCard(m, ts)));
-      mediaList.push(...items);
+      // Dedup: nach lokalem Entfernen (Delete) ist die Paginierungs-Offset
+      // um eins versetzt → die letzte Kachel würde sonst doppelt erscheinen.
+      const fresh = items.filter(m => !mediaList.some(x => x.id === m.id));
+      fresh.forEach(m => grid.appendChild(mediaCard(m, ts)));
+      mediaList.push(...fresh);
       hasMore = !!data.has_more;
       if (mediaList.length === 0) {
         grid.innerHTML = filtersActive()
@@ -326,6 +333,7 @@
   function mediaCard(m, ts) {
     const card = document.createElement("div");
     card.className = "bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden flex flex-col";
+    card.dataset.mediaId = m.id;
 
     // Preview: Bild → <img>; SVG-Applet → <img> (SMIL/CSS-Animationen laufen
     // auch im <img>); HTML-Applet → lebendes Mini-Iframe (sandboxed,
@@ -1061,8 +1069,8 @@
     if (!m) return;
     const used = m.usages.length > 0;
     const msg = used
-      ? `"${m.title}" wird in ${m.usages.length} Stelle(n) verwendet: ${m.usages.map(u => u.location).join(", ")}. Trotzdem löschen?`
-      : `"${m.title}" wirklich löschen?`;
+      ? `"${m.title}" wird in ${m.usages.length} Stelle(n) verwendet: ${m.usages.map(u => u.location).join(", ")}. Trotzdem in den Papierkorb verschieben?`
+      : `"${m.title}" wirklich in den Papierkorb verschieben?`;
     if (!confirm(msg)) return;
 
     fetch(`/api/courses/${courseId}/media/${id}`, {
@@ -1072,10 +1080,28 @@
       .then(r => r.json().then(d => ({ ok: r.ok, d })))
       .then(({ ok, d }) => {
         if (!ok) throw new Error(d.detail || "Fehler beim Löschen.");
-        showToast(d.message || "Medium gelöscht.", "success");
-        loadMedia();
+        showToast(d.message || "Medium in den Papierkorb gelegt.", "success");
+        removeMediaTile(id);
       })
       .catch(err => showToast(err.message, "error"));
+  }
+
+  // Kachel ohne Reload entfernen (Fade-Out wie bei den Aufgaben-Listen).
+  function removeMediaTile(id) {
+    locallyRemoved.add(id);
+    const i = mediaList.findIndex((x) => x.id === id);
+    if (i >= 0) mediaList.splice(i, 1);
+    const tile = grid.querySelector('[data-media-id="' + id + '"]');
+    if (!tile) return;
+    tile.style.transition = "opacity 0.3s";
+    tile.style.opacity = "0";
+    setTimeout(() => {
+      tile.remove();
+      if (!grid.querySelector("[data-media-id]")) {
+        grid.innerHTML =
+          '<p class="text-gray-400 text-sm col-span-2">Noch keine Medien. Lade links ein Bild oder Video hoch oder generiere ein Applet mit dem LLM.</p>';
+      }
+    }, 300);
   }
 
   // ─── Upload (automatisch nach Dateiauswahl) ───────────────────
@@ -1162,6 +1188,7 @@
   aicampusWatchContent(courseId, (data) => {
     if (data.entity_type !== "media" && data.entity_type !== "applet") return;
     if (editingId != null) return;
+    if (locallyRemoved.has(data.entity_id)) return; // eigener Delete-Push
     loadMedia();
   });
 })();

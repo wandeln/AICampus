@@ -50,6 +50,7 @@ from database.models import (
 from services.auth_service import get_current_user, require_course_access
 from services import file_edits
 from services import notifications
+from services import trash_service
 from services import version_service
 from services.export_service import ExportService
 from services.grading_service import GradingService
@@ -537,7 +538,12 @@ async def delete_task(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Aufgabe löschen (nur Tutor/Admin des Kurses)."""
+    """Aufgabe in den Papierkorb legen (nur Tutor/Admin des Kurses).
+
+    Reversibel: nur `deleted_at` wird gesetzt; Dateien, Workspace und
+    Einreichungen bleiben erhalten. Wiederherstellung: Kurs-Settings →
+    Papierkorb. Endgültige Löschung nur via CLI-Purge.
+    """
     task = session.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Aufgabe nicht gefunden.")
@@ -552,40 +558,10 @@ async def delete_task(
         raise HTTPException(403, "Keine Berechtigung, diese Aufgabe zu löschen.")
 
     task_course_id = task.course_id
-    # Workspace-Zeilen können auch bei nicht-Workspace-Typen vorhanden sein
-    # (z. B. per Typ-Wechsel verwaist) — dann ebenfalls aufräumen, sonst
-    # bricht session.delete(task) mit IntegrityError ab (500).
-    task_has_workspace_rows = session.exec(
-        select(TaskWorkspaceFile.id).where(TaskWorkspaceFile.task_id == task.id)
-    ).first() is not None
-    if task.task_type.value == "workspace" or task_has_workspace_rows:
-        # Agent-Ressourcen + lokale Dateien + Workspace-DB-Rows, BEVOR der
-        # Task aus der DB gelöscht wird (Instanz ist danach expired/detached)
-        workspace_service.discard_workspace_content(session, task)
-
-    # Upload-Dateien (Task-Dateien + Einreichungs-Dateien) aufräumen
-    upload_service.cleanup_task(task.id)
-
-    # Media-Usages der Aufgabe vorher entfernen (FK nach tasks.id)
-    session.exec(delete(MediaUsage).where(MediaUsage.task_id == task.id))
-
-    for sub in task.submissions:
-        upload_service.cleanup_submission(sub.id, sub.upload_file)
-        for fb in sub.feedback_list:
-            session.delete(fb)
-        session.delete(sub)
-    for hint in task.hint_exchanges:
-        session.delete(hint)
-
-    # Versions-History der Aufgabe mit aufräumen
-    session.exec(delete(ContentVersion)
-                 .where(ContentVersion.entity_type == "task")
-                 .where(ContentVersion.entity_id == task.id))
-
-    session.delete(task)
-    session.commit()
+    task_title = task.title
+    trash_service.soft_delete(session, task)
     sync_media_usages(session, task_course_id)
-    return {"message": "Aufgabe '" + task.title + "' gelöscht."}
+    return {"message": f"Aufgabe '{task_title}' in den Papierkorb gelegt."}
 
 
 def _copy_workspace_content(session: Session, src: Task, dst: Task) -> None:

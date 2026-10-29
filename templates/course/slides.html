@@ -42,7 +42,7 @@
 <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
   <div class="flex items-baseline gap-2">
     <h2 class="text-lg font-bold text-gray-800">Folien</h2>
-    <span class="text-sm text-gray-400">{{ decks | length }} Deck{{ "s" if decks | length != 1 }}</span>
+    <span class="text-sm text-gray-400" id="deck-count">{{ decks | length }} Deck{{ "s" if decks | length != 1 }}</span>
   </div>
   {% if is_tutor or is_admin %}
   <div class="flex gap-2">
@@ -454,7 +454,7 @@
     // abbrechen).
     const d = decks.find((x) => x.id === deckId);
     const title = (d && d.title) || "dieses Deck";
-    if (!confirm(`Slide-Deck "${title}" wirklich löschen?`)) return;
+    if (!confirm(`Slide-Deck "${title}" wirklich in den Papierkorb verschieben?`)) return;
     fetch(`/api/courses/${courseId}/materials/${deckId}`, {
       method: "DELETE",
       credentials: "same-origin",
@@ -462,10 +462,32 @@
       .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
       .then(({ ok, d }) => {
         if (!ok) throw new Error(d.detail || "Fehler beim Löschen.");
-        window.location.reload();
+        showToast(d.message || "Slide-Deck in den Papierkorb gelegt.", "success");
+        removeDeckTile(deckId);
       })
       .catch((err) => showToast(err.message, "error"));
   };
+
+  // Kachel ohne Reload entfernen (Fade-Out wie bei den Aufgaben-Listen).
+  function removeDeckTile(deckId) {
+    const di = decks.findIndex((x) => x.id === deckId);
+    if (di >= 0) decks.splice(di, 1);
+    // Kachel-Reveal-Instanz ordnungsgemäß aufräumen (gleicher Weg wie slRemountDeck)
+    const state = deckStates.get(deckId);
+    if (state) {
+      try { state.reveal.destroy(); } catch (e) {}
+      state.reveal = null;
+      deckStates.delete(deckId);
+    }
+    const tile = document.querySelector(`#deck-grid > div[data-deck-id="${deckId}"]`);
+    if (!tile) return;
+    tile.style.transition = "opacity 0.3s";
+    tile.style.opacity = "0";
+    setTimeout(() => tile.remove(), 300);
+    const n = document.querySelectorAll('#deck-grid > div[data-deck-id]').length;
+    const countEl = document.getElementById("deck-count");
+    if (countEl) countEl.textContent = n + " Deck" + (n === 1 ? "" : "s");
+  }
 
   // ─── Drag-and-Drop: Deck-Reihenfolge (nur Tutor/PROF) ───────────
   // Handle unten links in der Kachel. Die „Anlegen“-Kachel ist per

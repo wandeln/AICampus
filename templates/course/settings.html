@@ -14,6 +14,9 @@
       <button onclick="showSettingsTab('compute')" class="settings-tab w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-tab="compute">
         💻 Compute / Workspace
       </button>
+      <button onclick="showSettingsTab('trash')" class="settings-tab w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-tab="trash">
+        🗑️ Papierkorb (<span id="trash-count">{{ trash|length }}</span>)
+      </button>
     </div>
 
     <!-- ─── RIGHT: Content Area ──────────────────────────────── -->
@@ -117,9 +120,95 @@
     </div>
   </div>
 
+  <!-- Tab: Papierkorb -->
+  <div id="settings-tab-trash" class="settings-panel hidden">
+    <div class="max-w-3xl">
+      <div class="card py-6">
+        <div class="space-y-6">
+          <div>
+            <h3 class="text-sm font-semibold text-gray-700">Skriptkapitel</h3>
+            {% set items = trash | selectattr('kind', 'eq', 'section') | list %}
+            <ul id="trash-list-section" class="divide-y divide-gray-100 mt-2" {% if not items %}hidden{% endif %}>
+              {% for item in items %}
+              <li class="trash-item flex items-center justify-between py-2" data-kind="{{ item.kind }}" data-id="{{ item.id }}">
+                <div class="text-sm text-gray-700 truncate mr-3">
+                  <span class="font-medium">{{ item.title }}</span>
+                  <span class="text-xs text-gray-400 ml-2">gelöscht am {{ item.deleted_at.strftime('%d.%m.%Y') if item.deleted_at else '—' }}</span>
+                </div>
+                <button type="button" onclick="restoreTrashItem('{{ item.kind }}', {{ item.id }}, this)"
+                        class="shrink-0 text-xs px-2.5 py-1 rounded-lg border border-green-300 text-green-700 hover:bg-green-50 transition">
+                  ♻️ Wiederherstellen
+                </button>
+              </li>
+              {% endfor %}
+            </ul>
+            <p id="trash-empty-section" class="text-sm text-gray-400 mt-2" {% if items %}hidden{% endif %}>Keine Skriptkapitel im Papierkorb.</p>
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-gray-700">Slides</h3>
+            {% set items = trash | selectattr('kind', 'eq', 'material') | list %}
+            <ul id="trash-list-material" class="divide-y divide-gray-100 mt-2" {% if not items %}hidden{% endif %}>
+              {% for item in items %}
+              <li class="trash-item flex items-center justify-between py-2" data-kind="{{ item.kind }}" data-id="{{ item.id }}">
+                <div class="text-sm text-gray-700 truncate mr-3">
+                  <span class="font-medium">{{ item.title }}</span>
+                  <span class="text-xs text-gray-400 ml-2">gelöscht am {{ item.deleted_at.strftime('%d.%m.%Y') if item.deleted_at else '—' }}</span>
+                </div>
+                <button type="button" onclick="restoreTrashItem('{{ item.kind }}', {{ item.id }}, this)"
+                        class="shrink-0 text-xs px-2.5 py-1 rounded-lg border border-green-300 text-green-700 hover:bg-green-50 transition">
+                  ♻️ Wiederherstellen
+                </button>
+              </li>
+              {% endfor %}
+            </ul>
+            <p id="trash-empty-material" class="text-sm text-gray-400 mt-2" {% if items %}hidden{% endif %}>Keine Slides im Papierkorb.</p>
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-gray-700">Übungsaufgaben</h3>
+            {% set items = trash | selectattr('kind', 'eq', 'task') | list %}
+            <ul id="trash-list-task" class="divide-y divide-gray-100 mt-2" {% if not items %}hidden{% endif %}>
+              {% for item in items %}
+              <li class="trash-item flex items-center justify-between py-2" data-kind="{{ item.kind }}" data-id="{{ item.id }}">
+                <div class="text-sm text-gray-700 truncate mr-3">
+                  <span class="font-medium">{{ item.title }}</span>
+                  <span class="text-xs text-gray-400 ml-2">gelöscht am {{ item.deleted_at.strftime('%d.%m.%Y') if item.deleted_at else '—' }}</span>
+                </div>
+                <button type="button" onclick="restoreTrashItem('{{ item.kind }}', {{ item.id }}, this)"
+                        class="shrink-0 text-xs px-2.5 py-1 rounded-lg border border-green-300 text-green-700 hover:bg-green-50 transition">
+                  ♻️ Wiederherstellen
+                </button>
+              </li>
+              {% endfor %}
+            </ul>
+            <p id="trash-empty-task" class="text-sm text-gray-400 mt-2" {% if items %}hidden{% endif %}>Keine Übungsaufgaben im Papierkorb.</p>
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-gray-700">Medien</h3>
+            {% set items = trash | selectattr('kind', 'eq', 'media') | list %}
+            <ul id="trash-list-media" class="divide-y divide-gray-100 mt-2" {% if not items %}hidden{% endif %}>
+              {% for item in items %}
+              <li class="trash-item flex items-center justify-between py-2" data-kind="{{ item.kind }}" data-id="{{ item.id }}">
+                <div class="text-sm text-gray-700 truncate mr-3">
+                  <span class="font-medium">{{ item.title }}</span>
+                  <span class="text-xs text-gray-400 ml-2">gelöscht am {{ item.deleted_at.strftime('%d.%m.%Y') if item.deleted_at else '—' }}</span>
+                </div>
+                <button type="button" onclick="restoreTrashItem('{{ item.kind }}', {{ item.id }}, this)"
+                        class="shrink-0 text-xs px-2.5 py-1 rounded-lg border border-green-300 text-green-700 hover:bg-green-50 transition">
+                  ♻️ Wiederherstellen
+                </button>
+              </li>
+              {% endfor %}
+            </ul>
+            <p id="trash-empty-media" class="text-sm text-gray-400 mt-2" {% if items %}hidden{% endif %}>Keine Medien im Papierkorb.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
   function showSettingsTab(tab) {
-    if (tab !== 'settings' && tab !== 'import' && tab !== 'compute') tab = 'settings';
+    if (tab !== 'settings' && tab !== 'import' && tab !== 'compute' && tab !== 'trash') tab = 'settings';
     document.querySelectorAll('.settings-panel').forEach((el) => el.classList.add('hidden'));
     document.getElementById('settings-tab-' + tab).classList.remove('hidden');
 
@@ -179,6 +268,37 @@
       showToast('Fehler: ' + err.message, 'error');
     }
   });
+
+  // ─── Papierkorb: Item wiederherstellen ──────────────────────────
+  async function restoreTrashItem(kind, id, btn) {
+    const row = btn.closest('.trash-item');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/courses/' + courseId + '/trash/' + kind + '/' + id, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.detail || 'Wiederherstellung fehlgeschlagen.', 'error');
+        btn.disabled = false;
+        return;
+      }
+      showToast(data.message || 'Wiederhergestellt.', 'success');
+      if (row) row.remove();
+      const list = document.getElementById('trash-list-' + kind);
+      const empty = document.getElementById('trash-empty-' + kind);
+      if (list && list.children.length === 0 && empty) {
+        list.classList.add('hidden');
+        empty.classList.remove('hidden');
+      }
+      const countEl = document.getElementById('trash-count');
+      if (countEl) countEl.textContent = document.querySelectorAll('.trash-item').length;
+    } catch (err) {
+      showToast('Fehler: ' + err.message, 'error');
+      btn.disabled = false;
+    }
+  }
   </script>
 
   <script src="{{ asset('js/image-specs-ui.js') }}"></script>

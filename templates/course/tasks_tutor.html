@@ -267,7 +267,7 @@
   });
 
   async function confirmDeleteTask(taskId, title) {
-    const msg = 'Möchtest du "' + title + '" wirklich löschen?\n\nAlle zugehörigen Test-Cases, Einreichungen und Feedback-Einträge werden ebenfalls gelöscht.';
+    const msg = 'Möchtest du "' + title + '" wirklich in den Papierkorb legen?\n\nTest-Cases, Einreichungen und Feedback bleiben erhalten. Der PROF kann die Aufgabe über Kurs-Einstellungen → Papierkorb wiederherstellen.';
     if (!confirm(msg)) {
       return;
     }

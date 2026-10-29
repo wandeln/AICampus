@@ -16,20 +16,19 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlmodel import Session, delete, func, select
+from sqlmodel import Session, func, select
 
 from database.base import get_session
 from database.models import (
-    ContentVersion,
     CourseMaterial,
     CourseRole,
     GlobalUserRole,
     MaterialType,
-    MediaUsage,
     User,
     UserCourse,
 )
 from services.auth_service import get_current_user, require_course_access
+from services import trash_service
 from services import version_service
 from services.media_service import sync_media_usages
 from services.slides_service import SlideError, parse_slides, slide_count, strip_slide_notes
@@ -250,27 +249,20 @@ async def delete_material(
     session: Session = Depends(get_session),
     user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
-    """Skript/Slides löschen (nur PROF)."""
+    """Skript/Slides in den Papierkorb legen (nur PROF).
+
+    Reversibel: nur `deleted_at` wird gesetzt; Versionen und Dateien bleiben
+    erhalten. Wiederherstellung: Kurs-Settings → Papierkorb. Endgültige
+    Löschung nur via CLI-Purge.
+    """
     material = _get_material(session, course_id, material_id)
     label = LABELS[material.material_type]
     title = material.title
 
-    # Slide-Decks: Versions-History mit löschen (Skripte nutzen Kapitel, nicht Material)
-    if material.material_type == MaterialType.SLIDES:
-        session.exec(
-            delete(ContentVersion)
-            .where(ContentVersion.entity_type == "slide_deck")
-            .where(ContentVersion.entity_id == material_id)
-        )
-
-    # Media-Usages des Materials vorher entfernen (FK nach course_materials.id)
-    session.exec(delete(MediaUsage).where(MediaUsage.material_id == material_id))
-
-    session.delete(material)
-    session.commit()
+    trash_service.soft_delete(session, material)
     sync_media_usages(session, course_id)
 
-    return {"message": f"{label} '{title}' gelöscht."}
+    return {"message": f"{label} '{title}' in den Papierkorb gelegt."}
 
 
 @router.patch("/courses/{course_id}/materials/reorder")

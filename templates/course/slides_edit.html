@@ -917,7 +917,7 @@
   };
 
   window.deleteMaterial = function () {
-    if (!confirm(`Slide-Deck "${titleInput.value || material.title}" wirklich löschen?`)) return;
+    if (!confirm(`Slide-Deck "${titleInput.value || material.title}" wirklich in den Papierkorb verschieben?`)) return;
     fetch(`/api/courses/${courseId}/materials/${material.id}`, {
       method: "DELETE",
       credentials: "same-origin",

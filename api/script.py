@@ -14,11 +14,11 @@ from datetime import datetime, timezone
 from typing import Optional, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlmodel import Session, delete, select
+from sqlmodel import Session, select
 
 from database.base import get_session
 from database.models import (
-    ContentVersion,
+
     Course,
     CourseReference,
     CourseRole,
@@ -39,6 +39,7 @@ from services.auth_service import get_current_user, require_course_access
 from services.content_edits import ContentEditError, mask_code_blocks
 from services.llm_service import LLMService
 from services import media_service
+from services import trash_service
 from services.media_service import sync_media_usages
 from services.references_service import build_references_text
 from services.settings_resolver import get_effective_llm_config
@@ -1000,7 +1001,13 @@ async def delete_section(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Kapitel löschen (nur PROF/TUTOR)."""
+    """Kapitel in den Papierkorb legen (nur PROF/TUTOR).
+
+    Reversibel: nur `deleted_at` wird gesetzt; Fragen behalten die
+    Zuordnung zum Kapitel (bei Restore wieder zugeordnet), Versionen und
+    Dateien bleiben erhalten. Wiederherstellung: Kurs-Settings → Papierkorb.
+    Endgültige Löschung nur via CLI-Purge.
+    """
     section = session.get(ScriptSection, section_id)
     if not section:
         raise HTTPException(404, "Kapitel nicht gefunden.")
@@ -1009,25 +1016,10 @@ async def delete_section(
     section_course_id = section.course_id
     section_title = section.title
 
-    # Fragen auf dieses Kapitel bleiben als „Allgemein“ (sonst FK-Verstoß)
-    for q in session.exec(
-        select(ScriptQuestion).where(ScriptQuestion.section_id == section_id)
-    ).all():
-        q.section_id = None
-        session.add(q)
-
-    # Versions-History des Kapitels mit löschen
-    session.exec(
-        delete(ContentVersion)
-        .where(ContentVersion.entity_type == "script_section")
-        .where(ContentVersion.entity_id == section_id)
-    )
-
-    session.delete(section)
-    session.commit()
+    trash_service.soft_delete(session, section)
     sync_media_usages(session, section_course_id)
 
-    return {"message": f"Kapitel '{section_title}' gelöscht."}
+    return {"message": f"Kapitel '{section_title}' in den Papierkorb gelegt."}
 
 
 @router.patch("/courses/{course_id}/script-sections/reorder")

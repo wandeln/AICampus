@@ -1,13 +1,16 @@
 """
-Kurs-Löschung: vollständige Kaskade aller abhängigen Daten.
+Kurs-Löschung in zwei Stufen:
 
-Genutzt von:
-- Admin-API: DELETE /api/admin/courses/{course_id}
-- User-Löschung: eigene Kurse eines gelöschten Users (services/user_service.py)
+- `soft_delete_course`: setzt nur `deleted_at` (reversibel; Dateien bleiben).
+  Genutzt von der Admin-API. Restore per `restore_course`.
+- `hard_delete_course`: vollständige Kaskade aller abhängigen Daten inkl.
+  Dateien. Wird NICHT aus dem UI aufgerufen — nur vom CLI-Purge
+  (scripts/purge_trash.py).
 """
 
 import logging
 import shutil
+from datetime import datetime
 
 from sqlmodel import Session, select
 
@@ -69,8 +72,26 @@ def _delete_content_versions(
         session.delete(version)
 
 
-def delete_course(session: Session, course: Course) -> str:
-    """Kurs löschen, inkl. aller abhängigen Daten (ein Commit, atomar).
+def soft_delete_course(session: Session, course: Course) -> str:
+    """Kurs soft löschen (nur `deleted_at` setzen) — reversibel, keine
+    Kaskade, keine Dateien. Der Kurs wird dadurch über den globalen
+    Soft-Delete-Read-Filter unsichtbar; Restore = `restore_course`."""
+    name = course.name
+    course.deleted_at = datetime.now()
+    session.add(course)
+    session.commit()
+    return name
+
+
+def restore_course(session: Session, course: Course) -> None:
+    """Soft gelöschten Kurs wiederherstellen (Kinder blieben erhalten)."""
+    course.deleted_at = None
+    session.add(course)
+    session.commit()
+
+
+def hard_delete_course(session: Session, course: Course) -> str:
+    """Kurs endgültig löschen, inkl. aller abhängigen Daten (ein Commit, atomar).
 
     Manuelle Cascading deletes in korrekter Reihenfolge (Kinder zuerst).
     flush() nach jeder Gruppe, damit die Lösch-Reihenfolge garantiert ist.

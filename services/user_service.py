@@ -1,39 +1,39 @@
 """
-User-Löschung: vollständige Kaskade über alle Tabellen, die users.id referenzieren.
+User-Löschung (Soft Delete + Anonymisierung, DSGVO-konform):
 
-Genutzt von:
-- Admin-API: DELETE /api/admin/users/{user_id}
-- User-Settings: DELETE /api/auth/settings/account (Selbstlöschung)
+- `soft_delete_user`: User-Zeile bleibt als anonymisierter FK-Anker
+  (Kurse/Inhalt des Users überleben dem Institut — das war das größte
+  Risiko der alten Vollkaskade), persönliche Daten werden HART gelöscht
+  (Art. 17): Forum-Posts, Einreichungen (Lösungen!), Hints, Runs,
+  Feedback, Tracking, Tokens.
+- `restore_user`: setzt nur `deleted_at=NULL` (anonymisiert bleibt;
+  Username/Name/Email trägt der Admin per Edit-Dialog wieder ein).
+
+Echte Vollkaskade (inkl. eigener Kurse) gibt es bewusst NICHT mehr im App-
+Code — nur via CLI/Support bei Bedarf.
 
 Reihenfolge ist wichtig: NOT-NULL-FKs ohne Relationship-Cascade (z. B.
 workspace_runs.submission_id) erfordern, dass Kinder vor Eltern gelöscht
-werden. Ein Commit pro gelöschtem eigenen Kurs, ein Commit für den Rest;
-Dateien (Avatar, Snapshots, Import-Staging) werden nach dem Commit
+werden. Dateien (Avatar, Snapshots, Import-Staging) werden nach dem Commit
 best-effort entfernt.
 """
 
 import logging
 import shutil
+from datetime import datetime
 
 from sqlmodel import Session, select
 
 from config import SUBMISSION_DIR
 from database.models import (
     ContentVersion,
-    Course,
     CourseImport,
-    CourseInvite,
-    CourseMaterial,
-    CourseMedia,
-    CourseReference,
     Feedback,
-    ForumChannel,
     ForumChannelReadState,
     ForumMessage,
     HintExchange,
     ImageSpec,
     LLMDebugEntry,
-    MediaUsage,
     McpClientContext,
     McpEvent,
     McpOAuthCode,
@@ -45,34 +45,31 @@ from database.models import (
     PageView,
     ScriptQuestion,
     ScriptQuestionResponse,
-    ScriptSection,
     Submission,
-    Task,
-    TaskWorkspaceFile,
     User,
     UserCourse,
     WorkspaceRun,
 )
-from services import course_service, import_service, media_service
-from services import upload_service
-from services.workspace_service import workspace_service
+from services import import_service, media_service
 
 logger = logging.getLogger(__name__)
 
 
-def delete_user_with_data(session: Session, user: User) -> str:
-    """User löschen, inkl. aller referenzierenden Daten.
+def soft_delete_user(session: Session, user: User) -> str:
+    """User soft löschen: anonymisieren + persönliche Daten hart löschen.
 
-    - Eigene Kurse: vollständige Kaskade (je eigener Commit)
-    - In anderen Kursen erstellter Inhalt (Tasks, Materialien, Kapitel,
-      Medien, Referenzen, Einladungen, Forum-Kanäle): wird gelöscht
-    - Foren-Posts, Read-States, Skript-Fragen, Hint-Dialoge,
-      Workspace-Runs, Einreichungen (inkl. Feedback): werden gelöscht
-    - MCP-Tokens (inkl. Kurs-Allowlist): werden gelöscht
-    - Image-Specs + LLM-Debug-Log: Zeilen bleiben, User-Referenz wird entfernt
-    - Dateien (Avatar, Workspace-Snapshots, Import-Staging): best effort
+    - User-Zeile bleibt als FK-Anker (Kurse, die er erstellt hat, und sein
+      erstellter Kurs-Inhalt überleben — Institutsdaten)
+    - Persönliche Daten werden HART gelöscht (Art. 17): Skript-Fragen,
+      Foren-Posts, Read-States, Hint-Dialoge, Workspace-Runs, eigene
+      Einreichungen (Lösungen!), gegebenes Feedback, Kurs-Mitgliedschaften,
+      Imports, MCP-Tokens/-Events, OAuth, Benachrichtigungen, Tracking,
+      erstellte Content-Versionen
+    - Login wird unmöglich (Password + LDAP-DN → NULL); bei LDAP-Usern
+      provisioniert ein erneuter Login einen frischen Account (der alte
+      Username ist durch die Anonymisierung frei) — bewusst so
 
-    Returns: der Username des gelöschten Users (für Meldungen).
+    Returns: der alte Username des gelöschten Users (für Meldungen).
     """
     user_id = user.id
     username = user.username
@@ -92,75 +89,14 @@ def delete_user_with_data(session: Session, user: User) -> str:
         session.delete(question)
     session.flush()
 
-    # 2. Eigene Kurse (vollständige Kaskade, commit pro Kurs)
-    for course in session.exec(select(Course).where(Course.created_by == user_id)).all():
-        course_service.delete_course(session, course)
+    # 2. In anderen Kursen erstellte Tasks/Materialien/Kapitel/Medien/
+    #    Referenzen bleiben (Instituts-Inhalt; `created_by` zeigt auf den
+    #    anonymisierten Anker) — das schützt Einreichungen anderer Studenten.
 
-    # 3. In anderen Kursen erstellte Tasks
-    #    (Workspace-Aufräumen + Einreichungen/Feedback/Hints anderer Studenten)
-    for task in session.exec(select(Task).where(Task.created_by == user_id)).all():
-        # Workspace-Zeilen können auch bei nicht-Workspace-Typen vorhanden
-        # sein (z. B. per Typ-Wechsel verwaist) — dann ebenfalls aufräumen.
-        task_has_workspace_rows = session.exec(
-            select(TaskWorkspaceFile.id).where(TaskWorkspaceFile.task_id == task.id)
-        ).first() is not None
-        if task.task_type.value == "workspace" or task_has_workspace_rows:
-            workspace_service.discard_workspace_content(session, task)
-        if task.task_type.value == "upload":
-            upload_service.cleanup_task(task.id)
-        # Media-Usages der Aufgabe vorher entfernen (NOT-NULL-FK task_id)
-        for usage in session.exec(
-            select(MediaUsage).where(MediaUsage.task_id == task.id)
-        ).all():
-            session.delete(usage)
-        for sub in session.exec(select(Submission).where(Submission.task_id == task.id)).all():
-            for fb in session.exec(
-                select(Feedback).where(Feedback.submission_id == sub.id)
-            ).all():
-                session.delete(fb)
-            session.delete(sub)
-        for hint in session.exec(select(HintExchange).where(HintExchange.task_id == task.id)).all():
-            session.delete(hint)
-        session.delete(task)
-    session.flush()
+    # 3. Eigene Einladungslinks bleiben (Zugangslinks des Instituts).
 
-    # 4. In anderen Kursen erstellte Materialien, Kapitel, Medien, Referenzen
-    for material in session.exec(
-        select(CourseMaterial).where(CourseMaterial.created_by == user_id)
-    ).all():
-        session.delete(material)
-    for section in session.exec(
-        select(ScriptSection).where(ScriptSection.created_by == user_id)
-    ).all():
-        # Fragen anderer Studenten zu diesem Kapitel: section_id → NULL
-        # (Design: NULL = "Kapitel gelöscht", Frage bleibt allgemein)
-        for question in session.exec(
-            select(ScriptQuestion).where(ScriptQuestion.section_id == section.id)
-        ).all():
-            question.section_id = None
-        session.delete(section)
-    for medium in session.exec(
-        select(CourseMedia).where(CourseMedia.created_by == user_id)
-    ).all():
-        for usage in session.exec(
-            select(MediaUsage).where(MediaUsage.media_id == medium.id)
-        ).all():
-            session.delete(usage)
-        session.delete(medium)
-    for reference in session.exec(
-        select(CourseReference).where(CourseReference.created_by == user_id)
-    ).all():
-        session.delete(reference)
-    session.flush()
-
-    # 5. Eigene Einladungslinks
-    for invite in session.exec(
-        select(CourseInvite).where(CourseInvite.created_by == user_id)
-    ).all():
-        session.delete(invite)
-    session.flush()
-
-    # 6. Forum: eigene Nachrichten → eigene Read-States → erstellte Kanäle
+    # 4. Forum: eigene Nachrichten + eigene Read-States (persönliche Daten).
+    #    Erstellte Kanäle bleiben (Kurs-Inhalt) — nur deren eigene Posts weg.
     for message in session.exec(
         select(ForumMessage).where(ForumMessage.user_id == user_id)
     ).all():
@@ -171,21 +107,8 @@ def delete_user_with_data(session: Session, user: User) -> str:
     ).all():
         session.delete(read_state)
     session.flush()
-    for channel in session.exec(
-        select(ForumChannel).where(ForumChannel.created_by == user_id)
-    ).all():
-        for message in session.exec(
-            select(ForumMessage).where(ForumMessage.channel_id == channel.id)
-        ).all():
-            session.delete(message)
-        for read_state in session.exec(
-            select(ForumChannelReadState).where(ForumChannelReadState.channel_id == channel.id)
-        ).all():
-            session.delete(read_state)
-        session.delete(channel)
-    session.flush()
 
-    # 7. Eigene Hint-Dialoge + Workspace-Runs
+    # 5. Eigene Hint-Dialoge + Workspace-Runs
     #    (Runs vor den eigenen Einreichungen: workspace_runs.submission_id-FK)
     for hint in session.exec(
         select(HintExchange).where(HintExchange.student_id == user_id)
@@ -197,7 +120,7 @@ def delete_user_with_data(session: Session, user: User) -> str:
         session.delete(run)
     session.flush()
 
-    # 8. Eigene Einreichungen (inkl. Feedback + Snapshot-Ordner auf Disc)
+    # 6. Eigene Einreichungen (inkl. Feedback + Snapshot-Ordner auf Disc)
     snapshot_dirs = []
     for sub in session.exec(select(Submission).where(Submission.student_id == user_id)).all():
         for fb in session.exec(
@@ -209,11 +132,11 @@ def delete_user_with_data(session: Session, user: User) -> str:
         session.delete(sub)
     session.flush()
 
-    # 9. Vom User gegebene Feedbacks (auf Einreichungen anderer)
+    # 7. Vom User gegebene Feedbacks (auf Einreichungen anderer)
     for fb in session.exec(select(Feedback).where(Feedback.giver_id == user_id)).all():
         session.delete(fb)
 
-    # 10. Kurs-Imports (DB-Zeilen; Staging-Ordner nach dem Commit)
+    # 8. Kurs-Imports (DB-Zeilen; Staging-Ordner nach dem Commit)
     staging_dirs = []
     for imp in session.exec(
         select(CourseImport).where(CourseImport.created_by == user_id)
@@ -222,7 +145,7 @@ def delete_user_with_data(session: Session, user: User) -> str:
             staging_dirs.append(import_service.staging_dir(imp.course_id, imp.job_id))
         session.delete(imp)
 
-    # 11. MCP-Tokens (Allowlist-Zeilen vor den Tokens)
+    # 9. MCP-Tokens (Allowlist-Zeilen vor den Tokens)
     mcp_token_ids = [
         t.id for t in session.exec(select(McpToken).where(McpToken.user_id == user_id)).all()
     ]
@@ -235,7 +158,7 @@ def delete_user_with_data(session: Session, user: User) -> str:
         session.delete(token)
     session.flush()
 
-    # 12. User-Referenzen, die nicht gelöscht werden: → NULL
+    # 10. User-Referenzen, die nicht gelöscht werden: → NULL
     for spec in session.exec(select(ImageSpec).where(ImageSpec.created_by == user_id)).all():
         spec.created_by = None
     for entry in session.exec(
@@ -243,11 +166,11 @@ def delete_user_with_data(session: Session, user: User) -> str:
     ).all():
         entry.user_id = None
 
-    # 13. Kurs-Mitgliedschaften
+    # 11. Kurs-Mitgliedschaften (Zugang wird entzogen)
     for uc in session.exec(select(UserCourse).where(UserCourse.user_id == user_id)).all():
         session.delete(uc)
 
-    # 13b. Benachrichtigungen + Tracking + MCP-OAuth + Content-Versionen
+    # 12. Benachrichtigungen + Tracking + MCP-OAuth + Content-Versionen
     for note in session.exec(
         select(Notification).where(
             (Notification.user_id == user_id) | (Notification.actor_id == user_id)
@@ -276,12 +199,19 @@ def delete_user_with_data(session: Session, user: User) -> str:
         session.delete(ver)
     session.flush()
 
-    # 14. Den User selbst
+    # 13. Den User anonymisieren (Zeile bleibt als FK-Anker, Login unmöglich)
     avatar_rel = user.avatar
-    session.delete(user)
+    user.deleted_at = datetime.now()
+    user.username = f"geloescht_{user_id}"
+    user.name = "Gelöschter Account"
+    user.email = None
+    user.password_hash = None
+    user.ldap_dn = None
+    user.avatar = None
+    session.add(user)
     session.commit()
 
-    # 15. Dateien (best effort, nach dem Commit)
+    # 14. Dateien (best effort, nach dem Commit)
     if avatar_rel:
         media_service.delete_avatar_file(avatar_rel)
     for d in snapshot_dirs:
@@ -291,3 +221,11 @@ def delete_user_with_data(session: Session, user: User) -> str:
             shutil.rmtree(d, ignore_errors=True)
 
     return username
+
+
+def restore_user(session: Session, user: User) -> None:
+    """Soft gelöschten User wiederherstellen (anonymisiert bleibt; Username/
+    Name/Email trägt der Admin anschließend per Edit-Dialog wieder ein)."""
+    user.deleted_at = None
+    session.add(user)
+    session.commit()

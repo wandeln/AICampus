@@ -19,16 +19,17 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import func
-from sqlmodel import Session, delete, select
+from sqlmodel import Session, select
 
 from config import MEDIA_DIR
 from database.base import get_session
-from database.models import ContentVersion, CourseMedia, CourseRole, MediaUsage, ScriptSection, User
+from database.models import CourseMedia, CourseRole, MediaUsage, ScriptSection, User
 from services.auth_service import require_course_access
 from services.llm_service import LLMService
 from services.settings_resolver import get_effective_llm_config
 from services import media_service
 from services import notifications
+from services import trash_service
 from services import version_service
 from services.media_service import RefInfo
 from services.content_edits import ContentEditError, _resolve_span
@@ -749,25 +750,22 @@ async def delete_media(
     session: Session = Depends(get_session),
     _user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
-    """Medium löschen (Datei + DB + Usage-Einträge)."""
+    """Medium in den Papierkorb legen (Datei bleibt erhalten).
+
+    Reversibel: nur `deleted_at` wird gesetzt; Versionen, Usages und Datei
+    bleiben. Wiederherstellung: Kurs-Settings → Papierkorb. Endgültige
+    Löschung nur via CLI-Purge.
+    """
     media = _get_media(session, course_id, media_id)
+    title = media.title
+    media_type = media.media_type
 
-    if media.media_type == "applet":
-        session.exec(
-            delete(ContentVersion)
-            .where(ContentVersion.entity_type == "applet")
-            .where(ContentVersion.entity_id == media.id)
-        )
-    for u in session.exec(select(MediaUsage).where(MediaUsage.media_id == media.id)).all():
-        session.delete(u)
-    session.delete(media)
-    session.commit()
-
-    media_service.delete_file(media.file_path)
+    trash_service.soft_delete(session, media)
     # Live-Update: offene Medien-Listen/Studio-Tabs entfernen die Kachel.
+    # (media_id aus dem Path — `media.id` wäre nach dem Commit expired)
     notifications.push_content_updated(
-        session, course_id, "applet" if media.media_type == "applet" else "media", media.id)
-    return {"message": f"Medium '{media.title}' gelöscht."}
+        session, course_id, "applet" if media_type == "applet" else "media", media_id)
+    return {"message": f"Medium '{title}' in den Papierkorb gelegt."}
 
 
 @router.post("/courses/{course_id}/media/{media_id}/duplicate")

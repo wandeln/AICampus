@@ -73,7 +73,7 @@ class FeedbackSource(str, Enum):
 
 class UserBase(SQLModel):
     username: str = Field(unique=True, index=True, max_length=100)
-    email: str = Field(max_length=200)
+    email: Optional[str] = Field(default=None, max_length=200)  # NULL bei anonymisierten (soft-gelöschten) Accounts
     name: str = Field(max_length=200)
     role: GlobalUserRole = GlobalUserRole.USER    # Global: ADMIN oder USER
     password_hash: Optional[str] = Field(default=None)   # NULL bei LDAP-Users
@@ -85,6 +85,7 @@ class User(UserBase, table=True):
     __tablename__ = "users"
     
     id: Optional[int] = Field(default=None, primary_key=True)
+    deleted_at: Optional[datetime] = Field(default=None)  # Soft Delete (null = aktiv)
     
     # Relationships (mit back_populates, um SQLAlchemy-Warnings zu vermeiden)
     user_courses: List["UserCourse"] = Relationship(back_populates="user")
@@ -130,6 +131,7 @@ class Course(CourseBase, table=True):
     )
     created_by: int = Field(foreign_key="users.id")
     created_at: datetime = Field(default_factory=datetime.now)
+    deleted_at: Optional[datetime] = Field(default=None)  # Soft Delete (null = aktiv)
     
     # Relationships
     course_members: List["UserCourse"] = Relationship(back_populates="course")
@@ -241,6 +243,7 @@ class Task(TaskBase, table=True):
     created_by: int = Field(foreign_key="users.id")
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
+    deleted_at: Optional[datetime] = Field(default=None)  # Soft Delete (null = aktiv)
     
     # Relationships
     course: Course = Relationship(back_populates="tasks")
@@ -450,6 +453,7 @@ class CourseMaterial(CourseMaterialBase, table=True):
     created_by: int = Field(foreign_key="users.id")
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
+    deleted_at: Optional[datetime] = Field(default=None)  # Soft Delete (null = aktiv)
 
     # Relationships
     course: Course = Relationship(back_populates="materials")
@@ -498,6 +502,7 @@ class ScriptSection(ScriptSectionBase, table=True):
     created_by: int = Field(foreign_key="users.id")
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
+    deleted_at: Optional[datetime] = Field(default=None)  # Soft Delete (null = aktiv)
 
     # Relationships
     course: Course = Relationship(back_populates="script_sections")
@@ -553,6 +558,7 @@ class CourseMedia(CourseMediaBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     created_by: int = Field(foreign_key="users.id")
     created_at: datetime = Field(default_factory=datetime.now)
+    deleted_at: Optional[datetime] = Field(default=None)  # Soft Delete (null = aktiv)
 
     # Relationships
     course: Course = Relationship(back_populates="media")
