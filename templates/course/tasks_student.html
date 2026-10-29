@@ -218,7 +218,7 @@
       } else {
         pointDisplay = task.my_points + '/' + task.max_points;
         pointColor = 'text-gray-400'; // noch nicht bearbeitet
-        if (graded) {
+        if (graded && task.max_points > 0) {
           if (pct >= 0.8) pointColor = 'text-green-600';
           else if (pct >= 0.5) pointColor = 'text-yellow-600';
           else if (task.my_points > 0) pointColor = 'text-orange-600';

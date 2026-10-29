@@ -751,7 +751,7 @@ async def index(
                             llm_points = max(llm_points, fb.points_earned)
                     latest = human_points if override_exists else llm_points
 
-                if latest > 0:
+                if subs:
                     completed_count += 1
                 course_earned += latest
 
