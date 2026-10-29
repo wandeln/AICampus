@@ -463,9 +463,88 @@ jederzeit per „LLM testen" prüfen.
 | Task-Images (init.sh-Builds) | Docker-Images auf dem Host des jeweiligen Agents |
 | Student-Volumes | Docker-Volumes `aicampus-ws-*` auf dem Host des jeweiligen Agents |
 
-> **Backup-Praxis:** `data/` sichern (konsistent stoppen oder
-> `sqlite3 data/aicampus.db ".backup …"`); Docker-Volumes/Images der
-> laufenden Workspaces zusätzlich, falls Fortschritt erhalten bleiben soll.
+### 6.1 Automatische Backups (restic)
+
+Täglich um 03:00 (cron) sichert `deploy/aicampus-backup.sh` das Verzeichnis
+`data/` sowie `.env` als verschlüsselte Snapshots in ein lokales
+[restic](https://restic.net/)-Repository (AES-256, auch Dateinamen
+verschlüsselt). Die Live-DB wird dabei **online-konsistent** nach
+`data/.backup_staging/aicampus-consistent.db` kopiert — die App läuft
+weiter, die DB-Dateien selbst bleiben aus dem Snapshot draußen.
+
+**Retention:** 14 daily + 4 weekly ≈ 35 Tage.
+
+#### Einrichtung (einmalig)
+
+```bash
+# 1. restic installieren (static Binary von den GitHub-Releases → ~/bin)
+
+# 2. Repository anlegen
+mkdir -p /home/wandel/backups/aicampus/repo
+export RESTIC_REPOSITORY=/home/wandel/backups/aicampus/repo
+export RESTIC_PASSWORD=$(openssl rand -hex 24)
+restic init
+```
+
+3. Beide Werte in `.env` tragen (Werte von `RESTIC_REPOSITORY` /
+   `RESTIC_PASSWORD`):
+
+```ini
+BACKUP_REPO=/home/wandel/backups/aicampus/repo
+BACKUP_PASSWORD=<hex-Password>
+```
+
+4. Cron-Eintrag anlegen (`crontab -e`):
+
+```cron
+0 3 * * * /home/wandel/Projects/AICampus/deploy/aicampus-backup.sh >> /home/wandel/backups/aicampus/backup.log 2>&1
+```
+
+> **Achtung:** Wer das Repository-Password verliert, verliert das Backup.
+> Es liegt in `.env` (600) — das Backup deckt `.env` selbst wieder ab,
+> aber für den allerersten Snapshot ist die Reihenfolge wichtig.
+
+#### Betrieb
+
+| Aufgabe | Befehl |
+|---|---|
+| Log prüfen | `tail -50 /home/wandel/backups/aicampus/backup.log` |
+| Snapshots listen | `restic snapshots` (mit `RESTIC_REPOSITORY`/`RESTIC_PASSWORD` aus `.env`) |
+| Integrität prüfen | `restic check --read-data-subset=5%` |
+| Restore-Drill | `scripts/verify_backup.sh` (stellt letzten Snapshot in ein Temp-Verzeichnis wieder her, prüft `PRAGMA integrity_check` — überschreibt nichts) |
+
+Der Dedup-Overhead ist klein: Der zweite Lauf schreibt deutlich weniger
+als die Repository-Größe des ersten.
+
+#### Restore
+
+```bash
+export RESTIC_REPOSITORY=<BACKUP_REPO aus .env>
+export RESTIC_PASSWORD=<BACKUP_PASSWORD aus .env>
+restic snapshots                      # passenden Snapshot wählen
+restic restore <snapshot-id> --target /tmp/aicampus-restore
+```
+
+Im Target landen `data/` und `.env`. Danach: App stoppen, `data/`
+ersetzen bzw. mergeen, `data/.backup_staging/aicampus-consistent.db` als
+`data/aicampus.db` setzen (WAL/SHM löschen), `.env` prüfen, App starten.
+
+**DSGVO:** Nach einem Löschverlangen (Art. 17) dürfen **keine** älteren
+Snapshots wiederhergestellt oder daraus einzelne Datensätze extrahiert
+werden, die die gelöschte Person betreffen. Kurze Retention (~35 Tage)
+plus diese Regel machen das Backup datenschutzrechtlich tragbar (vgl.
+DSK-Leitlinie zu Löschverlangen bei Backups).
+
+#### Compute-Agenten
+
+Docker-Volumes (`aicampus-ws-*`) und Task-Images der laufenden
+Workspaces auf den Compute-Hosts werden von diesem Backup **nicht**
+gedeckt — zusätzlich sichern, falls Workspace-Fortschritt erhalten
+bleiben soll.
+
+**Offen:** Zweite Speicherlage (3-2-1, z. B. Remote-Host via
+`restic backup sftp:...` bzw. `restic copy-repo`) — noch nicht
+konfiguriert.
 
 ## 7. Sicherheit (Kurzfassung)
 
