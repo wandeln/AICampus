@@ -722,14 +722,15 @@ async def index(
                 .where(Task.course_id == course_id)
                 .where(Task.is_visible == True)  # noqa: E712
             ).all()
-            # Ohne sichtbare Aufgaben: kein Fortschritt/keine Punkte auf dem Kurs-Tile
-            if not tasks:
+            # Ohne Aufgaben mit Punkten: kein Fortschritt/keine Punkte auf dem Kurs-Tile
+            point_tasks = [t for t in tasks if t.max_points > 0]
+            if not point_tasks:
                 continue
             course_earned = 0.0
             course_possible = 0
             completed_count = 0
             medals = {"bronze": 0, "silver": 0, "gold": 0, "platinum": 0}
-            for task in tasks:
+            for task in point_tasks:
                 course_possible += task.max_points
                 subs = session.exec(
                     select(Submission)
@@ -768,7 +769,7 @@ async def index(
             total_points_possible += course_possible
             stats_by_course[course_id] = {
                 "completed": completed_count,
-                "total_tasks": len(tasks),
+                "total_tasks": len(point_tasks),
                 "earned": course_earned,
                 "possible": course_possible,
                 "medals": medals,
