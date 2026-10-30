@@ -166,34 +166,28 @@
     <div class="card">
       <h2 class="font-semibold text-gray-800 mb-4">Grundlegendes</h2>
 
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">
-            Titel <span class="text-red-500">*</span>
-          </label>
-          <input type="text" name="title" required
-                 value="{{ task.title if task else '' }}"
-                 placeholder="z.B. Blatt3-01: Rekursion"
-                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
-          <p class="text-xs text-gray-400 mt-1">Verwende BlattX-NN für Filterbarkeit</p>
-        </div>
+      <div class="grid md:grid-cols-6 gap-4">
 
-        <div>
+        <div class="col-span-2">
           <label class="block text-sm font-medium text-gray-700 mb-1">
             Aufgabentyp <span class="text-red-500">*</span>
           </label>
           <select name="task_type" required id="task_type_select"
                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
             <option value="text" {% if tpl_type == 'text' %}selected{% endif %}>Textaufgabe</option>
-            <option value="workspace" {% if tpl_type == 'workspace' %}selected{% endif %}>Workspace-Aufgabe (Container)</option>
             <option value="mc" {% if tpl_type == 'mc' %}selected{% endif %}>Multiple Choice</option>
             <option value="upload" {% if tpl_type == 'upload' %}selected{% endif %}>Upload-Aufgabe (Datei/Zip)</option>
+            <option value="workspace" {% if tpl_type == 'workspace' %}selected{% endif %}>Workspace-Aufgabe (Container)</option>
             <option value="extern" {% if tpl_type == 'extern' %}selected{% endif %}>Externe Aufgabe (extern bewertet)</option>
           </select>
         </div>
-      </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+        <div class="col-span-2">
+          <label class="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
+          <input type="datetime-local" name="deadline" value="{{ task.deadline or '' }}"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Max. Punkte</label>
           <input type="number" name="max_points" min="0" required value="{{ task.max_points if task else 10 }}"
@@ -205,11 +199,18 @@
                  placeholder="Leer = unlimitiert"
                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
         </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
-          <input type="datetime-local" name="deadline" value="{{ task.deadline or '' }}"
-                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
-        </div>
+      </div>
+
+
+      <div class="mt-4">
+        <label class="block text-sm font-medium text-gray-700 mb-1">
+          Titel <span class="text-red-500">*</span>
+        </label>
+        <input type="text" name="title" required
+               value="{{ task.title if task else '' }}"
+               placeholder="z.B. Blatt3-01: Rekursion"
+               class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+        <p class="text-xs text-gray-400 mt-1">Verwende BlattX-NN für Filterbarkeit</p>
       </div>
 
       <div class="mt-4 pt-4">
