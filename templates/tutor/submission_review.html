@@ -1035,7 +1035,18 @@
   }
 
   function escapeForAttr(str) {
-    return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+    // Zwei Ebenen, in dieser Reihenfolge:
+    // 1) JS: gültiger String in einfachen Anführungszeichen (\, ', CR, LF)
+    // 2) HTML: gültig im doppel-quote-umgebenen onclick-Attribut.
+    //    Ein " würde das Attribut sonst beenden und den Inline-Handler
+    //    kappen (SyntaxError); & sonst als Entity dekodiert werden.
+    return String(str)
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "\\'")
+      .replace(/\r/g, '\\r')
+      .replace(/\n/g, '\\n')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;');
   }
 
   // ─── Navigation Buttons ───────────────────────────────────────
