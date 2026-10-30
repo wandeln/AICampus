@@ -115,9 +115,9 @@
   @media print {
     @page {
       size: A4;
-      /* Oben nur 10 mm: Kopfzeile + Trennlinie sitzen im Band, Content
-         startet direkt darunter (mehr Zeilen pro Seite) */
-      margin: 10mm 16mm 18mm;
+      /* Oben 20 mm: Kopfzeile + Trennlinie sitzen im Band, Content
+         startet direkt darunter */
+      margin: 20mm 16mm 18mm;
       /* Laufkopf + Trennlinie: @page-Margin-Boxen (Chrome ≥131).
          position:fixed erreicht das Margenband NICHT (negative top-Werte
          werden innerhalb des Inhaltsbereichs umgebogen → saß unten wie ein
@@ -125,30 +125,30 @@
          serverseitig; Filter css_string (main.py) erzeugt CSS-Strings.
          Die Top-Boxen teilen sich eine Reihe über die Spaltenbreite
          (16-194 mm): links/rechts ~50/50, center der Rest. Alle drei sind
-         6,7 mm hoch (3,3-10 mm), der Text sitzt oben (vertical-align:top),
+         9,5 mm hoch (10,5-20 mm), der Text sitzt oben (vertical-align:top),
          und jede Box malt ihren Linien-Anteil (0,5 pt #d1d5db) bei
-         7,9-8,1 mm — zusammen eine durchgehende Linie. (Borders rendert
+         16,3 mm — zusammen eine durchgehende Linie. (Borders rendert
          Chromium in Margin-Boxen NICHT, Background schon — und der wird
          dank print-color-adjust:exact am html sogar ohne „Hintergründe“
          im Druckdialog ausgegeben.) */
       @top-left {
         content: {{ section.header | css_string }};
         font-size: 8pt;
-        height: 6.7mm;
+        height: 9.5mm;
         vertical-align: top;
-        background: linear-gradient(#d1d5db, #d1d5db) 0 4.6mm / 100% 0.5pt no-repeat;
+        background: linear-gradient(#d1d5db, #d1d5db) 0 5.8mm / 100% 0.5pt no-repeat;
       }
       @top-center {
         content: " ";
-        height: 6.7mm;
-        background: linear-gradient(#d1d5db, #d1d5db) 0 4.6mm / 100% 0.5pt no-repeat;
+        height: 9.5mm;
+        background: linear-gradient(#d1d5db, #d1d5db) 0 5.8mm / 100% 0.5pt no-repeat;
       }
       @top-right {
         content: {{ course.name | css_string }};
         font-size: 8pt;
-        height: 6.7mm;
+        height: 9.5mm;
         vertical-align: top;
-        background: linear-gradient(#d1d5db, #d1d5db) 0 4.6mm / 100% 0.5pt no-repeat;
+        background: linear-gradient(#d1d5db, #d1d5db) 0 5.8mm / 100% 0.5pt no-repeat;
       }
     }
     /* Margin-Boxen vererben vom Wurzelelement → print-color-adjust am html
