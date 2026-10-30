@@ -82,14 +82,14 @@
     </div>
   </div>
 
-  <div class="flex flex-col lg:flex-row gap-6">
+  <div class="flex flex-col lg:flex-row gap-3">
 
     <!-- ─── LEFT: Task Description ──────────────────────────────── -->
     <div class="w-full lg:w-96 lg:shrink-0 lg:sticky lg:top-[var(--tab-sticky-top)] lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:align-start space-y-4" id="left-col">
 
       <!-- Aufgabenstellung (Markdown + LaTeX) -->
       <div class="card">
-        <h2 class="font-semibold text-gray-800 mb-3">Aufgabenstellung</h2>
+        <h2 class="font-semibold text-gray-800 my-3">Aufgabenstellung</h2>
         <div id="task-description-rendered"></div>
         <template id="task-description-raw">{{ (task.description or '') | tojson }}</template>
       </div>
@@ -126,11 +126,16 @@
 
     </div>
 
+    <!-- Ziehbarer Trenner (Aufgabenstellung ↔ Solution; nur lg+;
+         Doppelklick = Standardbreite) -->
+    <div id="solve-split-handle" role="separator"
+         title="Ziehen: Spaltenbreiten verstellen · Doppelklick: Standardbreite"></div>
+
     <!-- ─── RIGHT: Solution Area ───────────────────────────────── -->
     <div class="flex-1 min-w-0 space-y-4">
 
         <!-- Meine Ergebnisse -->
-        <div class="card mb-6 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 p-5 rounded-2xl">
+        <div class="card mb-6 mt-3 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 p-5 rounded-2xl">
             <h2 class="font-semibold text-blue-800 mb-2 flex items-center gap-2">📊 Dein Punktestand <span id="tier-badge-icon"></span></h2>
             <div class="space-y-2">
 
@@ -441,6 +446,47 @@
       z-index:1;
   }
 
+  /* ─── Split-Handle: Aufgabenstellung ↔ Solution (nur lg+) ──────
+     Gleiche Optik wie .ws-split-handle im Workspace; selbständig, da
+     workspace.css hier nicht geladen ist (nur Workspace-Aufgaben). */
+  #solve-split-handle { display:none; }
+  @media (min-width: 1024px) {
+    #solve-split-handle {
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      width:6px;
+      flex-shrink:0;
+      cursor:col-resize;
+      /*background-color:#f3f4f6;*/
+      border-radius: 3px;
+      transition:background-color 0.15s;
+      touch-action:none; /* Touch-Drag statt Scroll */
+      user-select:none; -webkit-user-select:none;
+      position:sticky;
+      top:var(--tab-sticky-top);
+      align-self:flex-start;
+      height:calc(100vh - 6rem);
+    }
+    /* Drei Punkte — wie die Workspace-Drag-Handles */
+    #solve-split-handle::before {
+      content:"";
+      width:3px;
+      height:15px;
+      background-image:
+        radial-gradient(circle 2px, #9ca3af, transparent 98%),
+        radial-gradient(circle 2px, #9ca3af, transparent 98%),
+        radial-gradient(circle 2px, #9ca3af, transparent 98%);
+      background-size:3px 3px;
+      background-position:center top, center center, center bottom;
+      background-repeat:no-repeat;
+    }
+    #solve-split-handle:hover,
+    #solve-split-handle.solve-split-dragging { background-color:#d1d5db; }
+  }
+  /* Während des Drags: globaler Cursor + keine Textauswahl */
+  body.solve-split-drag { user-select:none; -webkit-user-select:none; cursor:col-resize; }
+
   /* Badge Tiers */
   .badge-tier { display:inline-flex; align-items:center; gap:6px; padding:4px 14px; border-radius:9999px; font-size:0.8rem; font-weight:700; letter-spacing:0.025em; text-transform:uppercase; box-shadow:0 2px 8px rgba(0,0,0,0.12); transition:transform 0.3s ease, box-shadow 0.3s ease; }
   .badge-tier:hover { transform:scale(1.05); }
@@ -685,6 +731,63 @@
     });
     {% endif %}
   })();
+
+  // ─── Split-Handle: Spaltenbreiten Aufgabenstellung/Solution ────
+  // Linke Spalte per Inline-Breite verstellen (überschreibt lg:w-96);
+  // Doppelklick = zurück. Bei loslassen wird „ws-layout-changed"
+  // gefeuert (gleiche Konvention wie Workspace-Split-Handle) →
+  // Editoren/Terminals passen sich an, ohne dass das Fenster resized.
+  (function() {
+    const handle = document.getElementById('solve-split-handle');
+    const leftCol = document.getElementById('left-col');
+    if (!handle || !leftCol) return;
+    const MIN = 280; // px
+    handle.addEventListener('mousedown', (e) => e.preventDefault()); // kein Text-Caret
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const row = handle.parentElement;
+      const startX = e.clientX;
+      const startW = leftCol.getBoundingClientRect().width;
+      const maxSize = () => Math.floor(row.getBoundingClientRect().width * 0.6);
+      function onMove(ev) {
+        const w = Math.max(MIN, Math.min(startW + ev.clientX - startX, maxSize()));
+        leftCol.style.width = w + 'px';
+      }
+      function onUp() {
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onUp);
+        handle.removeEventListener('pointercancel', onUp);
+        handle.classList.remove('solve-split-dragging');
+        document.body.classList.remove('solve-split-drag');
+        document.dispatchEvent(new CustomEvent('ws-layout-changed'));
+      }
+      handle.setPointerCapture(e.pointerId);
+      handle.classList.add('solve-split-dragging');
+      document.body.classList.add('solve-split-drag');
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
+      handle.addEventListener('pointercancel', onUp);
+    });
+    handle.addEventListener('dblclick', () => { leftCol.style.width = ''; });
+    // Inline-Breite beim Breakpoint-Übergang verwerfen (sonst würde sie
+    // im Mobile-Layout (Spalten-Stack) hängen bleiben).
+    let wasWide = window.innerWidth >= 1024;
+    window.addEventListener('resize', () => {
+      const wide = window.innerWidth >= 1024;
+      if (wide !== wasWide && !wide) leftCol.style.width = '';
+      wasWide = wide;
+    });
+  })();
+
+  // Layout-Change ohne Fenster-Resize → CodeMirror-Editoren (Text-Lösung,
+  // Workspace-Editor, …) neu bemessen, damit lineWrapping korrekt bleibt.
+  document.addEventListener('ws-layout-changed', () => {
+    requestAnimationFrame(() => {
+      document.querySelectorAll('.CodeMirror').forEach((el) => {
+        if (el.CodeMirror) el.CodeMirror.refresh();
+      });
+    });
+  });
 
     {# Typ-spezifisches JS (LaTeX-Upload etc.): #}
     {# task_solve_text.html / task_solve_workspace.html #}
