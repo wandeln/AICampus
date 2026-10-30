@@ -19,6 +19,10 @@
 {% block body_class %}script-print-mode{% endblock %}
 
 {% block extra_head %}
+<script>
+  // PDF-Dateiname (Browser-Speicherdialog) = document.title
+  document.title = {{ page_title | tojson }};
+</script>
 <style>
   /* ─── Seite: grauer Untergrund + A4-Karte (volle A4-Breite 210 mm;
      Seiten-Padding = @page-Seitenmargen → Textbreite 178 mm identisch zu

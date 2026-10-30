@@ -1372,10 +1372,17 @@ async def script_section_print_page(
     sections = session.exec(q.order_by(ScriptSection.display_order.asc())).all()  # type: ignore[attr-defined]
     chapter_num = next((i for i, s in enumerate(sections, 1) if s.id == section_id), None)
 
+    # Dateiname für den PDF-Speicherdialog (Browser = document.title,
+    # wird im Template gesetzt): „Kursname - KapitelNr - Kapiteltitel"
+    pdf_name_parts = [course.name]
+    if chapter_num:
+        pdf_name_parts.append(str(chapter_num))
+    pdf_name_parts.append(section.title)
+
     # Volleigenständige Seite (ohne Kurs-Tab-Leiste): Kontext manuell bauen
     ctx = {
         "request": request,
-        "page_title": f"{section.title} — PDF-Export",
+        "page_title": " - ".join(pdf_name_parts),
         "current_user": _user_ctx(user, role.value if role else "ADMIN"),
         "courses": _get_user_courses(user, session),
         "selected_course_id": course_id,
