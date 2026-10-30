@@ -2236,17 +2236,18 @@ async def add_feedback_to_submission(
     }
 
 
-@router.post("/tasks/{task_id}/extern/feedback")
-async def add_extern_feedback(
+@router.post("/tasks/{task_id}/manual-feedback")
+async def add_manual_feedback(
     task_id: int,
     request: Request,
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Externe Aufgabe: Tutor/Prof bewertet einen Student direkt — ohne
-    Student-Abgabe. Der erste Call legt eine leere Submission an
-    (s. docs/LLM-plans/extern-tasks.md), danach wird das HUMAN-Feedback
-    ersetzt. Request: {"student_id": int, "points_earned": float, "comment": str}
+    """Tutor/Prof bewertet einen Student direkt — auch OHNE Student-Abgabe
+    (alle Aufgabentypen; z. B. vergessene Abgabe, Gruppenlösung oder
+    externe Notenübertragung). Der erste Call legt eine leere Submission
+    an, danach wird das HUMAN-Feedback auf der neuesten ersetzt.
+    Request: {"student_id": int, "points_earned": float, "comment": str}
     """
     body = await request.json()
     student_id = body.get("student_id")
@@ -2256,8 +2257,6 @@ async def add_extern_feedback(
     task = session.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Aufgabe nicht gefunden.")
-    if task.task_type.value != "extern":
-        raise HTTPException(400, "Keine externe Aufgabe.")
 
     # Zugriff prüfen
     _check_course_role(user, task.course_id, session)
@@ -2280,7 +2279,7 @@ async def add_extern_feedback(
     if points < 0 or points > task.max_points:
         raise HTTPException(400, f"Punkte muessen zwischen 0 und {task.max_points} liegen.")
 
-    # Externe Aufgabe: max. eine (leere) Submission pro Student
+    # Leere Submission anlegen, wenn der Student noch keine hat (sonst neueste)
     assert task.id is not None
     assert student.id is not None
     submission = session.exec(

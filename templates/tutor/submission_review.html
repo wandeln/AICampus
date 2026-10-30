@@ -441,12 +441,9 @@
 
     var container = document.getElementById('submissions-container');
     if (data.submissions.length === 0) {
-      // Extern: es gibt keine Einreichung (Bewertung von außen) → Bewertungs-Formular
-      if (isExtern) {
-        renderExternForm(container, data.task.max_points);
-      } else {
-        container.innerHTML = '<div class="card text-center py-8 text-gray-500">Keine Einreichungen gefunden.</div>';
-      }
+      // Keine Einreichung → manuelle Bewertung trotzdem möglich
+      // (alle Aufgabentypen; z. B. Gruppenlösung, externe Noten)
+      renderManualGradeForm(container, data.task.max_points, isExtern);
       return;
     }
 
@@ -489,6 +486,8 @@
         timeHtml = ' <span class="text-xs font-mono text-blue-600 ml-auto tabular-nums">🕐 ' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0') + '</span>';
       }
       solSection.innerHTML = '<h4 class="text-sm font-semibold text-gray-600 mb-2 flex items-baseline gap-2">' + (isExtern ? 'Externe Abgabe' : 'Lösung des Students') + timeHtml + '</h4>';
+
+      var isEmptySub = !sub.solution && !sub.upload_file && !sub.workspace_snapshot && !sub.mc_result;
 
       if (isWorkspace) {
         // Read-only Snapshot-Ansicht (gleiche Komponente wie die
@@ -599,6 +598,12 @@
         extBox.innerHTML = '🔗 Externe Aufgabe — keine Einreichung' +
           '<span class="block text-xs text-rose-600 mt-0.5">Bewertung erfolgt extern (z. B. Vortrag, Notenübertragung) — Punkte &amp; Feedback vom Tutor/Prof</span>';
         solSection.appendChild(extBox);
+      } else if (isEmptySub) {
+        // Manuell bewertete leere Submission (keine Einreichung vorhanden)
+        var emptyBox = document.createElement('div');
+        emptyBox.className = 'text-sm bg-gray-50 border border-gray-200 text-gray-600 rounded-lg p-3 mb-3';
+        emptyBox.innerHTML = '📝 Keine Einreichung vorhanden — diese Bewertung wurde manuell vom Tutor/Prof vergeben.';
+        solSection.appendChild(emptyBox);
       } else {
         var solContainer = document.createElement('div');
         solContainer.className = 'solution-container';
@@ -920,42 +925,46 @@
     }
   }
 
-  // ─── Extern: Erstbewertung (keine Einreichung vorhanden) ─────
-  function renderExternForm(container, maxPoints) {
+  // ─── Manuelle Bewertung ohne Einreichung (alle Aufgabentypen) ──
+  function renderManualGradeForm(container, maxPoints, isExtern) {
+    var info = isExtern
+      ? '<div class="text-sm text-rose-800 bg-rose-50 border border-rose-200 rounded-lg p-3 mb-4">' +
+          '🔗 <span class="font-medium">Externe Aufgabe</span> — die Bewertung erfolgt extern ' +
+          '(z. B. Vortrag, Notenübertragung aus anderen Systemen). Lege hier die Bewertung an.' +
+        '</div>'
+      : '<div class="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">' +
+          '📝 <span class="font-medium">Keine Einreichung</span> — der Student hat nichts eingereicht. ' +
+          'Du kannst trotzdem manuell Punkte + Feedback vergeben.</div>';
     container.innerHTML =
       '<div class="card p-6">' +
-        '<div class="text-sm text-rose-800 bg-rose-50 border border-rose-200 rounded-lg p-3 mb-4">' +
-          '🔗 <span class="font-medium">Externe Aufgabe</span> — der Student hat nichts eingereicht. ' +
-          'Die Bewertung erfolgt extern (z. B. Vortrag, Notenübertragung aus anderen Systemen); ' +
-          + 'lege hier die Bewertung an.' +
-        '</div>' +
+        info +
         '<div class="space-y-3">' +
           '<div>' +
             '<label class="block text-xs font-medium text-gray-600 mb-1">Punkte (0 — ' + maxPoints + ')</label>' +
-            '<input type="number" id="extern-points" min="0" max="' + maxPoints + '" step="0.5" value="0"' +
+            '<input type="number" id="manual-points" min="0" max="' + maxPoints + '" step="0.5" value="0"' +
                    ' class="w-32 border border-gray-300 rounded-lg px-3 py-2 text-sm">' +
           '</div>' +
           '<div>' +
             '<label class="block text-xs font-medium text-gray-600 mb-1">Feedback-Text (Markdown + LaTeX)</label>' +
-            '<textarea id="extern-comment" rows="4" placeholder="z. B. Sehr gut strukturierter Vortrag, ..."' +
+            '<textarea id="manual-comment" rows="4" placeholder="z. B. Sehr gute Gruppenlösung, ..."' +
                     ' class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-y"></textarea>' +
           '</div>' +
           '<div class="flex items-center gap-2 pt-1">' +
-            '<button id="extern-submit-btn"' +
+            '<button id="manual-submit-btn"' +
                     ' class="text-sm bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 transition shadow-sm">' +
-              '🔗 Bewertung anlegen' +
+              (isExtern ? '🔗 Bewertung anlegen' : '📝 Bewertung anlegen') +
             '</button>' +
           '</div>' +
         '</div>' +
       '</div>';
-    document.getElementById('extern-submit-btn').addEventListener('click', function () {
-      submitExternGrade(maxPoints);
+    document.getElementById('manual-submit-btn').addEventListener('click', function () {
+      submitManualGrade(maxPoints);
     });
   }
 
-  async function submitExternGrade(maxPoints) {
-    var points = parseFloat(document.getElementById('extern-points').value || '0');
-    var comment = document.getElementById('extern-comment').value.trim();
+  async function submitManualGrade(maxPoints) {
+    var points = parseFloat(document.getElementById('manual-points').value || '0');
+    var comment = document.getElementById('manual-comment').value.trim();
     if (!comment) {
       showToast('Bitte gib einen Feedback-Text ein.', 'error');
       return;
@@ -964,10 +973,10 @@
       showToast('Punkte müssen zwischen 0 und ' + maxPoints + ' liegen.', 'error');
       return;
     }
-    var btn = document.getElementById('extern-submit-btn');
+    var btn = document.getElementById('manual-submit-btn');
     btn.disabled = true;
     try {
-      var res = await fetch('/api/tasks/' + taskId + '/extern/feedback', {
+      var res = await fetch('/api/tasks/' + taskId + '/manual-feedback', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },

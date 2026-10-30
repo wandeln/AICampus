@@ -234,7 +234,9 @@
             <!-- Solution -->
             <div class="mb-3">
               <h4 class="text-sm font-semibold text-gray-600 mb-1">Eingereichte Lösung</h4>
-              {% if task.task_type == 'workspace' %}
+              {% if not sub.solution and not sub.workspace_snapshot and not sub.upload_file and not sub.mc_result %}
+              <p class="text-gray-400 text-sm italic">Keine Einreichung — diese Bewertung wurde manuell vom Tutor/Prof vergeben.</p>
+              {% elif task.task_type == 'workspace' %}
                 {% if sub.workspace_snapshot %}
                 <div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3">
                   📦 Workspace-Abgabe (Snapshot des Containers: {{ (sub.solution or 'deine Dateien') }})
