@@ -1,0 +1,455 @@
+{% extends "base.html" %}
+
+{# ─────────────────────────────────────────────────────────────────────
+   Skript-Kapitel PDF-Export: eigenständige Print-Seite (1:1-Rendering
+   wie im Skript-Tab). Applets sind vor dem Export interaktiv
+   einstellbar; beim „PDF"-Klick werden sie als Standbilder eingefroren
+   und es geht in die Druck-Dialog „Als PDF speichern" (clientseitig,
+   wie der Folien-PDF-Export).
+
+   Kontext von main.script_section_print_page:
+     course {id, name, description, semester},
+     section {id, title, header},  # header = Laufkopf-Text („Kap. N · title“)
+     chapter_num (int|None),
+     is_tutor, current_user, courses, selected_course_id, is_admin
+   ───────────────────────────────────────────────────────────────────── #}
+
+{% block main_nav %}{% endblock %}
+{% block site_footer %}{% endblock %}
+{% block body_class %}script-print-mode{% endblock %}
+
+{% block extra_head %}
+<style>
+  /* ─── Seite: grauer Untergrund + A4-Karte (volle A4-Breite 210 mm;
+     Seiten-Padding = @page-Seitenmargen → Textbreite 178 mm identisch zu
+     Screen und Print) ─── */
+  body.script-print-mode { background: #e5e7eb; }
+  /* main-Container (Tailwind px-4 py-6 pt-10 + container) neutralisieren:
+     Breite/Padding müssen auf Screen und im Print identisch sein. */
+  body.script-print-mode main { max-width: none; padding: 0; }
+
+  .spr-page {
+    width: 210mm;
+    max-width: 100%;
+    margin: 1.5rem auto;
+    padding: 18mm 16mm;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  }
+
+  /* ─── Toolbar (wird im Print ausgeblendet) ─── */
+  .spr-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    background: #1e40af;
+    color: #fff;
+  }
+  .spr-toolbar a { color: #fff; text-decoration: none; white-space: nowrap; }
+  .spr-toolbar a:hover { text-decoration: underline; }
+  .spr-toolbar .spr-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .spr-toolbar .spr-hint { font-size: 0.8rem; opacity: 0.85; white-space: nowrap; }
+  .spr-toolbar .spr-status { font-size: 0.8rem; }
+  .spr-toolbar button {
+    background: #fff;
+    color: #1e40af;
+    border: none;
+    border-radius: 0.5rem;
+    padding: 0.4rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .spr-toolbar button:disabled { opacity: 0.5; cursor: default; }
+  .spr-toolbar button:not(:disabled):hover { background: #e0e7ff; }
+
+  /* ─── Kapitel-Kopf: „Kap. N · Titel“ auf einer Zeile ─── */
+  .spr-chapter-num {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #9ca3af;
+    margin-right: 0.5rem;
+  }
+  .spr-chapter-num:empty { display: none; }
+  .spr-chapter-title {
+    font-size: 1.75rem;
+    font-weight: 800;
+    color: #111827;
+    margin: 0 0 1.5rem;
+  }
+
+  /* ─── Applet-Ersatz-Platzhalter (Capture-Fallback) ─── */
+  .aicampus-applet-placeholder {
+    border: 2px dashed #9ca3af;
+    border-radius: 0.5rem;
+    background: #f9fafb;
+    padding: 1.5rem 1rem;
+    text-align: center;
+    color: #6b7280;
+    font-size: 0.9rem;
+    margin: 1.25rem 0;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .aicampus-applet-placeholder code {
+    display: inline-block;
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    color: #9ca3af;
+    word-break: break-all;
+  }
+
+  /* ─── Print: A4, identische Maße wie die Screen-Karte ─── */
+  @media print {
+    @page {
+      size: A4;
+      /* Oben nur 10 mm: Kopfzeile + Trennlinie sitzen im Band, Content
+         startet direkt darunter (mehr Zeilen pro Seite) */
+      margin: 10mm 16mm 18mm;
+      /* Laufkopf + Trennlinie: @page-Margin-Boxen (Chrome ≥131).
+         position:fixed erreicht das Margenband NICHT (negative top-Werte
+         werden innerhalb des Inhaltsbereichs umgebogen → saß unten wie ein
+         Footer). Margin-Boxen kennen nur content: (kein HTML/Math) → Werte
+         serverseitig; Filter css_string (main.py) erzeugt CSS-Strings.
+         Die Top-Boxen teilen sich eine Reihe über die Spaltenbreite
+         (16-194 mm): links/rechts ~50/50, center der Rest. Alle drei sind
+         6,7 mm hoch (3,3-10 mm), der Text sitzt oben (vertical-align:top),
+         und jede Box malt ihren Linien-Anteil (0,5 pt #d1d5db) bei
+         7,9-8,1 mm — zusammen eine durchgehende Linie. (Borders rendert
+         Chromium in Margin-Boxen NICHT, Background schon — und der wird
+         dank print-color-adjust:exact am html sogar ohne „Hintergründe“
+         im Druckdialog ausgegeben.) */
+      @top-left {
+        content: {{ section.header | css_string }};
+        font-size: 8pt;
+        height: 6.7mm;
+        vertical-align: top;
+        background: linear-gradient(#d1d5db, #d1d5db) 0 4.6mm / 100% 0.5pt no-repeat;
+      }
+      @top-center {
+        content: " ";
+        height: 6.7mm;
+        background: linear-gradient(#d1d5db, #d1d5db) 0 4.6mm / 100% 0.5pt no-repeat;
+      }
+      @top-right {
+        content: {{ course.name | css_string }};
+        font-size: 8pt;
+        height: 6.7mm;
+        vertical-align: top;
+        background: linear-gradient(#d1d5db, #d1d5db) 0 4.6mm / 100% 0.5pt no-repeat;
+      }
+    }
+    /* Margin-Boxen vererben vom Wurzelelement → print-color-adjust am html
+       (sonst würde die Trennlinie ohne aktivierte Druck-Hintergründe
+       fehlen). */
+    html, body.script-print-mode, body.script-print-mode * {
+      print-color-adjust: exact;
+      -webkit-print-color-adjust: exact;
+    }
+    body.script-print-mode { background: #fff; }
+    .spr-toolbar { display: none; }
+    /* Exakte Preview-Textbreite (178 mm = A4 − 2 × 16 mm) — unabhängig
+       von den Margen-Einstellungen des Druckdialogs: „Keine“/„Eng“ würden
+       die Spalte sonst breiter machen → Bilder/Text breiter als in der
+       Preview. Zentrieren für den Fall, dass die Dialog-Margen größer
+       sind als @page. */
+    .spr-page {
+      width: 178mm;
+      margin: 0 auto;
+      padding: 0;
+      box-shadow: none;
+    }
+    /* Blöcke nicht über Seitenkanten zerreißen */
+    .markdown-preview .aicampus-figure,
+    .markdown-preview .aicampus-code-figure,
+    .markdown-preview .aicampus-table-figure,
+    .markdown-preview .aicampus-callbox,
+    .markdown-preview .aicampus-equation,
+    .markdown-preview .katex-display,
+    .markdown-preview pre,
+    .markdown-preview table,
+    .markdown-preview .aicampus-subfig-row,
+    .aicampus-applet-placeholder {
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+    /* Überschriften nicht als letztes Element einer Seite */
+    .markdown-preview h1, .markdown-preview h2,
+    .markdown-preview h3, .markdown-preview h4 {
+      break-after: avoid;
+      page-break-after: avoid;
+    }
+    .markdown-preview p, .markdown-preview li {
+      orphans: 3;
+      widows: 3;
+    }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="spr-toolbar">
+  <a href="/courses/{{ course.id }}/script#chapter-{{ section.id }}">← Zum Skript</a>
+  <span class="spr-title">{{ section.title }}</span>
+  <span class="spr-hint" id="spr-hint">Applets vor dem Export einstellen</span>
+  <span class="spr-status" id="spr-status">Wird geladen…</span>
+  <button type="button" id="spr-export" disabled>⬇️ Als PDF herunterladen</button>
+</div>
+<div class="spr-page">
+  <h1 class="spr-chapter-title"><span class="spr-chapter-num">{% if chapter_num %}Kap. {{ chapter_num }}{% endif %}</span><span id="spr-title"></span></h1>
+  <div id="spr-content" class="markdown-preview"></div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  // Global für den Markdown-Renderer (Refmap/Xrefs brauchen den Kurs).
+  const courseId = {{ course.id }};
+  const SECTION_ID = {{ section.id }};
+  const SECTION_TITLE = {{ section.title | tojson }};
+
+  const sprContent = document.getElementById('spr-content');
+  const sprStatus = document.getElementById('spr-status');
+  const sprExport = document.getElementById('spr-export');
+
+  // ─── Laden + 1:1-Rendering wie im Skript-Tab (buildSectionCard) ───
+  async function sprInit() {
+    try {
+      const r = await fetch(`/api/script-sections/${SECTION_ID}`, { credentials: 'same-origin' });
+      if (!r.ok) throw new Error('Nicht geladen');
+      const data = await r.json();
+
+      document.getElementById('spr-title').innerHTML = renderCaptionMath(SECTION_TITLE);
+      // bibliography: Ganzes Kapitel → „Quellen“-Liste für @cite:-Zitationen
+      await renderMarkdown(data.content || '', sprContent, { sectionId: SECTION_ID, bibliography: true });
+
+      // Applets: Lazy-Load aufheben, Laden + Auto-Sizing (postMessage-Höhen)
+      // abwarten, damit der Export die finale Größe sieht.
+      sprContent.querySelectorAll('iframe[loading="lazy"]').forEach((f) => f.removeAttribute('loading'));
+      const iframes = [...sprContent.querySelectorAll('iframe.aicampus-applet')];
+      const hint = document.getElementById('spr-hint');
+      if (!iframes.length && hint) hint.style.display = 'none';
+      await Promise.all(iframes.map(sprWaitIframeLoad));
+      await new Promise((res) => setTimeout(res, 600));
+
+      sprStatus.textContent = '';
+      sprExport.disabled = false;
+    } catch (e) {
+      console.error('[script-print] Laden fehlgeschlagen:', e);
+      sprContent.textContent = 'Fehler beim Laden des Kapitels: ' + (e && e.message ? e.message : e);
+      sprStatus.textContent = '';
+    }
+  }
+
+  // Iframe-Laden abwarten. Sandbox-Applets (opaque Origin) sind nicht von
+  // außen inspizierbar → dort läuft der 'load'-Event; eine Timeout-
+  // Sicherung hält den Export nicht ewig auf.
+  function sprWaitIframeLoad(f) {
+    return new Promise((res) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; clearInterval(t); res(); } };
+      f.addEventListener('load', finish, { once: true });
+      const t = setInterval(() => {
+        try {
+          if (f.contentWindow && f.contentWindow.document.readyState === 'complete') finish();
+        } catch (e) { /* sandboxed: nicht erreichbar */ }
+      }, 200);
+      setTimeout(finish, 12000);
+    });
+  }
+
+  // ─── Export: Applets/Videos einfrieren, dann window.print() ───
+  sprExport.addEventListener('click', async () => {
+    sprExport.disabled = true;
+    sprStatus.textContent = 'Applets werden eingefroren…';
+    try {
+      const jobs = [
+        ...sprContent.querySelectorAll('iframe.aicampus-applet').map(sprFreezeApplet),
+        ...sprContent.querySelectorAll('video').map(sprFreezeVideo),
+      ];
+      await Promise.all(jobs);
+      // Alle Bilder dekodieren, bevor gemessen/gedruckt wird
+      await Promise.all(
+        [...sprContent.querySelectorAll('img')].map((img) => img.decode().catch(() => {}))
+      );
+      const n = sprFreezeImageSizes();
+      sprStatus.textContent = '✓ ' + n + ' Bildgrößen fixiert';
+    } catch (e) {
+      sprStatus.textContent = 'Fehler beim Einfrieren — Druck trotzdem gestartet';
+    }
+    window.print();
+    sprStatus.textContent = '';
+    sprExport.disabled = false;
+  });
+
+  // Druckspezifisches Problem: main.css deckelt Bilder mit max-height:40vh
+  // ab — im Print ist der Viewport die Seitenhöhe (≈ 448 px statt z. B.
+  // 360 px im Browser-Fenster) → Bilder würden im Druck größer als in der
+  // Preview. Fix: die AKTUELLEN Screen-Größen (offsetWidth/Height = ohne
+  // Transform, passt zu {.zoom}) als Inline-!important fixieren → der Druck
+  // ist pixelidentisch zu der Preview, die der Nutzer gesehen hat.
+  function sprFreezeImageSizes() {
+    let n = 0;
+    sprContent.querySelectorAll('img').forEach((img) => {
+      const w = img.offsetWidth;
+      const h = img.offsetHeight;
+      if (!img.complete || !img.naturalWidth || !w || !h) return;
+      img.style.setProperty('width', w + 'px', 'important');
+      img.style.setProperty('height', h + 'px', 'important');
+      img.style.setProperty('max-width', w + 'px', 'important');
+      img.style.setProperty('max-height', h + 'px', 'important');
+      n++;
+    });
+    return n;
+  }
+
+  function sprFreezeApplet(f) {
+    const src = f.getAttribute('src') || '';
+    const yt = src.match(/youtube(?:-nocookie)?\.com\/embed\/([A-Za-z0-9_-]+)/);
+    if (yt) return sprFreezeYouTube(f, yt[1]);
+    if (/^https?:\/\//i.test(src)) {
+      f.replaceWith(sprPlaceholder(f)); // externes Applet: kein Capture möglich
+      return Promise.resolve();
+    }
+    return sprCaptureLocal(f);
+  }
+
+  // YouTube: Thumbnail statt Player (i.ytimg.com; ohne Netz → Platzhalter)
+  function sprFreezeYouTube(f, videoId) {
+    return new Promise((res) => {
+      const img = new Image();
+      const timer = setTimeout(() => finish(false), 4000);
+      function finish(ok) {
+        clearTimeout(timer);
+        if (ok && img.naturalWidth > 0) {
+          img.classList.add('spr-frozen');
+          sprReplaceMedia(f, img);
+        } else {
+          f.replaceWith(sprPlaceholder(f));
+        }
+        res();
+      }
+      img.onload = () => finish(true);
+      img.onerror = () => finish(false);
+      img.src = 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg';
+    });
+  }
+
+  // Lokales Applet: Capture-Request per postMessage (Boilerplate injiziert
+  // der Server beim Versand). Antwort: DataURL (Canvas) oder null (Fehler).
+  function sprCaptureLocal(f) {
+    const id = 'cap-' + Math.random().toString(36).slice(2);
+    return new Promise((res) => {
+      let settled = false;
+      const done = (dataUrl) => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener('message', onMsg);
+        clearTimeout(timer);
+        if (dataUrl) {
+          const img = new Image();
+          img.src = dataUrl;
+          img.classList.add('spr-frozen');
+          sprReplaceMedia(f, img);
+        } else {
+          f.replaceWith(sprPlaceholder(f));
+        }
+        res();
+      };
+      const onMsg = (e) => {
+        if (e.data && e.data.source === 'aicampus-capture-result' && e.data.id === id) {
+          done(e.data.dataUrl || null);
+        }
+      };
+      const timer = setTimeout(() => done(null), 6000);
+      window.addEventListener('message', onMsg);
+      try {
+        f.contentWindow.postMessage({ source: 'aicampus-capture-request', id }, '*');
+      } catch (e) {
+        done(null);
+      }
+    });
+  }
+
+  // mp4-Video: ersten Frame einfrieren (seek nötig — mit preload="metadata"
+  // ist noch kein Frame dekodiert → drawImage würde schwarz malen)
+  function sprFreezeVideo(v) {
+    return new Promise((res) => {
+      let settled = false;
+      const capture = () => {
+        if (settled || !v.videoWidth || v.readyState < 3) return;
+        settled = true;
+        try {
+          const c = document.createElement('canvas');
+          c.width = v.videoWidth;
+          c.height = v.videoHeight;
+          c.getContext('2d').drawImage(v, 0, 0);
+          const img = new Image();
+          img.src = c.toDataURL('image/jpeg', 0.9);
+          img.classList.add('spr-frozen');
+          sprReplaceMedia(v, img);
+          res();
+        } catch (e) { fail(); }
+      };
+      const fail = () => {
+        if (settled) return;
+        settled = true;
+        v.replaceWith(sprVideoPlaceholder());
+        res();
+      };
+      const seek = () => {
+        v.addEventListener('seeked', capture, { once: true });
+        try { v.currentTime = 0.001; } catch (e) { fail(); }
+      };
+      setTimeout(fail, 6000); // Safety-Net (Video lädt nie / error)
+      v.addEventListener('error', fail, { once: true });
+      if (v.readyState >= 2) seek();
+      else v.addEventListener('loadedmetadata', seek, { once: true });
+    });
+  }
+
+  // Iframe/Video → Bild: Inline-Stil (width/transform/height aus
+  // {.height}/{.zoom}) übernehmen, damit das Bild exakt die Box des
+  // Iframes belegt.
+  function sprReplaceMedia(f, img) {
+    const style = f.getAttribute('style') || '';
+    img.style.cssText = style +
+      '; display:block; max-width:100%; object-fit:contain;';
+    if (/transform:/.test(style) && !/transform-origin:/.test(style)) {
+      img.style.transformOrigin = '0 0';
+    }
+    f.replaceWith(img);
+  }
+
+  function sprPlaceholder(f) {
+    const div = document.createElement('div');
+    div.className = 'aicampus-applet-placeholder';
+    const code = document.createElement('code');
+    code.textContent = f.getAttribute('src') || '';
+    div.innerHTML = '<div>📱 Interaktives Applet — im Browser ansehen</div>';
+    div.appendChild(code);
+    return div;
+  }
+
+  function sprVideoPlaceholder() {
+    const div = document.createElement('div');
+    div.className = 'aicampus-applet-placeholder';
+    div.innerHTML = '<div>🎬 Video — im Browser abspielen</div>';
+    return div;
+  }
+
+  sprInit();
+</script>
+{% endblock %}

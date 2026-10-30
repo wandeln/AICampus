@@ -31,6 +31,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import TemplateNotFound
+from markupsafe import Markup
 from sqlmodel import Session, func, select
 
 from config import BASE_DIR, DEBUG, LLM_TIMEOUT, PREVIEW_BASE_DOMAIN, PUBLIC_DOMAIN, VAPID_PUBLIC_KEY, push_enabled
@@ -236,6 +237,25 @@ app = FastAPI(
 
 # Templates + Static
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+
+def _css_string(value: object) -> Markup:
+    """String als CSS-String für `content:` (z. B. @page-Margin-Boxen).
+    Escape nur, was CSS verlangt — Non-ASCII bleibt raw UTF-8 (JSONs
+    \\uXXXX, wie von tojson, ist KEIN gültiges CSS-Escape; 6-stellige
+    Hex-Escapes verschlingen bei Chromium versehentlich nachfolgende
+    Leerzeichen)."""
+    s = (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+    return Markup(f'"{s}"')
+
+
+templates.env.filters["css_string"] = _css_string
 
 # ── Static asset caching (Tornado-style) ─────────────────────
 # At startup, hash every file in static/ and build a lookup map.
@@ -1314,6 +1334,70 @@ async def script_section_page(
     return _render_script_page(session, user, request, course_id)
 
 
+@app.get("/courses/{course_id}/script/{section_id}/print")
+async def script_section_print_page(
+    course_id: int,
+    section_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """PDF-Export eines Skript-Kapitels: eigenständige Print-Seite (1:1
+    Rendering wie im Skript, Applets vor dem Export interaktiv einstellbar)."""
+    course = session.get(Course, course_id)
+    if not course:
+        raise HTTPException(404, "Kurs nicht gefunden.")
+    section = session.get(ScriptSection, section_id)
+    if not section or section.course_id != course_id:
+        raise HTTPException(404, "Kapitel nicht gefunden.")
+
+    membership = session.exec(
+        select(UserCourse)
+        .where(UserCourse.user_id == user.id)
+        .where(UserCourse.course_id == course_id)
+    ).first()
+    is_admin = user.role == GlobalUserRole.ADMIN
+    if not membership and not is_admin:
+        raise HTTPException(403, "Du bist kein Mitglied dieses Kurses.")
+    role = membership.role_in_course if membership else None
+    is_tutor = is_admin or role in (CourseRole.PROF, CourseRole.TUTOR)
+    if not section.is_visible and not is_tutor:
+        raise HTTPException(404, "Kapitel nicht gefunden.")
+
+    # Kapitelnummer (wie script-refmap: rollenabhängige Sichtbarkeit +
+    # display_order) — für den Laufkopf im Druck (Margin-Box, serverseitig)
+    q = select(ScriptSection).where(ScriptSection.course_id == course_id)
+    if not is_tutor:
+        q = q.where(ScriptSection.is_visible == True)
+    sections = session.exec(q.order_by(ScriptSection.display_order.asc())).all()  # type: ignore[attr-defined]
+    chapter_num = next((i for i, s in enumerate(sections, 1) if s.id == section_id), None)
+
+    # Volleigenständige Seite (ohne Kurs-Tab-Leiste): Kontext manuell bauen
+    ctx = {
+        "request": request,
+        "page_title": f"{section.title} — PDF-Export",
+        "current_user": _user_ctx(user, role.value if role else "ADMIN"),
+        "courses": _get_user_courses(user, session),
+        "selected_course_id": course_id,
+        "is_admin": is_admin,
+        "course": {
+            "id": course.id,
+            "name": course.name,
+            "description": course.description,
+            "semester": course.semester,
+        },
+        "section": {
+            "id": section.id,
+            "title": section.title,
+            # Klartext für den Laufkopf (Margin-Box rendert keinen HTML-Math)
+            "header": f"Kap. {chapter_num} · {section.title}" if chapter_num else section.title,
+        },
+        "chapter_num": chapter_num,
+        "is_tutor": is_tutor,
+    }
+    return templates.TemplateResponse("course/script_print.html", ctx)
+
+
 @app.post("/api/analytics/script-section")
 async def track_script_section_view(
     course_id: int,
@@ -1585,6 +1669,47 @@ _APPLET_HEIGHT_SCRIPT = (
     '  window.addEventListener("resize", report);\n'
     "  if (window.ResizeObserver) { new ResizeObserver(report).observe(document.body); }\n"
     "  report();\n"
+    "  // PDF-Capture (Kapitel-PDF-Export, script_print.html): Das Parent bittet\n"
+    '  // per postMessage { source: "aicampus-capture-request", id } um einen\n'
+    "  // Screenshot des AKTUELLEN Applet-Zustands (Canvas-Applets: toDataURL,\n"
+    "  // DOM-Applets: html2canvas) und erhält die Antwort\n"
+    '  // { source: "aicampus-capture-result", id, dataUrl } (null = Fehler).\n'
+    '  window.addEventListener("message", function (e) {\n'
+    "    var d = e.data;\n"
+    '    if (!d || d.source !== "aicampus-capture-request" || !d.id) return;\n'
+    '    // resize: statische WebGL-Applets rendern (falls überhaupt) meist nur neu auf resize\n'
+    '    try { window.dispatchEvent(new Event("resize")); } catch (x) {}\n'
+    "    requestAnimationFrame(function () {\n"
+    "      var dataUrl = null;\n"
+    "      try {\n"
+    '        var cs = document.querySelectorAll("canvas");\n'
+    "        if (cs.length) {\n"
+    "          var best = null, area = 0;\n"
+    "          for (var i = 0; i < cs.length; i++) {\n"
+    "            var a = cs[i].width * cs[i].height;\n"
+    "            if (a > area) { area = a; best = cs[i]; }\n"
+    "          }\n"
+    '          if (best) dataUrl = best.toDataURL("image/png");\n'
+    "        }\n"
+    "      } catch (err) { dataUrl = null; }\n"
+    "      function done() {\n"
+    '        try { parent.postMessage({ source: "aicampus-capture-result", id: d.id, dataUrl: dataUrl || null }, "*"); } catch (x) {}\n'
+    "      }\n"
+    "      if (dataUrl) { done(); return; }\n"
+    '      var s = document.createElement("script");\n'
+    '      s.src = "/static/vendor/html2canvas.min.js";\n'
+    "      s.onload = function () {\n"
+    "        try {\n"
+    '          window.html2canvas(document.body, { useCORS: true, backgroundColor: "#ffffff" }).then(function (c) {\n'
+    '            try { dataUrl = c.toDataURL("image/png"); } catch (t) { dataUrl = null; }\n'
+    "            done();\n"
+    "          }).catch(done);\n"
+    "        } catch (x) { done(); }\n"
+    "      };\n"
+    "      s.onerror = done;\n"
+    "      document.body.appendChild(s);\n"
+    "    });\n"
+    "  });\n"
     "})();\n"
     "</script>\n"
 )

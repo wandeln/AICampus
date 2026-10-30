@@ -548,19 +548,28 @@
     toolbar.querySelector('.sq-del-btn').addEventListener('click', () => sqDeleteSection(card));
   }
 
-  // Toolbar im Normalmodus (Bearbeiten / Auge / Bin)
+  // Toolbar im Normalmodus (Studenten: nur PDF; Tutoren: Bearbeiten / PDF / Auge / Bin)
   function sqSetNormalToolbar(card) {
     const toolbar = card.querySelector('.sq-toolbar');
     if (!toolbar) return;
     const visible = !!card._visible;
-    toolbar.innerHTML =
-      '<button type="button" class="sq-edit-btn bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition">✏️ Bearbeiten</button>' +
-      '<span class="flex-1"></span>' +
-      '<button type="button" class="sq-vis-btn p-1.5 rounded hover:bg-gray-100 transition ' + (visible ? 'text-gray-400 hover:text-blue-600' : 'text-gray-300') + '" title="' + (visible ? 'Kapitel verstecken' : 'Kapitel freischalten') + '">' + sqEyeIcon(visible) + '</button>' +
-      '<button type="button" class="sq-del-btn text-red-500 hover:text-red-700 transition p-1.5 rounded hover:bg-red-50 text-sm" title="Kapitel löschen">🗑️</button>';
-    toolbar.querySelector('.sq-edit-btn').addEventListener('click', () => sqEnterEditMode(card));
-    toolbar.querySelector('.sq-vis-btn').addEventListener('click', () => sqToggleVisibility(card));
-    toolbar.querySelector('.sq-del-btn').addEventListener('click', () => sqDeleteSection(card));
+    // PDF-Export: eigenständige Print-Seite (Kapitel 1:1, Applets dort
+    // interaktiv einstellbar, Export clientseitig via window.print()).
+    const pdfBtn =
+      '<a href="/courses/' + courseId + '/script/' + card.getAttribute('data-section-id') + '/print" target="_blank" rel="noopener" class="bg-gray-600 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition" title="Kapitel als PDF herunterladen">⬇️ PDF</a>';
+    if (SQ_IS_TUTOR) {
+      toolbar.innerHTML =
+        '<button type="button" class="sq-edit-btn bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition">✏️ Bearbeiten</button>' +
+        pdfBtn +
+        '<span class="flex-1"></span>' +
+        '<button type="button" class="sq-vis-btn p-1.5 rounded hover:bg-gray-100 transition ' + (visible ? 'text-gray-400 hover:text-blue-600' : 'text-gray-300') + '" title="' + (visible ? 'Kapitel verstecken' : 'Kapitel freischalten') + '">' + sqEyeIcon(visible) + '</button>' +
+        '<button type="button" class="sq-del-btn text-red-500 hover:text-red-700 transition p-1.5 rounded hover:bg-red-50 text-sm" title="Kapitel löschen">🗑️</button>';
+      toolbar.querySelector('.sq-edit-btn').addEventListener('click', () => sqEnterEditMode(card));
+      toolbar.querySelector('.sq-vis-btn').addEventListener('click', () => sqToggleVisibility(card));
+      toolbar.querySelector('.sq-del-btn').addEventListener('click', () => sqDeleteSection(card));
+    } else {
+      toolbar.innerHTML = pdfBtn;
+    }
   }
 
   // Bearbeiten: Markdown-Vorschau wird durch das Formular ersetzt
@@ -1403,11 +1412,10 @@
 
     const body = document.createElement("div");
     body.className = "script-chapter-body hidden px-6 pt-4 pb-6 border-t border-gray-100";
-    if (SQ_IS_TUTOR) {
-      const toolbar = document.createElement("div");
-      toolbar.className = "sq-toolbar flex items-center gap-2 pb-4";
-      body.appendChild(toolbar);
-    }
+    // Toolbar für ALLE Rollen (Studenten: nur PDF-Button; Tutoren: + Bearbeiten …)
+    const toolbar = document.createElement("div");
+    toolbar.className = "sq-toolbar flex items-center gap-2 pb-4";
+    body.appendChild(toolbar);
     const md = document.createElement("div");
     md.className = "markdown-preview";
     md.textContent = "Wird geladen…";
@@ -1472,7 +1480,7 @@
         const card = buildSectionCard(s);
         container.appendChild(card);
         // Toolbar erst nach dem Einbau befüllen (querySelector braucht den DOM-Pfad)
-        if (SQ_IS_TUTOR) sqSetNormalToolbar(card);
+        sqSetNormalToolbar(card);
       }
 
       if (SQ_IS_TUTOR) initSortable();
@@ -1639,7 +1647,7 @@
     if (anchor) container.insertBefore(card, anchor);
     else container.appendChild(card);
     // Toolbar erst nach dem Einbau befüllen (querySelector braucht den DOM-Pfad)
-    if (SQ_IS_TUTOR) sqSetNormalToolbar(card);
+    sqSetNormalToolbar(card);
     await refreshCourseRefMap();
     sqBuildToc();
     sqLiveFlash(card);
