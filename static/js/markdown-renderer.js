@@ -4109,13 +4109,37 @@ function createMdSplitView(containerId, options = {}) {
 
   // ── Preview-Scroll → Editor: das oberste sichtbare Preview-Block
   //    (data-src-line aus dem sourceLines-Render) bestimmt die
-  //    Editor-Zeile. Nur Preview→Editor (kein Rückkopplungslauf). ──
+  //    Editor-Zeile. Nur Preview→Editor (kein Rückkopplungslauf).
+  //    Nur bei NUTZER-Scroll: Live-Previews (Re-Render nach Edit)
+  //    ersetzen die Preview-DOM komplett — schrumpft der Inhalt,
+  //    klemmt der Browser die Scrollposition (Clamping) und feuert
+  //    ein Scroll-Event, das den Editor-Cursor sonst mitreißen
+  //    würde (Cursor-Sprung beim schnellen Löschen). ──
+  const SCROLL_USER_MS = 300;
+  let userScrollUntil = 0;
+  const armUserScroll = () => { userScrollUntil = performance.now() + SCROLL_USER_MS; };
+  previewPane.addEventListener('wheel', armUserScroll, { passive: true });
+  previewPane.addEventListener('touchmove', armUserScroll, { passive: true });
+  previewPane.addEventListener('keydown', armUserScroll, { passive: true });
+  // Scrollbar-Ziehen: das Pointer-Down landet auf der Pane selbst
+  // (der Scrollbar-Thumb gehört zur Pane, nicht zu ihren Kindern).
+  previewPane.addEventListener('pointerdown', (e) => {
+    if (e.target === previewPane) armUserScroll();
+  }, { passive: true });
+
   let syncRaf = 0;
   previewPane.addEventListener('scroll', () => {
     if (syncRaf) return;
     syncRaf = requestAnimationFrame(() => {
       syncRaf = 0;
       if (!modes.preview || !editor.cm) return;
+      // Programmatischer Scroll (z.B. Clamping nach Re-Render):
+      // kein Nutzer-Input in den letzten SCROLL_USER_MS → kein Sync.
+      // Innerhalb des Fensters: um ein Frame verlängern (Momentum-
+      // Scrollen liefert weiter Scroll-Events ohne neue Wheel-Events).
+      const now = performance.now();
+      if (now > userScrollUntil) return;
+      userScrollUntil = now + SCROLL_USER_MS;
       const wrap = previewPane.querySelector('.markdown-preview');
       if (!wrap) return;
       // Lead: der Editor springt schon ~15 px vorher an die nächste
