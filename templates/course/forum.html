@@ -243,9 +243,10 @@
   }
 
   function forumAvatarHtml(m) {
+    // mt-1.5: Avatar sitzt tiefer, ausgerichtet auf die erste Textzeile.
     const inner = m.avatar
-      ? `<img src="${m.avatar}" alt="" class="w-9 h-9 rounded-full object-cover shrink-0">`
-      : '<div class="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center shrink-0">👤</div>';
+      ? `<img src="${m.avatar}" alt="" class="w-9 h-9 rounded-full object-cover shrink-0 mt-1.5">`
+      : '<div class="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center shrink-0 mt-1.5">👤</div>';
     return forumProfileLink(m, inner);
   }
 
