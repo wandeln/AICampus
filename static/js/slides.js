@@ -448,6 +448,13 @@ function fitSlideSection(section, W, H) {
   const avail = _slideFitAvailable(section, title);
   let best = null;
   let s = 1;
+  // In-place ist der Body ein gestrecktes Flex-Kind (flex:1 1 auto) →
+  // scrollHeight = Boxhöhe (≈ avail, ±1px Subpixel-Rundung), NICHT die
+  // Inhaltshöhe → passtende Folien würden als 1px-Überlauf erkannt und auf
+  // MIN runtergeworfen. Streckung für die Messung neutralisieren (synchron,
+  // Wiederherstellung vor dem Paint → kein Flicker, kein Applet-Refit).
+  const flexSave = body.style.flex;
+  body.style.flex = "0 0 auto";
   try {
     for (let i = 0; i < SLIDE_FIT_MAX_ITER; i++) {
       section.style.setProperty("--slides-body-scale", String(s));
@@ -456,12 +463,16 @@ function fitSlideSection(section, W, H) {
       s = Math.max(SLIDE_FIT_MIN, (s * avail) / h);
     }
   } finally {
+    body.style.flex = flexSave;
     if (prevStyle !== null) section.setAttribute("style", prevStyle);
     else section.removeAttribute("style");
   }
   // Style-Write nur bei geänderter Skala (sonst: Reflow → Applet-Relayout
   // → neue Höhen-Message → Refit-Schleife).
-  const final = String(best !== null ? best : SLIDE_FIT_MIN);
+  // Fallback ohne passende Iteration: letzte (gemessene) Skala, nicht
+  // MIN — ein Rundraum-Überlauf von 1px darf die Folie nicht auf MIN
+  // werfen; MIN bleibt nur wirksam, wenn der Inhalt wirklich nicht passt.
+  const final = String(best !== null ? best : s);
   if (section.style.getPropertyValue("--slides-body-scale") !== final) {
     section.style.setProperty("--slides-body-scale", final);
   }
