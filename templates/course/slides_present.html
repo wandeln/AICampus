@@ -212,6 +212,23 @@ async function aicampusDoMount() {
       });
       mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
     }
+    // Vor initialize() (das html.print-pdf setzt + setupPDF auslöst) auf
+    // Webfonts (KaTeX) + Bilder warten: sonst berechnen doPrintFit +
+    // setupPDF's Seitenhöhe die Skala mit ungeladenen Metriken (zu kleine
+    // gemessene Höhe → zu große Skala → Y-Overflow im PDF). Mit finalen
+    // Metriken ist die Print-Skala identisch zur Präsentation (die refittet
+    // ebenfalls erst nach dem Font-Load). Timeout: ein kaputtes Bild darf
+    // den Export nicht hängen lassen.
+    await Promise.race([
+      (async () => {
+        try { if (document.fonts && document.fonts.ready) await document.fonts.ready; } catch (e) {}
+        const imgs = [...slidesEl.querySelectorAll("img")];
+        await Promise.all(imgs.map((im) => im.complete
+          ? null
+          : new Promise((r) => { im.onload = im.onerror = r; })));
+      })(),
+      new Promise((r) => setTimeout(r, 6000)),
+    ]);
   }
 
   const reveal = new Reveal(document.getElementById("reveal-root"), {
@@ -335,6 +352,10 @@ async function aicampusDoMount() {
       if (!printed) {
         printed = true;
         fixPdfLayout();
+        // Safety-Net: finales Refit mit den JETZT (nach dem Font-/Bild-Wait
+        // und fixPdfLayout) finalen Metriken. Sections sind exakt 960×540 →
+        // in-place, exakt das gedruckte Layout → Print-Skala = Präsen-Skala.
+        fitSlides(slidesEl, SLIDE_W, SLIDE_H);
         window.print();
       }
     };
