@@ -13,6 +13,7 @@
   --slides-text: #1f2937;
   --slides-font-scale: 1;
   --slides-padding-scale: 1;
+  --slides-footer-scale: 1;
   --slides-aspect: 1.7778; /* 16:9 — pro Kurs per Theme überschrieben */
 }
 
@@ -40,15 +41,18 @@
    Reveal positioniert sie absolute (width:100%, keine Höhe) → ohne
    height:100% wäre justify-content:center in der Zentrierungsregel unten
    wirkungslos (Section wäre nur so hoch wie der Inhalt). */
-.reveal .slides > section,
-.reveal .slides section.slides-stack > section {
-  height: 100% !important;
-  /* Innenabstand pro Kurs skalierbar (--slides-padding-scale, Default 1). */
-  padding: calc(1.5em * var(--slides-padding-scale, 1))
-           calc(2.5em * var(--slides-padding-scale, 1));
-  box-sizing: border-box;
-  text-align: left; /* Default-Layout (topleft): linksbündig */
-}
+ .reveal .slides > section,
+ .reveal .slides section.slides-stack > section {
+   height: 100% !important;
+   /* Innenabstand pro Kurs skalierbar (--slides-padding-scale, Default 1).
+      Unten größer als oben (2.4em): die Fußzeile (bottom 0.45em, bis ~0.9em)
+      und ein unten stehendes Logo (bis ~2.7em) sollen frei bleiben. */
+   padding: calc(1.5em * var(--slides-padding-scale, 1))
+            calc(2.5em * var(--slides-padding-scale, 1))
+            calc(2.4em * var(--slides-padding-scale, 1));
+   box-sizing: border-box;
+   text-align: left; /* Default-Layout (topleft): linksbündig */
+ }
 
 /* Der Stack-Container braucht KEIN linkes/rechtes Padding: Die Unterfolien
    sind position:absolute OHNE left (Reveal-Basisregel) → sie sitzen an der
@@ -118,6 +122,23 @@
   width: 100%;
 }
 
+/* ─── Auto-Fit (fitSlideSection in slides.js) ──────────────────────────
+   Der Folienkörper (alles NACH der ersten Überschrift; renderSlideInto
+   hüllt ihn in .aicampus-slide-body) wird per --slides-body-scale (Default
+   1, inline pro Folie gesetzt) auf die Folie herunterskaliert — der Titel
+   (erste Überschrift, direktes Kind von .markdown-preview) bleibt in
+   voller Größe. Skalierung über die Body-Fontsize: alle Typografie und
+   Medien-Caps im Körper sind em-basiert → skalieren mit, und die
+   Layout-Höhe schrumpft wirklich (transform: scale() würde sie nicht
+   ändern → Reveal's setupPDF blätterte die Folie im PDF auf).
+   display:flex auch für layout:topleft (Block-Default): kein Margin-
+   Collapsing → body.scrollHeight ist exakt messbar. */
+:is(.reveal .slides, .slides-canvas) .markdown-preview > .aicampus-slide-body {
+  display: flex;
+  flex-direction: column;
+  font-size: calc(1em * var(--slides-body-scale, 1));
+}
+
 /* layout: default (Standard-Layout) — wie topleft (linksbündig, volle
    Breite, Titel oben), aber der Folienkörper (alles NACH der ersten
    Überschrift; renderSlideInto hüllt ihn in .aicampus-slide-body) wird im
@@ -177,7 +198,7 @@
   /* Mit dem horizontalen Folien-Padding ausgerichtet (skaliert mit). */
   left: calc(2.5em * var(--slides-padding-scale, 1));
   right: calc(2.5em * var(--slides-padding-scale, 1));
-  font-size: 0.4em;
+  font-size: calc(0.5em * var(--slides-footer-scale, 1));
   line-height: 1.2;
   color: var(--slides-text, #1f2937);
   opacity: 0.55;
@@ -202,7 +223,7 @@ html.print-pdf .reveal .slides .pdf-page > section[data-footer]::after {
   bottom: 0.45em;
   left: calc(2.5em * var(--slides-padding-scale, 1));
   right: calc(2.5em * var(--slides-padding-scale, 1));
-  font-size: 0.4em;
+  font-size: calc(0.5em * var(--slides-footer-scale, 1));
   line-height: 1.2;
   color: var(--slides-text, #1f2937);
   opacity: 0.55;
@@ -215,18 +236,20 @@ html.print-pdf .reveal .slides .pdf-page > section[data-footer]::after {
    oben rechts). Das Logo liegt hinter dem Folieninhalt (s. z-Index-Regel).
    Die html.print-pdf-Variante gilt für den PDF-Export, wo die Sections in
    .pdf-page-Boxen hängen (setupPDF) und ".slides > section" nicht matcht. */
-.reveal.slides-has-logo .slides > section::before,
-html.print-pdf .reveal.slides-has-logo .slides .pdf-page > section::before {
-  content: "";
-  position: absolute;
-  top: 0.144em;
-  right: 0.8em;
-  width: calc(2.6em * var(--slides-logo-scale, 1));
-  height: calc(2.6em * var(--slides-logo-scale, 1));
-  background: var(--slides-logo) top right / contain no-repeat;
-  pointer-events: none;
-  z-index: 1; /* im PDF über dem Folien-Hintergrund (.aicampus-slide-bg, z-index:0); live: natives Bg liegt hinter .slides */
-}
+ .reveal.slides-has-logo .slides > section::before,
+ html.print-pdf .reveal.slides-has-logo .slides .pdf-page > section::before {
+   content: "";
+   position: absolute;
+   top: 0.144em;
+   /* Hor. Rand wie die Fußzeile (2.5em × padding-scale) — nicht größer
+      herausragen als der Footer. */
+   right: calc(2.5em * var(--slides-padding-scale, 1));
+   width: calc(2.6em * var(--slides-logo-scale, 1));
+   height: calc(2.6em * var(--slides-logo-scale, 1));
+   background: var(--slides-logo) top right / contain no-repeat;
+   pointer-events: none;
+   z-index: 1; /* im PDF über dem Folien-Hintergrund (.aicampus-slide-bg, z-index:0); live: natives Bg liegt hinter .slides */
+ }
 
 /* Folieninhalt über dem Logo (Logo ganz im Hintergrund).
    WICHTIG: :not(section) — bei Stack-Folien sind die direkten Children die
@@ -241,14 +264,14 @@ html.print-pdf .reveal.slides-has-logo .slides .pdf-page > section > :not(sectio
 }
 
 /* Eckpositionen (Default = oben rechts, s. Basisregel). Alle Eck-Varianten
-   sitzen auf derselben Ränder-Distanz wie die Footer-Zeile (0.144em vertikal,
-   0.8em horizontal). */
+   sitzen auf derselben Ränder-Distanz wie die Footer-Zeile (0.144em
+   vertikal, horizontal 2.5em × padding-scale). */
 .reveal.slides-logo-top-left .slides > section::before,
 html.print-pdf .reveal.slides-logo-top-left .slides .pdf-page > section::before {
-  top: 0.144em;
-  left: 0.8em;
-  right: auto;
-  background-position: top left;
+   top: 0.144em;
+   left: calc(2.5em * var(--slides-padding-scale, 1));
+   right: auto;
+   background-position: top left;
 }
 
 .reveal.slides-logo-bottom-right .slides > section::before,
@@ -260,11 +283,11 @@ html.print-pdf .reveal.slides-logo-bottom-right .slides .pdf-page > section::bef
 
 .reveal.slides-logo-bottom-left .slides > section::before,
 html.print-pdf .reveal.slides-logo-bottom-left .slides .pdf-page > section::before {
-  top: auto;
-  bottom: 0.144em;
-  left: 0.8em;
-  right: auto;
-  background-position: bottom left;
+   top: auto;
+   bottom: 0.144em;
+   left: calc(2.5em * var(--slides-padding-scale, 1));
+   right: auto;
+   background-position: bottom left;
 }
 
 /* ─── Folien-Hintergrund (Richtlinie background: ![Titel](…)) ─────
@@ -566,6 +589,51 @@ html.print-pdf .reveal .slides .markdown-preview pre {
   padding: 0.4em 0.7em !important;
 }
 
+/* Figuren-Ränder im Folien-Kontext em-basiert und enger als im Skript
+   (main.css: 1.25rem = konstant): mit dem Auto-Fit müssen auch die
+   Abstände skalieren, und vertikal ist im Folienraum knapp — enge Ränder
+   lassen den Fit auf größeren Skalen laufen. */
+:is(.reveal .slides, .slides-canvas) .markdown-preview :is(.aicampus-figure, .aicampus-code-figure, .aicampus-table-figure) {
+  margin: 0.5em auto;
+}
+:is(.reveal .slides, .slides-canvas) .markdown-preview :is(.aicampus-figure, .aicampus-code-figure, .aicampus-table-figure) figcaption {
+  margin-top: 0.5em;
+}
+
+/* Vertikaler Rhythmus im Folien-Kontext: em statt rem. main.css fixiert
+   den Text-Rhythmus in rem (konstante px) — im Folien-Canvas schrumpft
+   der Auto-Fit den Text, die rem-Abstände blieben gleich groß → dichte
+   Folien brauchten unnötig kleine Skalen. em skaliert proportional mit
+   der Body-Größe; bei Skala 1.0 sind die Werte ≈ wie im Skript. */
+:is(.reveal .slides, .slides-canvas) .markdown-preview p {
+  margin-bottom: 0.45em !important;
+}
+:is(.reveal .slides, .slides-canvas) .markdown-preview :is(ol, ul) {
+  margin-top: 0.15em !important;
+  margin-bottom: 0.45em !important;
+}
+:is(.reveal .slides, .slides-canvas) .markdown-preview li {
+  margin-bottom: 0.15em !important;
+}
+:is(.reveal .slides, .slides-canvas) .markdown-preview .katex-display {
+  margin: 0.35em 0 !important;
+  padding: 0.15em 0 !important;
+}
+:is(.reveal .slides, .slides-canvas) .markdown-preview .aicampus-callbox {
+  margin: 0.25em 0;
+}
+:is(.reveal .slides, .slides-canvas) .markdown-preview .aicampus-callbox-head {
+  padding: 0.2em 1.25rem 0.1em;
+}
+:is(.reveal .slides, .slides-canvas) .markdown-preview .aicampus-callbox-body {
+  padding: 0 1.25rem 0.25em;
+}
+
+/* Leere Absätze (z. B. um Figuren in @startcolumn-Grids): keine Marge. */
+:is(.reveal .slides, .slides-canvas) .markdown-preview p:empty {
+  margin: 0 !important;
+}
+
 :is(.reveal .slides, .slides-canvas) .markdown-preview img {
   max-width: 100% !important;
   height: auto !important;
@@ -595,6 +663,16 @@ html.print-pdf .reveal .slides .markdown-preview pre {
 }
 :is(.reveal .slides, .slides-canvas) .markdown-preview .aicampus-subfig-item figcaption {
   font-size: 0.5em;
+}
+
+/* Subfiguren: max. 3 pro Reihe. Im Skript fließen sie nach natürlicher
+   Breite; in der schmalen Slide-Spalte würden sonst z. B. 6 Bilder zu
+   2×3 Zeilen brichen (paar px zu breit für 3) und die Folie per Auto-Fit
+   auf kleine Skalen drücken. basis 1/3 + grow: 2 Bilder füllen je 1/2,
+   3 füllen die Reihe, 6 = 2 Reihen. */
+:is(.reveal .slides, .slides-canvas) .markdown-preview .aicampus-subfig-row > .aicampus-subfig-item {
+  flex: 1 1 calc(33.333% - 0.67rem);
+  min-width: 0;
 }
 
 /* Applet-Iframes: volle Breite, Höhe dämpfen (Renderer setzt inline
@@ -692,12 +770,13 @@ html.print-pdf .reveal .slides .markdown-preview pre {
   left: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  padding: calc(1.5em * var(--slides-padding-scale, 1))
-           calc(2.5em * var(--slides-padding-scale, 1));
-  box-sizing: border-box;
-  text-align: center;
-  font-size: calc(28px * var(--slides-font-scale, 1));
+   justify-content: center;
+   padding: calc(1.5em * var(--slides-padding-scale, 1))
+            calc(2.5em * var(--slides-padding-scale, 1))
+            calc(2.4em * var(--slides-padding-scale, 1));
+   box-sizing: border-box;
+   text-align: center;
+   font-size: calc(28px * var(--slides-font-scale, 1));
   /* Basis-Font wie in der Präsentation (.reveal-Regel oben): das Canvas ist
      kein .reveal-Element und würde sonst die Seiten-Schriftart erben.
      Die serif-Variante (.slides-canvas.theme-serif) hat höhere Spezifität. */
@@ -997,12 +1076,13 @@ body.present-mode .present-shortcuts kbd {
    Seiten-/Folien-Geometrie — Höhe, Zentrierung — setzt fixPdfLayout() in
    slides_present.html, weil Reveal sie aus gemessenen Scroll-Heights
    rechnet und den Sections keine feste Höhe gibt.) */
-html.print-pdf .reveal .slides .pdf-page > section {
-  padding: calc(1.5em * var(--slides-padding-scale, 1))
-           calc(2.5em * var(--slides-padding-scale, 1)) !important; /* reveal.css: padding:0 !important — wie on-screen (section) */
-  text-align: left;
-  box-sizing: border-box;
-}
+ html.print-pdf .reveal .slides .pdf-page > section {
+   padding: calc(1.5em * var(--slides-padding-scale, 1))
+            calc(2.5em * var(--slides-padding-scale, 1))
+            calc(2.4em * var(--slides-padding-scale, 1)) !important; /* reveal.css: padding:0 !important — wie on-screen (section) */
+   text-align: left;
+   box-sizing: border-box;
+ }
 
 /* print-pdf: Top-Level-Sections in Inhaltshöhe messen lassen. Mit
    height:100% (Basisregel oben) würde setupPDF's scrollHeight-Messung

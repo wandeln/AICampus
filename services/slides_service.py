@@ -89,9 +89,13 @@ THEME_TEMPLATES: dict[str, dict] = {
 FONT_SCALE_MIN = 0.6
 FONT_SCALE_MAX = 1.5
 
-# Innenabstand der Folien (1.0 = Default 1.5em/2.5em).
+# Innenabstand der Folien (1.0 = Default 1.5em/2.5em/2.4em).
 PADDING_SCALE_MIN = 0.3
-PADDING_SCALE_MAX = 1.5
+PADDING_SCALE_MAX = 2.0
+
+# Fußzeilen-Schriftgröße (1.0 = Default 0.5em).
+FOOTER_SCALE_MIN = 0.5
+FOOTER_SCALE_MAX = 2.0
 
 
 class SlideError(ValueError):
@@ -583,6 +587,23 @@ def _clamp_padding_scale(value) -> float:
     return min(PADDING_SCALE_MAX, max(PADDING_SCALE_MIN, ps))
 
 
+def _clamp_footer_scale_lenient(value) -> float:
+    """Clamping für die Anzeige (unzulässige Werte → 1.0, kein Fehler)."""
+    try:
+        return min(FOOTER_SCALE_MAX, max(FOOTER_SCALE_MIN, float(value)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _clamp_footer_scale(value) -> float:
+    """Clamping für die Validierung (PUT); unzulässige Werte → SlideError."""
+    try:
+        fs = float(value)
+    except (TypeError, ValueError):
+        raise SlideError("'footer_scale' muss eine Zahl sein.")
+    return min(FOOTER_SCALE_MAX, max(FOOTER_SCALE_MIN, fs))
+
+
 def _clamp_logo_scale_lenient(value) -> float:
     """Clamping für die Anzeige (unzulässige Werte → 1.0, kein Fehler)."""
     try:
@@ -619,6 +640,7 @@ def resolve_theme(raw: Optional[dict]) -> dict:
         "font_scale": _clamp_font_scale_lenient(raw.get("font_scale", 1.0)),
         "padding_scale": _clamp_padding_scale_lenient(raw.get("padding_scale", 1.0)),
         "footer": bool(raw.get("footer", True)),
+        "footer_scale": _clamp_footer_scale_lenient(raw.get("footer_scale", 1.0)),
         "logo_media_id": raw.get("logo_media_id") or None,
         "logo_position": (
             raw.get("logo_position")
@@ -642,6 +664,7 @@ def validate_theme(raw) -> dict:
         "font_scale": 1.0,
         "padding_scale": 1.0,
         "footer": True,
+        "footer_scale": 1.0,
         "logo_media_id": None,
         "logo_position": DEFAULT_LOGO_POSITION,
         "logo_scale": 1.0,
@@ -673,6 +696,9 @@ def validate_theme(raw) -> dict:
 
     if "footer" in raw and raw["footer"] is not None:
         theme["footer"] = bool(raw["footer"])
+
+    if "footer_scale" in raw and raw["footer_scale"] is not None:
+        theme["footer_scale"] = _clamp_footer_scale(raw["footer_scale"])
 
     if "logo_media_id" in raw:
         value = raw["logo_media_id"]

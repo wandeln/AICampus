@@ -191,6 +191,29 @@ async function aicampusDoMount() {
   const SLIDE_W = 960;
   const SLIDE_H = Math.round(SLIDE_W / ratio);
 
+  // Auto-Fit: Folienkörper (alles nach der Überschrift) auf die Folie
+  // skalieren — synchron, vor dem ersten Render (s. fitSlides in slides.js).
+  fitSlides(slidesEl, SLIDE_W, SLIDE_H);
+
+  // PDF-Export: die print-pdf-CSS-Regeln (u. a. Code-Blöcke ohne Max-Höhe)
+  // ändern die Inhaltshöhen → sobald Reveal html.print-pdf setzt, ALLE
+  // Folien neu fiten. Muss vor setupPDF's scrollHeight-Messung laufen (die
+  // erfolgt 2 Animation-Frame nach dem Class-Set; der MutationObserver
+  // feuert als Microtask davor — Timing s. wireKatexFragmentResort).
+  if (/print-pdf/.test(window.location.search)) {
+    const doPrintFit = () => fitSlides(slidesEl, SLIDE_W, SLIDE_H);
+    if (document.documentElement.classList.contains("print-pdf")) {
+      doPrintFit();
+    } else {
+      const mo = new MutationObserver(() => {
+        if (!document.documentElement.classList.contains("print-pdf")) return;
+        mo.disconnect();
+        doPrintFit();
+      });
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    }
+  }
+
   const reveal = new Reveal(document.getElementById("reveal-root"), {
     embedded: true, // Reveal übernimmt sonst <body> als Viewport (Full-Page-Mode);
                     // embedded: Viewport = #reveal-root, unsere Layout-Struktur bleibt erhalten

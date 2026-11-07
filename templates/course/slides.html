@@ -200,6 +200,8 @@
       // Folien-Position (S-Nummern unlabeled Subfigure-Komplexe):
       slidesEl.appendChild(await buildSlideSection(slidesToShow[h], FOOTER, { deckId, h }));
     }
+    // Auto-Fit: Folienkörper auf die Folie skalieren (s. fitSlides in slides.js)
+    fitSlides(slidesEl, TILE_W, TILE_H);
     shell.classList.add("has-slides");
     return initPreviewReveal(shell, totalSlides);
   }
@@ -249,6 +251,9 @@
         slidesEl.innerHTML = "";
         miniSections.forEach((el) => slidesEl.appendChild(el));
         rest.forEach((el) => slidesEl.appendChild(el));
+        // Auto-Fit: die neu gebauten Restfolien (Mini-Folien sind bereits
+        // gefitet, gleicher W/H) — vor dem ersten Render der neuen Instanz.
+        fitSlides(slidesEl, TILE_W, TILE_H);
         const fullReveal = await initPreviewReveal(shell, countSlides(slides));
         state.reveal = fullReveal;
         // slide() clampt; v ist unverändert (gleiche erste Slides).
@@ -542,6 +547,7 @@
     font_scale: theme.font_scale,
     padding_scale: theme.padding_scale,
     footer: theme.footer,
+    footer_scale: theme.footer_scale,
     logo_media_id: theme.logo_media_id,
     logo_position: theme.logo_position,
     logo_scale: theme.logo_scale,
@@ -570,6 +576,12 @@
       paddingScale.value = themeState.padding_scale;
       const val = document.getElementById("tm-padding-scale-val");
       if (val) val.textContent = String(parseFloat(themeState.padding_scale)) + "×";
+    }
+    const footerScale = document.getElementById("tm-footer-scale");
+    if (footerScale) {
+      footerScale.value = themeState.footer_scale;
+      const val = document.getElementById("tm-footer-scale-val");
+      if (val) val.textContent = String(parseFloat(themeState.footer_scale)) + "×";
     }
     const aspect = document.getElementById("tm-aspect");
     if (aspect) aspect.value = themeState.aspect_ratio;
@@ -604,6 +616,7 @@
     el.style.setProperty("--slides-text", themeState.colors.text);
     el.style.setProperty("--slides-font-scale", themeState.font_scale);
     el.style.setProperty("--slides-padding-scale", String(themeState.padding_scale));
+    el.style.setProperty("--slides-footer-scale", String(themeState.footer_scale));
     el.style.setProperty("--slides-aspect", String(themeState.aspect_value));
     el.style.setProperty("--slides-logo-scale", String(themeState.logo_scale));
     // Live-Logo-Vorschau: die Auswahl wird auf der Vorschau selbst
@@ -641,6 +654,8 @@
         "# Beispiel-Folie\n\nEin Absatz mit **fett** und $E = mc^2$.\n\n- Punkt eins\n- Punkt zwei"
       ))[0];
       slidesEl.appendChild(await buildSlideSection(slide, null));
+      // Auto-Fit: Folienkörper auf die Folie skalieren (s. fitSlides in slides.js)
+      fitSlides(slidesEl, W, H);
       previewReveal = new Reveal(root, {
         embedded: true,
         keyboard: false,
@@ -673,6 +688,9 @@
     } else {
       slidesEl.removeAttribute("data-footer");
     }
+    // Auto-Fit: Schrift-/Abstand-Änderung (Slider) wirken live per
+    // CSS-Variable ohne Rebuild → die Beispiel-Folie neu fiten.
+    fitSlides(slidesEl, 960, Math.round(960 / themeState.aspect_value));
   }
 
   window.openThemeModal = async function () {
@@ -748,6 +766,13 @@
     await applyPreview();
   };
 
+  window.setFooterScale = async function (value) {
+    themeState.footer_scale = parseFloat(value);
+    const val = document.getElementById("tm-footer-scale-val");
+    if (val) val.textContent = String(parseFloat(value)) + "×";
+    await applyPreview();
+  };
+
   window.saveTheme = async function () {
     const payload = {
       template: themeState.template,
@@ -755,6 +780,7 @@
       font_scale: themeState.font_scale,
       padding_scale: themeState.padding_scale,
       footer: themeState.footer,
+      footer_scale: themeState.footer_scale,
       logo_media_id: themeState.logo_media_id,
       logo_position: themeState.logo_position,
       logo_scale: themeState.logo_scale,
@@ -850,8 +876,9 @@
 
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">Innenabstand: <span id="tm-padding-scale-val"></span></label>
-          <input type="range" id="tm-padding-scale" min="0.3" max="1.5" step="0.05"
+          <input type="range" id="tm-padding-scale" min="0.3" max="2" step="0.05"
                  value="{{ slides_theme.padding_scale }}" oninput="setPaddingScale(this.value)" class="w-full">
+          <p class="text-xs text-gray-400 mt-1">Skaliert alle Seitenränder (unten ist der Default größer — für Fußzeile/Logo).</p>
         </div>
 
         <div>
@@ -870,6 +897,12 @@
                  onchange="setFooter(this.checked)" class="rounded">
           Fußzeile „Kurs — Semester“
         </label>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Fußzeilen-Größe: <span id="tm-footer-scale-val"></span></label>
+          <input type="range" id="tm-footer-scale" min="0.5" max="2" step="0.05"
+                 value="{{ slides_theme.footer_scale }}" oninput="setFooterScale(this.value)" class="w-full">
+        </div>
 
         {% if is_prof or is_admin %}
         <div>

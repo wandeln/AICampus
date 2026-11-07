@@ -708,6 +708,7 @@ window.addEventListener('message', (event) => {
   if (!d || d.source !== 'aicampus-applet' || typeof d.height !== 'number' || !isFinite(d.height)) return;
   document.querySelectorAll('iframe.aicampus-applet').forEach((f) => {
     if (f.contentWindow === event.source) {
+      const prevAppletH = f.style.height;
       // Gezoomte Applets ({.zoom=X}): Clamp zoom-korrigiert, damit die
       // VISIBLE Höhe (gemeldete Höhe × zoom) im selben Bereich bleibt.
       const zoom = parseFloat(f.getAttribute('data-zoom')) || 1;
@@ -721,20 +722,37 @@ window.addEventListener('message', (event) => {
         const v = Math.min(h * zoom, maxH);
         h = Math.max(1, Math.round(v / zoom));
       }
-      f.style.height = h + 'px';
+      // Höhe mit dem Auto-Fit mit skalieren (--slides-body-scale, inline pro
+      // Folie am <section> gesetzt, s. fitPxExpr): absolute px würden bei
+      // jeder Body-Skala über die Folie ragen und der Fit könnte sie nicht
+      // mehr einkalibrieren. Im Skript Fallback 1 → px unverändert.
+      f.style.height = `calc(${h}px * var(--slides-body-scale, 1))`;
       // Gezoomte Applets stehen in einem .aicampus-applet-zoom-Wrapper, dessen
       // Höhe der sichtbaren (geskalten) Höhe folgen muss (transform ändert
-      // nicht die Iframe-Layout-Box). offsetHeight statt h: die Iframe-Box
-      // kann per CSS max-height kleiner sein (Default-Höhe ohne explizites
-      // {.height} / {.height}=X), der Wrapper muss dem sichtbaren Ergebnis
-      // folgen, nicht der unbeachteten Zielhöhe.
+      // nicht die Iframe-Layout-Box). Ebenfalls variablebasiert: würde hier
+      // eine absolute px-Höhe gesetzt, bliebe der Wrapper bei jeder
+      // Body-Skalen-Änderung (Refit) auf der alten Größe.
       const wrap = f.parentElement && f.parentElement.classList.contains('aicampus-applet-zoom')
         ? f.parentElement
         : null;
-      if (wrap) wrap.style.height = Math.round((f.offsetHeight || h) * zoom) + 'px';
+      if (wrap) wrap.style.height = `calc(${Math.round(h * zoom)}px * var(--slides-body-scale, 1))`;
+      // Auto-Fit (slides.js, nur auf Folien-Seiten): die Applet-Höhe ändert
+      // die Folien-Inhaltshöhe → die Folie neu fiten. Nur wenn sich die
+      // Iframe-Höhe tatsächlich geändert hat — eine identische Message
+      // würde sonst Refit → (minimale) Relayout → Message → … → Flackern.
+      if (prevAppletH !== f.style.height && window.aicampusRefitSlideOf) window.aicampusRefitSlideOf(f);
     }
   });
 });
+
+// Explizite Medien-/Code-Höhen ({.height=X}, px): im Slide-Kontext mit dem
+// Auto-Fit mit skalieren (--slides-body-scale, wird von slides.js inline
+// pro Folie am <section> gesetzt) — sonst würde eine fixe px-Höhe bei jeder
+// Body-Skala über die Folie ragen. Im Skript (und überall ohne die Variable)
+// greift der Fallback 1 → px-Wert unverändert.
+function fitPxExpr(px) {
+  return `calc(${px}px * var(--slides-body-scale, 1))`;
+}
 
 // ─── Fenced-Code-Block-Head ──────────────────────────────────────────
 // Öffnende Zeile eines ```-Blocks: optionale Sprache (bares Wort an
@@ -1781,7 +1799,9 @@ async function renderMarkdown(text, targetElement, options = {}) {
       // (exakt wie bei gezoomten Applets, s. dort).
       preStyle += `--tz:${codeZoom};`;
     }
-    if (codeHeight !== null) preStyle += `max-height:${codeHeight}px !important;overflow:auto !important;`;
+    // {.height}: mit dem Auto-Fit skalierbar (fitPxExpr, s. o.) — im
+    // Skript Fallback 1 → px unverändert.
+    if (codeHeight !== null) preStyle += `max-height:${fitPxExpr(codeHeight)} !important;overflow:auto !important;`;
     const preStyleAttr = preStyle ? ` style="${preStyle}"` : '';
     let blockHtml = `<pre${aaidAttr}${preStyleAttr}><code${langAttr}${linesAttr}>${escaped}</code></pre>`;
     // {#code:label} und/oder [caption] → Code-Figur mit Caption
@@ -2157,10 +2177,11 @@ async function renderMarkdown(text, targetElement, options = {}) {
       // YouTube: fixe Höhe + proportionale Breite (16:9), zentriert in
       // der Figure (text-align:center). Inline-!important schlägt die
       // width:100%-Regel (slides.css) und die 9em-Default-Max-Höhe.
-      const hExpr = f.zoom != null ? `calc(${f.height}px / ${f.zoom})` : `${f.height}px`;
+      // Höhen mit dem Auto-Fit skalierbar (fitPxExpr, s. o.).
+      const hExpr = f.zoom != null ? `calc(${fitPxExpr(f.height)} / ${f.zoom})` : fitPxExpr(f.height);
       const wExpr = f.zoom != null
-        ? `calc(${f.height}px * 16 / 9 / ${f.zoom})`
-        : `${Math.round((f.height * 16) / 9)}px`;
+        ? `calc(${fitPxExpr(f.height)} * 16 / 9 / ${f.zoom})`
+        : `calc(${fitPxExpr(f.height)} * 16 / 9)`;
       parts.push(`height: ${hExpr} !important`);
       parts.push(`max-height: ${hExpr} !important`);
       parts.push(`width: ${wExpr} !important`);
@@ -2168,15 +2189,15 @@ async function renderMarkdown(text, targetElement, options = {}) {
       // Höhe in sichtbaren px. Gezoomtes Applet: geteilt durch den
       // Zoom-Faktor, da die transform die Iframe-Layout-Box skaliert.
       parts.push(f.zoom != null
-        ? `${isExternalApplet ? 'height' : 'max-height'}: calc(${f.height}px / ${f.zoom}) !important`
-        : `${isExternalApplet ? 'height' : 'max-height'}: ${f.height}px !important`);
+        ? `${isExternalApplet ? 'height' : 'max-height'}: calc(${fitPxExpr(f.height)} / ${f.zoom}) !important`
+        : `${isExternalApplet ? 'height' : 'max-height'}: ${fitPxExpr(f.height)} !important`);
       // Externe Website: die 9em-Default-Max-Höhe (slides.css, Stylesheet-
       // !important) dürfte die explizite height nicht deckeln → gleiche
       // Max-Höhe inline (Inline-!important gewinnt).
       if (isExternalApplet) {
         parts.push(f.zoom != null
-          ? `max-height: calc(${f.height}px / ${f.zoom}) !important`
-          : `max-height: ${f.height}px !important`);
+          ? `max-height: calc(${fitPxExpr(f.height)} / ${f.zoom}) !important`
+          : `max-height: ${fitPxExpr(f.height)} !important`);
       }
     }
     if (f.zoom != null) {
@@ -2218,8 +2239,8 @@ async function renderMarkdown(text, targetElement, options = {}) {
     // display:inline-block + width:100% bleibt im <p> (s. CSS).
     const zoomInitH = f.height != null
       ? (isExternalApplet
-        ? `${f.height}px`
-        : `min(calc(150px * ${f.zoom}), ${f.height}px)`)
+        ? fitPxExpr(f.height)
+        : `min(calc(150px * ${f.zoom} * var(--slides-body-scale, 1)), ${fitPxExpr(f.height)})`)
       : (isVideo
         ? 'calc(100% * 0.5625)'
         : `calc(150px * ${f.zoom})`);
@@ -2257,23 +2278,23 @@ async function renderMarkdown(text, targetElement, options = {}) {
     let dataZoom = '';
     if (isVideo && f.height != null) {
       // YouTube: fixe Höhe + proportionale Breite (16:9) — s. labeled-
-      // Figures oben.
-      const hExpr = f.zoom != null ? `calc(${f.height}px / ${f.zoom})` : `${f.height}px`;
+      // Figures oben (Höhen mit dem Auto-Fit skalierbar, s. fitPxExpr).
+      const hExpr = f.zoom != null ? `calc(${fitPxExpr(f.height)} / ${f.zoom})` : fitPxExpr(f.height);
       const wExpr = f.zoom != null
-        ? `calc(${f.height}px * 16 / 9 / ${f.zoom})`
-        : `${Math.round((f.height * 16) / 9)}px`;
+        ? `calc(${fitPxExpr(f.height)} * 16 / 9 / ${f.zoom})`
+        : `calc(${fitPxExpr(f.height)} * 16 / 9)`;
       parts.push(`height: ${hExpr} !important`);
       parts.push(`max-height: ${hExpr} !important`);
       parts.push(`width: ${wExpr} !important`);
     } else if (f.height != null) {
       parts.push(f.zoom != null
-        ? `${isExternal ? 'height' : 'max-height'}: calc(${f.height}px / ${f.zoom}) !important`
-        : `${isExternal ? 'height' : 'max-height'}: ${f.height}px !important`);
+        ? `${isExternal ? 'height' : 'max-height'}: calc(${fitPxExpr(f.height)} / ${f.zoom}) !important`
+        : `${isExternal ? 'height' : 'max-height'}: ${fitPxExpr(f.height)} !important`);
       // Externe Website: 9em-Default-Max-Höhe nicht zulassen (s. 6a).
       if (isExternal) {
         parts.push(f.zoom != null
-          ? `max-height: calc(${f.height}px / ${f.zoom}) !important`
-          : `max-height: ${f.height}px !important`);
+          ? `max-height: calc(${fitPxExpr(f.height)} / ${f.zoom}) !important`
+          : `max-height: ${fitPxExpr(f.height)} !important`);
       }
     }
     if (f.zoom != null) {
@@ -2291,7 +2312,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
     const iframeTag =
       `<iframe src="${escapeHtml(effSrc)}" class="aicampus-applet${isVideo ? ' aicampus-video' : ''}" sandbox="${appletSandboxAttr(effSrc)}" loading="lazy" title="${escapeHtml(f.alt)}"${dataZoom}${dataMaxH}${mediaStyle}></iframe>`;
     const zoomInitH = f.height != null
-      ? (isExternal ? `${f.height}px` : `min(calc(150px * ${f.zoom}), ${f.height}px)`)
+      ? (isExternal ? fitPxExpr(f.height) : `min(calc(150px * ${f.zoom} * var(--slides-body-scale, 1)), ${fitPxExpr(f.height)})`)
       : (isVideo ? 'calc(100% * 0.5625)' : `calc(150px * ${f.zoom})`);
     // <span>-Wrapper (kein <div>): muss im umgebenden <p> bleiben, damit
     // das Iframe dieselbe font-size erbt wie im zoomlosen Fall (s. 6a).
@@ -2310,7 +2331,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
   //      sonst simples <img> (wie ein normales marked-Bild).
   plainFigures.forEach((f, idx) => {
     const isVid = isVideoSrc(f.src);
-    const imgStyle = f.height != null ? ` style="max-height: ${f.height}px !important"` : '';
+    const imgStyle = f.height != null ? ` style="max-height: ${fitPxExpr(f.height)} !important"` : '';
     const imgTag = isVid
       ? `<video src="${escapeHtml(f.src)}" preload="metadata"${videoAttrs(f)}${imgStyle}></video>`
       : `<img src="${escapeHtml(f.src)}" alt="${escapeHtml(f.alt)}"${imgStyle}>`;
@@ -2337,7 +2358,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
     const hasInnerLabel = f.inners.some((x) => x.label !== null);
     const items = f.inners.map((inner, i) => {
       const safeAlt = escapeHtml(inner.alt);
-      const style = inner.height != null ? ` style="max-height: ${inner.height}px !important"` : '';
+      const style = inner.height != null ? ` style="max-height: ${fitPxExpr(inner.height)} !important"` : '';
       const mediaTag = isAppletSrc(inner.src)
         ? `<iframe src="${escapeHtml(inner.src)}" class="aicampus-applet" sandbox="${appletSandboxAttr(inner.src)}" loading="lazy" title="${safeAlt}"${style}></iframe>`
         : isVideoSrc(inner.src)
@@ -2350,7 +2371,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
         (capText ? `<figcaption>${renderCaptionRef(capText, captionCtx)}</figcaption>` : '') +
         `</figure>`;
     }).join('');
-    const rowStyle = f.height != null ? ` style="max-height: ${f.height}px"` : '';
+    const rowStyle = f.height != null ? ` style="max-height: ${fitPxExpr(f.height)}"` : '';
     const fragAttrs = f.frag
       ? ` data-frag="${f.frag.type}"${f.frag.id ? ` data-frag-id="${f.frag.id}"` : ''}`
       : '';

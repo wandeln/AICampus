@@ -631,6 +631,8 @@
       const ratio = (theme && theme.aspect_value) || 16 / 9;
       const W = 960;
       const H = Math.round(W / ratio);
+      // Auto-Fit: Folienkörper auf die Folie skalieren (s. fitSlides in slides.js)
+      fitSlides(previewSlidesEl, W, H);
       const inst = new Reveal(revealRootEl, {
         embedded: true,
         keyboard: false, // Mini-Vorschau greift keine globalen Tasten ab

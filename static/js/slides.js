@@ -31,6 +31,11 @@
  *                            (Ratio = --slides-aspect des Themes.)
  *                            — nicht mehr in Verwendung (Kacheln und
  *                            Design-Vorschau nutzen echte Reveal-Instanzen).
+ * - fitSlides(slidesEl, W, H) / fitSlideSection / aicampusRefitSlideOf →
+ *                            Auto-Fit: Folienkörper (alles nach der ersten
+ *                            Überschrift) wird per --slides-body-scale auf
+ *                            die Folie herunterskaliert (Details: Kommentar
+ *                            im Hauptteil).
  * - buildSlideSection(slide, footerText, slidePos) → <section> für Reveal
  *                            (Inhalt + Sprechernotiz als <aside class="notes");
  *                            slidePos = { deckId, h } (Folien-Block-Index) →
@@ -350,12 +355,14 @@ async function renderSlideInto(slide, container, slidePos) {
   // Subfigure-Komplexe aus der slides-refmap).
   const md = slide.columns[0] || "";
   if (md) await renderMarkdown(md, container, { slideMode: true, slidePos: slidePos ? { ...slidePos, p: 0 } : null });
-  if (md && slide.layout === "default") {
-    // layout "default": Folienkörper (alles NACH der ersten Überschrift)
-    // im verbleibenden Folienraum vertikal zentrieren — dazu in einen
-    // Flex-Container hüllen (.aicampus-slide-body, s. slides.css). Ohne
-    // Überschrift bzw. ohne weiteren Inhalt bleibt es beim
-    // topleft-Verhalten (Inhalt von oben, nichts zu zentrieren).
+  if (md && slide.layout !== "center") {
+    // Folienkörper (alles NACH der ersten Überschrift) in einen
+    // Flex-Container hüllen (.aicampus-slide-body, s. slides.css):
+    // layout "default" zentriert ihn im verbleibenden Folienraum, und der
+    // Auto-Fit (fitSlideSection unten) skaliert ihn per --slides-body-scale
+    // auf die Folie. layout "center" bleibt ausgenommen (kurze Titelfolien).
+    // Ohne Überschrift bzw. ohne weiteren Inhalt bleibt es beim
+    // topleft-Verhalten (Inhalt von oben, nichts zu zentrieren/skalieren).
     const mp = container.querySelector(".markdown-preview");
     const first = mp && mp.children[0];
     if (mp && first && /^H[1-6]$/.test(first.tagName) && mp.children.length > 1) {
@@ -365,6 +372,146 @@ async function renderSlideInto(slide, container, slidePos) {
       mp.appendChild(body);
     }
   }
+}
+
+/* ─── Auto-Fit: Folienkörper (alles nach der ersten Überschrift) skaliert
+ *  automatisch auf die Folie — der Titel bleibt in voller Größe.
+ *
+ *  Skalierung über die Body-Fontsize (--slides-body-scale): Alle Typografie
+ *  und Medien-Caps im Körper sind em-basiert → skalieren mit, und die
+ *  Layout-Höhe schrumpft WIRKLICH (transform: scale() würde sie nicht
+ *  ändern → Reveal's setupPDF blätterte die Folie auf mehrere PDF-Seiten).
+ *
+ *  Die Skala wird NICHT einmalig aus der Scale-1-Messung berechnet — das
+ *  Skalieren ändert Zeilenumbrüche (Stufenfunktion, nicht linear).
+ *  Stattdessen multiplikatives Herunterskalieren, bis die gemessene
+ *  Inhaltshöhe passt: die angelegte Skala wurde immer tatsächlich gemessen
+ *  als passend (oder MIN-Clamp als Letztausgang → Fallback: On-Screen
+ *  safe-center, PDF fließt über, s. slides.css).
+ *
+ *  Der ganze Loop ist synchrones DOM (Inline-Style + scrollHeight-Read =
+ *  gezwungenes Layout) → der Browser malt erst nach dem JS-Task: Der
+ *  Nutzer sieht nur den finalen, gefitteten Zustand (kein Settle/Pop).
+ *  Nicht-aktive Folien sind display:none (Reveal) → unmaßbar an Ort und
+ *  Stelle: Die Messung läuft in einer temporären Offscreen-Box am selben
+ *  Element (visibility:hidden behält das Layout → messbar, wird nicht
+ *  gemalt; die !important-Inline-Styles schlagen Reveal's CSS).
+ */
+// Dichte Folien (großes Applet + mehrzeiliger Titel + viele Formeln)
+// brauchen deutlich kleinere Skalen, um überhaupt zu passen — Letztausgang,
+// bevor der Inhalt über die Folie ragt.
+const SLIDE_FIT_MIN = 0.45;
+const SLIDE_FIT_MAX_ITER = 4;
+
+function _slideFitAvailable(section, title) {
+  const cs = getComputedStyle(section);
+  let avail = section.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  if (title) {
+    const tcs = getComputedStyle(title);
+    avail -= title.offsetHeight + parseFloat(tcs.marginTop) + parseFloat(tcs.marginBottom);
+  }
+  return avail;
+}
+
+/** Auto-Fit für EINE Folie: --slides-body-scale so setzen, dass der
+ *  Folienkörper (inkl. aller versteckter Fragments — die bleiben im
+ *  Layout) in den Folienraum unterhalb des Titels passt. Synchron. */
+function fitSlideSection(section, W, H) {
+  const mp = section.querySelector(":scope > .markdown-preview");
+  const body = mp && mp.querySelector(":scope > .aicampus-slide-body");
+  if (!body) {
+    section.style.removeProperty("--slides-body-scale");
+    return;
+  }
+  const title = mp.children[0];
+  const prevStyle = section.getAttribute("style");
+  // Refit einer bereits layouteten Folie (sichtbar oder im viewDistance):
+  // AM ORT messen — die Folie hat dort exakt W×H (height:100% des
+  // Reveal-Canvases). Die Offscreen-Box würde die Folie kurz ausblenden/
+  // verschieben und Applets flackern (Visibility-/Relayout → neue
+  // Höhen-Message → neuer Refit → …). Der initiale Fit (display:none)
+  // braucht die Offscreen-Box weiterhin.
+  const cs0 = getComputedStyle(section);
+  const inPlace = cs0.display !== "none" &&
+    Math.abs(section.clientHeight - H) <= 1 &&
+    Math.abs(section.clientWidth - W) <= 1;
+  const setImp = (p, v) => section.style.setProperty(p, v, "important");
+  if (!inPlace) {
+    setImp("display", "block");
+    setImp("visibility", "hidden");
+    setImp("position", "fixed");
+    section.style.setProperty("left", "-99999px");
+    section.style.setProperty("top", "0");
+    setImp("width", W + "px");
+    setImp("height", H + "px");
+  }
+  const avail = _slideFitAvailable(section, title);
+  let best = null;
+  let s = 1;
+  try {
+    for (let i = 0; i < SLIDE_FIT_MAX_ITER; i++) {
+      section.style.setProperty("--slides-body-scale", String(s));
+      const h = body.scrollHeight; // +0.5px Toleranz: Subpixel-Rundung
+      if (h <= avail + 0.5) { best = s; break; }
+      s = Math.max(SLIDE_FIT_MIN, (s * avail) / h);
+    }
+  } finally {
+    if (prevStyle !== null) section.setAttribute("style", prevStyle);
+    else section.removeAttribute("style");
+  }
+  // Style-Write nur bei geänderter Skala (sonst: Reflow → Applet-Relayout
+  // → neue Höhen-Message → Refit-Schleife).
+  const final = String(best !== null ? best : SLIDE_FIT_MIN);
+  if (section.style.getPropertyValue("--slides-body-scale") !== final) {
+    section.style.setProperty("--slides-body-scale", final);
+  }
+}
+
+/** Auto-Fit für ALLE (Blatt-)Folien eines .slides-Containers — vor
+ *  reveal.initialize() aufrufen (s. o.). W/H = logische Folien-Größe
+ *  (960 × 960/Ratio), unabhängig von der Viewport-Größe. */
+function fitSlides(slidesEl, W, H) {
+  slidesEl.dataset.slideFitW = String(W);
+  slidesEl.dataset.slideFitH = String(H);
+  slidesEl.querySelectorAll("section").forEach((s) => {
+    if (s.querySelector(":scope > section")) return; // Stack-Eltern: kein eigener Körper
+    fitSlideSection(s, W, H);
+  });
+}
+
+/** Folie, die `el` enthält, neu fiten — für asynchrone Höhenänderungen
+ *  nach dem initialen Fit (Image-Load, Applet-Höhen-Message). W/H kommen
+ *  aus dem dataset von fitSlides. */
+function aicampusRefitSlideOf(el) {
+  const section = el && el.closest ? el.closest("section") : null;
+  const slidesEl = section ? section.closest(".slides") : null;
+  if (!section || !slidesEl) return;
+  if (section.querySelector(":scope > section")) return;
+  const W = parseFloat(slidesEl.dataset.slideFitW);
+  const H = parseFloat(slidesEl.dataset.slideFitH);
+  if (!isFinite(W) || !isFinite(H)) return;
+  fitSlideSection(section, W, H);
+}
+
+// Image-Load: die Bildhöhe ist erst nach dem Laden bekannt → Folie neu
+// fiten. "load" bubblert nicht → Capture-Phase am document.
+document.addEventListener("load", (e) => {
+  if (e.target instanceof HTMLImageElement) aicampusRefitSlideOf(e.target);
+}, true);
+
+// Fonts: der initiale Fit läuft VOR dem KaTeX-Webfont-Load (die Fonts werden
+// erst durch das Formel-Rendering angefordert) — font-swap ändert die
+// Formel-Höhen (paar px) → ohne Refit passen dichte Folien danach nicht.
+// "loadingdone" feuert nach JEDEM Font-Load-Batch (fonts.ready wäre ein
+// One-Shot, der vor dem KaTeX-Rendering schon gefeuert haben kann).
+if (document.fonts && document.fonts.addEventListener) {
+  document.fonts.addEventListener("loadingdone", () => {
+    document.querySelectorAll(".slides[data-slide-fit-w]").forEach((slidesEl) => {
+      const W = parseFloat(slidesEl.dataset.slideFitW);
+      const H = parseFloat(slidesEl.dataset.slideFitH);
+      if (isFinite(W) && isFinite(H)) fitSlides(slidesEl, W, H);
+    });
+  });
 }
 
 /* Seitenverhältnis (Breite/Höhe) aus dem Theme — kommt als CSS-Variable
