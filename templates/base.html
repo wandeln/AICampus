@@ -664,29 +664,27 @@
   <div id="dm-panel" class="dm-panel hidden" data-user-id="{{ current_user.id }}">
     {# Resize-Handle (nur im angehefteten Modus sichtbar, CSS .dm-pinned) #}
     <div id="dm-resize" title="Ziehen zum Größen ändern"></div>
+    {# Pin/Pin-Button: oben rechts in der Ecke des Panels (alle Ansichten,
+       nur Desktop) — Farbzustand + Icon setzt dm-panel.js #}
+    <button type="button" id="dm-pin-btn" onclick="dmTogglePin()"
+            class="p-1.5 rounded-lg transition"
+            title="Anheften: Fenster bleibt unten rechts auch beim Seitenwechsel offen">
+      <svg class="w-4 h-4 dm-pin-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+      <svg class="w-4 h-4 dm-unpin-ico hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/><path d="M4 4l16 16"/></svg>
+    </button>
     <div class="flex h-full w-full overflow-hidden bg-white text-gray-800">
 
       <!-- Links: Chat-Liste -->
       <aside id="dm-list-pane" class="w-full sm:w-72 sm:border-r border-gray-200 flex flex-col bg-white shrink-0">
         {# h-14: exakt so hoch wie der Chat-Verlauf-Header, damit die beiden
            oberen Leisten bündig aussehen. #}
-        <div class="flex items-center justify-between gap-2 px-3 h-14 border-b border-gray-200">
+        <div class="dm-list-header flex items-center justify-between gap-2 px-3 h-14 border-b border-gray-200">
           <span class="font-semibold text-gray-800 truncate">Nachrichten</span>
           <span class="flex items-center gap-1 shrink-0">
-            {# Stecknadel (nur Desktop): heftet das Panel unten rechts an,
-               es bleibt beim Seitenwechsel offen (Zustand in localStorage). #}
-            {# Farbzustand (blau = Pin, rot = Pin-off) setzt dm-panel.js #}
-            <button type="button" id="dm-pin-btn" onclick="dmTogglePin()"
-                    class="hidden sm:block p-1.5 rounded-lg transition"
-                    title="Anheften: Fenster bleibt unten rechts auch beim Seitenwechsel offen">
-              {# Pin / Pin-off (durchgestrichen) wird per Class getauscht (dm-panel.js) #}
-              <svg class="w-4 h-4 dm-pin-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
-              <svg class="w-4 h-4 dm-unpin-ico hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/><path d="M4 4l16 16"/></svg>
-            </button>
             <button type="button" onclick="dmOpenNewChat('create')"
                     class="text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg px-2.5 py-1.5 transition"
                     title="Neuen Chat starten">+ Neuer Chat</button>
-            <button type="button" onclick="dmClosePanel()" class="sm:hidden text-gray-400 hover:text-gray-600 p-1" title="Schließen">
+            <button type="button" onclick="dmClosePanel()" class="sm:hidden ml-2 text-gray-400 hover:text-gray-600 p-1" title="Schließen">
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </span>
@@ -697,8 +695,9 @@
       <!-- Rechts: Chatverlauf -->
       <main id="dm-chat-pane" class="hidden sm:flex flex-1 flex-col min-w-0 bg-gray-50">
         {# h-14: exakt so hoch wie der Chat-Listen-Header, damit die beiden
-           oberen Leisten bündig aussehen. #}
-        <div class="relative flex items-center gap-2.5 px-3 sm:px-4 h-14 border-b border-gray-200 bg-white">
+           oberen Leisten bündig aussehen. pr-12: rechter Rand frei für den
+           Pin-Button in der Panel-Ecke. #}
+        <div class="relative flex items-center gap-2.5 pl-3 sm:pl-4 pr-12 h-14 border-b border-gray-200 bg-white">
           <button type="button" id="dm-back-btn" onclick="dmBackToList()" class="sm:hidden text-gray-400 hover:text-gray-600 p-1" title="Zurück">
             <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
           </button>

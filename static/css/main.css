@@ -862,8 +862,20 @@
   border-radius: 0.75rem;
   /* Clipped: die innere weiße Fläche hätte sonst scharfe Ecken, die die
      abgerundete Kontur überdecken. */
-  overflow: hidden;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+   overflow: hidden;
+   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+}
+/* Pin-Button: immer oben rechts in der Ecke des Panels (alle Ansichten).
+   Nur Desktop (wie die Anheft-Funktion selbst). */
+#dm-pin-btn {
+  position: absolute;
+  /* vertikal in der 56px (h-14) Top-Bar zentriert: (56 - 28) / 2 */
+  top: 14px;
+  right: 12px;
+  z-index: 45;
+}
+@media (max-width: 639.98px) {
+  #dm-pin-btn { display: none; }
 }
 /* Angehefteter Modus (Stecknadel-Button, nur Desktop): fix an die
    rechte untere Ecke, nur die linke obere Ecke gerundet. Breite/Höhe
@@ -890,6 +902,12 @@
 .dm-panel.dm-pinned.narrow:not(.mobile-viewing) #dm-list-pane {
   width: 100%;
   border-right: none;
+}
+/* In der schmalen Listen-Ansicht steht der Pin-Button über dem Listen-
+   Header → Ecke wieder frei lassen. In der Weit-Ansicht steht er über dem
+   Verlauf, da bleibt der Header symmetrisch (px-3). */
+.dm-panel.dm-pinned.narrow:not(.mobile-viewing) .dm-list-header {
+  padding-right: 3rem;
 }
 #dm-resize {
   display: none;

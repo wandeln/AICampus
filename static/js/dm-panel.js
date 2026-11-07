@@ -358,11 +358,19 @@
   function dmMessageEl(m) {
     const el = document.createElement("div");
     el.className = "dm-message flex gap-3 group";
+    // Avatar/Name → Profil (wie im Forum). "unknown" = gelöschter Nutzer.
+    const profile = m.username && m.username !== "unknown" ? `/u/${m.username}` : null;
+    const avatar = profile
+      ? `<a href="${profile}" title="Profil von ${escHtml(m.name)}" class="block shrink-0 mt-0.5 hover:opacity-80 transition">${dmAvatarHtml(m, "w-9 h-9 rounded-full")}</a>`
+      : dmAvatarHtml(m, "w-9 h-9 rounded-full shrink-0 mt-0.5");
+    const name = profile
+      ? `<a href="${profile}" class="text-sm font-semibold text-gray-800 shrink-0 hover:opacity-80 transition" title="Profil von ${escHtml(m.name)}">${escHtml(m.name)}${m.is_self ? ' <span class="text-gray-400 font-normal">(Du)</span>' : ""}</a>`
+      : `<span class="text-sm font-semibold text-gray-800">${escHtml(m.name)}${m.is_self ? ' <span class="text-gray-400 font-normal">(Du)</span>' : ""}</span>`;
     el.innerHTML = `
-      ${dmAvatarHtml(m, "w-9 h-9 rounded-full shrink-0 mt-0.5")}
+      ${avatar}
       <span class="flex-1 min-w-0">
         <span class="flex items-center gap-2 flex-wrap">
-          <span class="text-sm font-semibold text-gray-800">${escHtml(m.name)}${m.is_self ? ' <span class="text-gray-400 font-normal">(Du)</span>' : ""}</span>
+          ${name}
           <span class="text-xs text-gray-400">${new Date(m.created_at).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
         </span>
         <span class="dm-content block text-sm text-gray-700 break-words mt-0.5"></span>
