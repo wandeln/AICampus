@@ -180,8 +180,9 @@
    Figure würde nicht gedehnt, sondern mit ihrer Inhaltsbreite zentriert
    → Applet/Bild sieht schmal aus. Explizite volle Breite → die Auto-
    Margen lösen auf 0 auf, das Medium (width:100% bei Applets) füllt.
-   (Code-/Tabellen-Figuren haben „margin: 1.25rem 0“ → nicht betroffen.) */
-:is(.reveal .slides > section.layout-default, .reveal .slides section.slides-stack > section.layout-default, .slides-canvas.layout-default, html.print-pdf .reveal .slides .pdf-page > section.layout-default) .aicampus-slide-body > .aicampus-figure {
+    (Code-/Tabellen-Figuren haben „margin: 1.25rem 0“ → nicht betroffen.)
+    Layout-unabhängig: der Body ist in ALLEN Layouts Flex-Container. */
+:is(.reveal .slides > section, .reveal .slides section.slides-stack > section, .slides-canvas, html.print-pdf .reveal .slides .pdf-page > section) .aicampus-slide-body > .aicampus-figure {
   width: 100%;
 }
 

@@ -355,14 +355,15 @@ async function renderSlideInto(slide, container, slidePos) {
   // Subfigure-Komplexe aus der slides-refmap).
   const md = slide.columns[0] || "";
   if (md) await renderMarkdown(md, container, { slideMode: true, slidePos: slidePos ? { ...slidePos, p: 0 } : null });
-  if (md && slide.layout !== "center") {
+  if (md) {
     // Folienkörper (alles NACH der ersten Überschrift) in einen
     // Flex-Container hüllen (.aicampus-slide-body, s. slides.css):
     // layout "default" zentriert ihn im verbleibenden Folienraum, und der
     // Auto-Fit (fitSlideSection unten) skaliert ihn per --slides-body-scale
-    // auf die Folie. layout "center" bleibt ausgenommen (kurze Titelfolien).
-    // Ohne Überschrift bzw. ohne weiteren Inhalt bleibt es beim
-    // topleft-Verhalten (Inhalt von oben, nichts zu zentrieren/skalieren).
+    // auf die Folie — für ALLE Layouts (center bleibt zentriert, der
+    // zentrierte Block wird nur ggf. kleiner). Ohne Überschrift bzw. ohne
+    // weiteren Inhalt bleibt es beim topleft-Verhalten (Inhalt von oben,
+    // nichts zu zentrieren/skalieren).
     const mp = container.querySelector(".markdown-preview");
     const first = mp && mp.children[0];
     if (mp && first && /^H[1-6]$/.test(first.tagName) && mp.children.length > 1) {
