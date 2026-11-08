@@ -96,6 +96,7 @@ def base_ctx(task, is_tutor, tpl_type):
         "prev_task": None,
         "next_task": {"id": 99, "title": "Nächste"},
         "LLM_TIMEOUT": 120,
+        "grading_poll_timeout": 360,
         "preview_base": "",
         "preview_base_domain": None,
     }

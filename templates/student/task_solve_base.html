@@ -847,11 +847,15 @@
     {% endif %}
 
   const LLM_TIMEOUT = {{ LLM_TIMEOUT | default(120) }};
+  // Maximaler Grading-Rahmen, serverseitig aus derselben LLM_TIMEOUT
+  // berechnet (+ Workspace-Testlauf + Puffer): Polling und Progress-Bar
+  // decken damit exakt die serverseitige Worst-Case-Dauer ab.
+  const GRADING_TIMEOUT = {{ grading_poll_timeout | default(LLM_TIMEOUT + 60) }};
 
   // Berechnet Progress-Bar-Prozent basierend auf verstrichener Zeit.
-  // Beginnt schneller (erste 10s => 15%), dann verlangsamt sich bis 95% bei Timeout.
+  // Beginnt schneller (erste 10s => 15%), dann verlangsamt sich bis 95% am Ende.
   function llmProgressPct(elapsed) {
-    const t = LLM_TIMEOUT || 120;
+    const t = GRADING_TIMEOUT || 360;
     if (elapsed <= 0) return 5;
     const f = elapsed / t;
     return Math.min(Math.round(79 * Math.pow(f, 0.5) + 16 * f), 95);
@@ -1295,7 +1299,12 @@
       setSubmitBtnGradingMode(true);
 
       // ── Step 2: Poll for results ──
-      const maxPollTime = 120; // Sekunden (Timeout)
+      // Polling-Limit = serverseitiger Maximal-Grading-Rahmen (gleiche
+      // LLM_TIMEOUT-Basis wie das Backend, s. GRADING_TIMEOUT). Erst wenn
+      // der Rahmen verstrichen ist, kann der Grading-Job als tot gelten
+      // (z. B. Server-Neustart) — früher aufzugeben würde neben dem noch
+      // laufenden Job eine parallele Nachreichung erlauben.
+      const maxPollTime = GRADING_TIMEOUT; // Sekunden
       const pollInterval = 2;  // Sekunden
 
       while (elapsed < maxPollTime && !(gradingState && gradingState.cancelRequested)) {

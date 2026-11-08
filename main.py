@@ -62,6 +62,7 @@ from database.models import (
     Submission,
 )
 from services.auth_service import get_current_user, hash_password, require_course_access
+from services.grading_service import max_grading_seconds
 from services import analytics, media_service, import_service, preview_proxy, timeutil, notifications
 from services.media_service import sync_media_usages
 from services.mc_service import (
@@ -2572,6 +2573,10 @@ async def task_page(
             "preview_base_domain": PREVIEW_BASE_DOMAIN or None,
 
             "LLM_TIMEOUT": LLM_TIMEOUT,
+            # Maximaler Grading-Rahmen (LLM_TIMEOUT + ggf. Workspace-Testlauf):
+            # Frontend-Polling gibt erst danach auf — gleiche Zeitbasis wie
+            # der serverseitige Grading-Timeout (keine 120s-vs-300s-Lücke).
+            "grading_poll_timeout": max_grading_seconds(task),
             "prev_task": {"id": prev_task.id, "title": prev_task.title} if prev_task else None,
             "next_task": {"id": next_task.id, "title": next_task.title} if next_task else None,
         },

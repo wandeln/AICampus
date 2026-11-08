@@ -16,12 +16,29 @@ from datetime import datetime
 from typing import Optional
 from sqlmodel import Session, select
 
+from config import LLM_TIMEOUT
 from services.settings_resolver import get_effective_llm_config
 from database.models import (
     Task, Submission, Feedback, FeedbackSource,
     SubmissionStatus, WorkspaceRun, WorkspaceRunStatus,
 )
 from services.llm_service import LLMService
+
+
+def max_grading_seconds(task: Task, llm_timeout: Optional[int] = None) -> int:
+    """Maximaler Zeitrahmen (Sekunden) für ein LLM-Grading — deckt den
+    serverseitigen Worst-Case ab, damit das Frontend-Polling erst danach
+    aufgibt (früheres Aufgeben erlaubte Nachreichungen neben dem noch
+    laufenden Grading-Job → parallele LLM-Calls → Pileup/Timeouts).
+
+    Text/Upload: LLM-Call mit Deadline LLM_TIMEOUT.
+    Workspace: zusätzlich Testlauf (max. 2 Skripte à workspace_timeout).
+    + 60 s Puffer (Workspace-Setup, DB, Retry-Pausen).
+    """
+    total = llm_timeout if llm_timeout is not None else LLM_TIMEOUT
+    if task.task_type.value == "workspace":
+        total += 2 * (int(task.workspace_timeout or 900))
+    return total + 60
 
 
 class GradingError(RuntimeError):
