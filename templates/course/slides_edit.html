@@ -167,6 +167,17 @@
             <div class="reveal{% if slides_theme.template %} theme-{{ slides_theme.template }}{% endif %}{% if slides_has_logo %} slides-has-logo slides-logo-{{ slides_theme.logo_position }}{% endif %}"
                  id="slide-preview-reveal">
               <div class="slides" id="slide-preview-slides"></div>
+              {# Overview-Button (unten links, spiegelbildlich zu Reveal's
+                 < > Controls unten rechts). Als Kind von .reveal und AUSSERHALB
+                 von .slides → Reveal's Klick-Navigation greift nicht (s. CSS). #}
+              <button type="button" class="slides-overview-btn" title="Folien-Übersicht (Overview) umschalten" aria-label="Folien-Übersicht umschalten">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+                  <rect x="1" y="1" width="6" height="6" rx="1.2"></rect>
+                  <rect x="9" y="1" width="6" height="6" rx="1.2"></rect>
+                  <rect x="1" y="9" width="6" height="6" rx="1.2"></rect>
+                  <rect x="9" y="9" width="6" height="6" rx="1.2"></rect>
+                </svg>
+              </button>
             </div>
             <div id="slide-preview-empty"
                  class="hidden absolute inset-0 flex items-center justify-center p-6 text-center text-gray-400 text-sm leading-relaxed">
@@ -527,6 +538,62 @@
   // Debug-Hook (Web-Konsole): aktuelle Preview-Instanz für Fehleranalyse
   // (getIndices(), getSlides(), getCurrentSlide()) — s. AGENTS.md Debugging.
   window.__aicampusPreviewReveal = null;
+  // Overview-Button in der Preview: liest die aktuelle Instanz zur Klickzeit
+  // → überlebt die Re-Render-Remounts. blur(): ein fokussierter Button würde
+  // sonst Space (Fragment/Weiter) doppel auslösen — Reveal's Keydown-Filter
+  // schließt Buttons nicht aus.
+  document.querySelector("#slide-preview-reveal .slides-overview-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    e.currentTarget.blur();
+    if (window.__aicampusPreviewReveal) window.__aicampusPreviewReveal.toggleOverview();
+  });
+
+  // Tastatur für die Preview: Die Preview läuft mit keyboard:false (darf
+  // die globalen Tasten für den Markdown-Editor nicht abgreifen) → eigener
+  // Handler. "inEditor" = Fokus in einem editierbaren Element (CodeMirror =
+  // contenteditable): dort müssen Buchstaben/Leerzeichen/Zeilenumbrüche
+  // immer ins Dokument. In der Overview ist das "markierte" Slide das
+  // aktuelle:
+  //  - O öffnet/schließt die Overview (analog Präsentationsmodus), nur
+  //    außerhalb des Editors.
+  //  - Pfeile verschieben das markierte Slide IMMER (auch bei Editor-Fokus):
+  //    Die Slide-Synchronisation kann den Editor fokussieren, und eine
+  //    neutrale Klickfläche zur "Preview-Fokussierung" gibt es nicht (Klick
+  //    auf Slide = navigieren) → ohne Regel müsste man umständlich
+  //    umfokussieren. preventDefault bewegt den Text-Cursor nicht mit.
+  //  - Space/Enter gehen in das markierte Slide (slidechanged → Editor-Jump
+  //    wie gewohnt) — nur außerhalb des Editors.
+  //  - Esc schließt auch aus dem Editor (dort ohnehin ohne Wirkung).
+  document.addEventListener("keydown", (e) => {
+    const inst = window.__aicampusPreviewReveal;
+    if (!inst) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    const inEditor = !!(t && (t.isContentEditable || /INPUT|TEXTAREA/i.test(t.tagName || "")));
+    if (inst.isOverview()) {
+      switch (e.key) {
+        case "ArrowLeft": inst.left(); e.preventDefault(); break;
+        case "ArrowRight": inst.right(); e.preventDefault(); break;
+        case "ArrowUp": inst.up(); e.preventDefault(); break;
+        case "ArrowDown": inst.down(); e.preventDefault(); break;
+        case " ": case "Enter":
+          if (inEditor) return;
+          inst.toggleOverview(); e.preventDefault(); break;
+        case "Escape":
+          inst.toggleOverview(); e.preventDefault(); break;
+        case "o":
+          // O = schalten (analog Präsentationsmodus). Mit Editor-Fokus
+          // wäre es ein Tipp-Buchstabe → dort stattdessen Esc.
+          if (inEditor) return;
+          inst.toggleOverview(); e.preventDefault(); break;
+      }
+      return;
+    }
+    if (e.key === "o" && !inEditor) {
+      inst.toggleOverview();
+      e.preventDefault();
+    }
+  });
   // Verworfen vom slidechanged-Listener: die Wiederherstellung der
   // vorherigen Folie nach einem Re-Render (unten in renderPreview) ist
   // keine bewusste Navigation und darf den Editor nicht springen lassen.

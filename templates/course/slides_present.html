@@ -43,6 +43,17 @@
   <div class="reveal{% if slides_theme.template %} theme-{{ slides_theme.template }}{% endif %}{% if slides_has_logo %} slides-has-logo slides-logo-{{ slides_theme.logo_position }}{% endif %}"
        id="reveal-root">
     <div class="slides" id="reveal-slides"></div>
+    {# Overview-Button (unten links, spiegelbildlich zu Reveal's < > Controls
+       unten rechts). Als Kind von .reveal und AUSSERHALB von .slides →
+       Reveal's Klick-Navigation greift nicht (s. CSS). #}
+    <button type="button" class="slides-overview-btn" title="Folien-Übersicht (Overview, Taste O) umschalten" aria-label="Folien-Übersicht umschalten">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+        <rect x="1" y="1" width="6" height="6" rx="1.2"></rect>
+        <rect x="9" y="1" width="6" height="6" rx="1.2"></rect>
+        <rect x="1" y="9" width="6" height="6" rx="1.2"></rect>
+        <rect x="9" y="9" width="6" height="6" rx="1.2"></rect>
+      </svg>
+    </button>
   </div>
   {# Shortcuts-Panel: erscheint in der Reveal-Overview (Esc) oben rechts
      unterhalb der dunklen Toolbar (Toggling + Aktionen: s. JS unten). #}
@@ -138,6 +149,16 @@ if (HAS_NOTES) {
 // Aktuelle Reveal-Instanz + Mount-Schutz (Initial-Load vs. Live-Remount)
 let aicampusCurrentReveal = null;
 let aicampusDeckMounting = false;
+
+// Overview-Button (unten links): liest die aktuelle Instanz zur Klickzeit →
+// überlebt Live-Remounts. blur(): ein fokussierter Button würde sonst Space
+// (Fragment/Weiter) doppel auslösen — Reveal's Keydown-Filter schließt
+// Buttons nicht aus (nur Input/ContentEditable/Speaker-Notes).
+document.querySelector("#reveal-root .slides-overview-btn")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  e.currentTarget.blur();
+  if (aicampusCurrentReveal) aicampusCurrentReveal.toggleOverview();
+});
 
 // Deck (neu) mounten: Inhalt laden → Sections → neue Reveal-Instanz.
 // isLive = Live-Remount via MCP: die Folie des Nutzers bleibt erhalten;
@@ -257,7 +278,29 @@ async function aicampusDoMount() {
     // F = Seiten-Vollbild (togglePageFullscreen) statt Reveal-Viewport:
     // nur so bleiben Toolbar + Shortcuts-Panel im Vollbild sichtbar.
     // (User-defined Bindings haben Vorrang vor Reveal's System-Bindings.)
-    keyboard: { 70: togglePageFullscreen },
+    keyboard: {
+      70: togglePageFullscreen,
+      // Space/Enter in der Overview: das markierte Slide öffnen und DORT
+      // bleiben. Natives Space würde deactivate() und danach NOCH next()
+      // aufrufen → ein Slide zu weit. Außerhalb der Overview exakt das
+      // native Space-Verhalten (Shift+Space = zurück). Enter war nativ
+      // ungebunden und wirkt nur in der Overview. (Reveal filtert Keydowns
+      // in Input/Speaker-Notes vor den Bindings selbst.)
+      32: (e) => {
+        if (aicampusCurrentReveal && aicampusCurrentReveal.isOverview()) {
+          aicampusCurrentReveal.toggleOverview();
+        } else if (e.shiftKey) {
+          aicampusCurrentReveal.prev({ skipFragments: e.altKey });
+        } else {
+          aicampusCurrentReveal.next({ skipFragments: e.altKey });
+        }
+      },
+      13: () => {
+        if (aicampusCurrentReveal && aicampusCurrentReveal.isOverview()) {
+          aicampusCurrentReveal.toggleOverview();
+        }
+      },
+    },
     // Chalkboard (nur Tutoren/Profs): Stift-Annotationen (C) + Whiteboard.
     // W statt B: B (66) ist Reveal's Build-in-Break/Blackout und bleibt so.
     // storage: sessionStorage-Schlüssel pro Deck → Zeichnungen überleben

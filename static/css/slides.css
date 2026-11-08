@@ -186,6 +186,49 @@
   width: 100%;
 }
 
+/* ─── Overview-Button (unten links, spiegelbildlich zu Reveal's
+   < > Controls unten rechts) ────────────────────────────────────
+   Überblick/Folien-Übersicht umschalten (toggleOverview) — in der
+   Präsentation (slides_present.html) und der Editor-Vorschau
+   (slides_edit.html). Der Button ist als Kind von .reveal und
+   AUSSERHALB von .slides platziert: Reveal's Klick-Navigation hängt
+   ihren Click-Listener an .slides (onSlidesClicked) → kein
+   "Previous"-Zone-Konflikt, stopPropagation ist nur Absicherung.
+   Schlicht wie die Arrows: transparent, schwarzes Gitter-Glyph,
+   dezent sichtbar, bei Hover voll. display:none im PDF (wie
+   Reveal's eigene Controls). */
+.reveal .slides-overview-btn {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 11; /* wie .controls */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #000;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.2s ease, background-color 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.reveal .slides-overview-btn:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.06);
+}
+.reveal .slides-overview-btn:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+html.print-pdf .reveal .slides-overview-btn {
+  display: none;
+}
+
 /* ─── Fußzeile & Logo ─────────────────────────────────────────── */
 
 /* Fußzeile am .slides-Canvas statt am Section: Reveal skaliert das
