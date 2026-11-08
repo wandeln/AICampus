@@ -384,11 +384,14 @@ async function renderSlideInto(slide, container, slidePos) {
  *  ändern → Reveal's setupPDF blätterte die Folie auf mehrere PDF-Seiten).
  *
  *  Die Skala wird NICHT einmalig aus der Scale-1-Messung berechnet — das
- *  Skalieren ändert Zeilenumbrüche (Stufenfunktion, nicht linear).
- *  Stattdessen multiplikatives Herunterskalieren, bis die gemessene
- *  Inhaltshöhe passt: die angelegte Skala wurde immer tatsächlich gemessen
- *  als passend (oder MIN-Clamp als Letztausgang → Fallback: On-Screen
- *  safe-center, PDF fließt über, s. slides.css).
+ *  Skalieren ändert Zeilenumbrüche (Stufenfunktion, SUPERlinear: kleinere
+ *  Schrift packt mehr Zeichen pro Zeile → weniger Zeilen → die Höhe fällt
+ *  schneller als linear). Lineare Korrektur (s·avail/h) würde deshalb
+ *  deutlich unter dem Optimum landen (Text unnötig klein). Stattdessen:
+ *  Grobsuche nach einer passenden Obergrenze (×0.8-Schritte), dann
+ *  Bisektion gegen die größte passende Skala. Die angelegte Skala wurde
+ *  immer tatsächlich gemessen als passend (oder MIN-Clamp als Letztausgang
+ *  → Fallback: On-Screen safe-center, PDF fließt über, s. slides.css).
  *
  *  Der ganze Loop ist synchrones DOM (Inline-Style + scrollHeight-Read =
  *  gezwungenes Layout) → der Browser malt erst nach dem JS-Task: Der
@@ -402,7 +405,10 @@ async function renderSlideInto(slide, container, slidePos) {
 // brauchen deutlich kleinere Skalen, um überhaupt zu passen — Letztausgang,
 // bevor der Inhalt über die Folie ragt.
 const SLIDE_FIT_MIN = 0.45;
-const SLIDE_FIT_MAX_ITER = 4;
+// Bisektions-Schritte zwischen „zu groß" und „passt" (~1% Skala-Genauigkeit).
+// Rechenleistung vernachlässigbar: jeder Schritt = 1 gezwungenes Layout einer
+// 960×540-Box, der ganze Loop ist synchron (kein Paint dazwischen).
+const SLIDE_FIT_BISECT = 6;
 
 function _slideFitAvailable(section, title) {
   const cs = getComputedStyle(section);
@@ -457,11 +463,37 @@ function fitSlideSection(section, W, H) {
   const flexSave = body.style.flex;
   body.style.flex = "0 0 auto";
   try {
-    for (let i = 0; i < SLIDE_FIT_MAX_ITER; i++) {
-      section.style.setProperty("--slides-body-scale", String(s));
-      const h = body.scrollHeight; // +0.5px Toleranz: Subpixel-Rundung
-      if (h <= avail + 0.5) { best = s; break; }
-      s = Math.max(SLIDE_FIT_MIN, (s * avail) / h);
+    const fits = (sc) => {
+      section.style.setProperty("--slides-body-scale", String(sc));
+      return body.scrollHeight <= avail + 0.5; // +0.5px: Subpixel-Rundung
+    };
+    if (fits(1)) {
+      best = 1;
+    } else {
+      // 1 passt nicht. Grobsuche nach einer passenden Obergrenze (×0.8-
+      // Schritte; lo = größt bekannte zu-große Skala). Kein lineares
+      // s·avail/h: die Zeilen-Umbruch-Neupackung macht die Höhe
+      // SUPERLINEAR in der Skala → die lineare Korrektur landete deutlich
+      // unter dem Optimum (Text wurde unnötig klein).
+      let lo = 1;
+      let hi = null;
+      while (lo > SLIDE_FIT_MIN) {
+        const sc = Math.max(SLIDE_FIT_MIN, lo * 0.8);
+        if (fits(sc)) { hi = sc; break; }
+        lo = sc;
+      }
+      if (hi !== null) {
+        // Bisektion: die Höhe ist monoton steigend in der Skala (kleiner →
+        // kleiner) → „passt" ist ein monotones Prädikat → konvergiert gegen
+        // die größte passende Skala (lo > hi immer, dazwischen liegt der
+        // Umbruch).
+        for (let i = 0; i < SLIDE_FIT_BISECT && lo - hi > 0.002; i++) {
+          const mid = (lo + hi) / 2;
+          if (fits(mid)) hi = mid; else lo = mid;
+        }
+        best = hi;
+      }
+      s = SLIDE_FIT_MIN; // auch MIN zu groß → Letztausgang MIN
     }
   } finally {
     body.style.flex = flexSave;
@@ -470,9 +502,6 @@ function fitSlideSection(section, W, H) {
   }
   // Style-Write nur bei geänderter Skala (sonst: Reflow → Applet-Relayout
   // → neue Höhen-Message → Refit-Schleife).
-  // Fallback ohne passende Iteration: letzte (gemessene) Skala, nicht
-  // MIN — ein Rundraum-Überlauf von 1px darf die Folie nicht auf MIN
-  // werfen; MIN bleibt nur wirksam, wenn der Inhalt wirklich nicht passt.
   const final = String(best !== null ? best : s);
   if (section.style.getPropertyValue("--slides-body-scale") !== final) {
     section.style.setProperty("--slides-body-scale", final);
