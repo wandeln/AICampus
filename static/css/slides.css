@@ -337,15 +337,34 @@ html.print-pdf .reveal.slides-logo-bottom-left .slides .pdf-page > section::befo
 /* ─── Folien-Hintergrund (Richtlinie background: ![Titel](…)) ─────
    Präsentation/Vorschau: Reveal's natives Hintergrund-System
    (data-background-image / data-background-iframe) → deckt den ganzen
-   Viewport ab, auch die Letterbox. .html-Applets sind per
-   data-background-interactive klickbar (Reveal blendet dafür die
-   Pointer-Interaktion mit dem Folieninhalt auf dieser Folie aus).
-   ?print-pdf: Reveal's Bg-System ist im Druck ausgeblendet → dort liegt
-   das Bg als Element in der Folie (pro PDF-Seite, object-fit: cover;
-   .html = interaktives Applet, damit vor dem Druck Einstellungen
-   angepasst werden können). Absolute Position → nicht Flex-Item der
-   Zentrierung (layout: center). */
-html.print-pdf .reveal .slides .pdf-page > section.slides-has-bg > .aicampus-slide-bg {
+    Viewport ab, auch die Letterbox. .html-Applets sind per
+    data-background-interactive klickbar (Reveal blendet dafür die
+    Pointer-Interaktion mit dem Folieninhalt auf dieser Folie aus).
+    ?print-pdf: Reveal's Bg-System ist im Druck ausgeblendet → dort liegt
+    das Bg als Element in der Folie (pro PDF-Seite, object-fit: cover;
+    .html = interaktives Applet, damit vor dem Druck Einstellungen
+    angepasst werden können). Absolute Position → nicht Flex-Item der
+    Zentrierung (layout: center).
+    VOR setupPDFs .pdf-page-Wrap liegt die Section noch direkt in .slides
+    (Selector unten matcht dort nicht): Das Bg MUSS dort unsichtbar sein —
+    in-flow ODER als abs-Element mit Größe bläht es die gemessene
+    Section-Height auf (abs-Elemente zählen ins scrollable Overflow des
+    containing Blocks → scrollHeight) → Reveal misst "2 Seiten" pro
+    Bg-Folie → fixPdfLayout springt ab → Folie + Bg bleiben auf
+    Inhaltshöhe ("flach" im PDF). width/height:0 + overflow:hidden
+    (Clip-Wrapper: zoomtes Applet-Bg mit Inline-Größe einkapseln).
+    Diese Regel greift NUR in der Vor-Phase (nach dem Wrap gewinnt die
+    Regel darunter mit höherer Spezifität — die auch gegen die Logo-Regel
+    gewinnt). */
+ html.print-pdf .reveal .slides section.slides-has-bg > :is(.aicampus-slide-bg, .aicampus-slide-bg-clip) {
+   position: absolute;
+   width: 0;
+   height: 0;
+   overflow: hidden;
+ }
+
+/* Bg-Geometrie nach dem Wrap: */
+ html.print-pdf .reveal .slides .pdf-page > section.slides-has-bg > .aicampus-slide-bg {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -359,7 +378,7 @@ html.print-pdf .reveal .slides .pdf-page > section.slides-has-bg > .aicampus-sli
    Sections sind im print-pdf-Mode overflow:visible → bei z<1 (Box größer
    als die Folie) in einem foliengroßen Clip-Wrapper abschneiden, sonst
    würde das Bg in die Nachbar-PDF-Seiten bluten. */
-html.print-pdf .reveal .slides .pdf-page > section.slides-has-bg > .aicampus-slide-bg-clip {
+ html.print-pdf .reveal .slides .pdf-page > section.slides-has-bg > .aicampus-slide-bg-clip {
   position: absolute;
   inset: 0;
   overflow: hidden;
@@ -368,7 +387,7 @@ html.print-pdf .reveal .slides .pdf-page > section.slides-has-bg > .aicampus-sli
 
 /* Bg im Clip-Wrapper: relativ zum (foliengroßen) Wrapper positioniert —
    die Inline-Styles (calc(100%/z) + transform) bleiben wirksam. */
-html.print-pdf .reveal .slides .pdf-page > section.slides-has-bg > .aicampus-slide-bg-clip > .aicampus-slide-bg {
+ html.print-pdf .reveal .slides .pdf-page > section.slides-has-bg > .aicampus-slide-bg-clip > .aicampus-slide-bg {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -378,7 +397,7 @@ html.print-pdf .reveal .slides .pdf-page > section.slides-has-bg > .aicampus-sli
 
 /* Folieninhalt über dem Hintergrund (ein positioniertes Element würde
    sonst in-flow-Content übermalen). */
-html.print-pdf .reveal .slides .pdf-page > section.slides-has-bg > *:not(.aicampus-slide-bg):not(.aicampus-slide-bg-clip) {
+ html.print-pdf .reveal .slides .pdf-page > section.slides-has-bg > *:not(.aicampus-slide-bg):not(.aicampus-slide-bg-clip) {
   position: relative;
   z-index: 1;
 }

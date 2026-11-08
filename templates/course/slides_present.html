@@ -267,6 +267,11 @@ async function aicampusDoMount() {
     slideNumber: true,
     width: SLIDE_W,
     height: SLIDE_H,
+    // ?print-pdf: KEIN Seitenrand — Folie + Bg füllen die Druckseite
+    // randlos aus. Mit dem Default (4%) bliebe ein weißer Rahmen um jede
+    // Seite, und die Seitenzahl (am Seitenrand, 15px) läge AUSSERHALB des
+    // Folien-Hintergrundbilds. On-Screen gilt der Default (Letterbox).
+    margin: /print-pdf/.test(window.location.search) ? 0 : 0.04,
     // Gezoomte Applets ({zoom=X}) überspringt das Auto-Animate — der
     // Inline-Transform bleibt erhalten (s. aicampusAutoAnimateMatcher).
     autoAnimateMatcher: aicampusAutoAnimateMatcher,
