@@ -1992,6 +1992,14 @@
     const bodyContent = cached
       ? llmDebugBodyHTML(cached)
       : '<div class="text-xs text-gray-400">Inhalt (Prompts, Antwort, …) wird beim Aufklappen geladen.</div>';
+    // Fehlgeschlagener Call, der trotzdem Output (z. B. partiell vor Timeout) geloggt hat
+    let outputChip = '';
+    if (!e.success && (e.response_chars || e.thinking_chars)) {
+      const bits = [];
+      if (e.response_chars) bits.push(e.response_chars + ' Z. Antwort');
+      if (e.thinking_chars) bits.push(e.thinking_chars + ' Z. Thinking');
+      outputChip = '<span class="text-xs text-amber-600 font-medium" title="Vor dem Fehler geloggte Ausgabe — im Detail anzeigen">⚡ ' + bits.join(' · ') + '</span>';
+    }
 
     return '<div class="border rounded-lg bg-white overflow-clip">'
       + '<details data-entry-id="' + e.id + '">'
@@ -2000,6 +2008,7 @@
       + (e.user ? '<span class="text-xs text-gray-500">👤 ' + llmDebugEsc(e.user) + '</span>' : '')
       + '<span class="font-mono text-sm font-semibold text-gray-800">' + llmDebugEsc(e.label) + '</span>'
       + '<span class="text-xs text-gray-400">' + llmDebugEsc(e.model) + '</span>'
+      + outputChip
       + '<span class="text-xs text-gray-400 ml-auto">' + time + '</span>'
       + status
       + '</summary>'

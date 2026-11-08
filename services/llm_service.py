@@ -296,6 +296,9 @@ def get_llm_debug_log(offset: int = 0, limit: int = 20, user_id: Optional[int] =
                     "error": (row.error or "")[:300],  # Exzerpt (Volltext via Detail-Endpoint)
                     "latency_ms": row.latency_ms,
                     "attempts": row.attempts,
+                    # Partielle Antwort/Thinking vor einem Fehler (Debug-Log)
+                    "response_chars": len(row.response or ""),
+                    "thinking_chars": len(row.thinking or ""),
                 }
                 for row in rows
             ],
@@ -357,6 +360,19 @@ def _overlap_len(prev: str, nxt: str, max_check: int = 2000) -> int:
         if prev.endswith(nxt[:n]):
             return n
     return 0
+
+
+def _timeout_error(timeout, content_parts=(), thinking_parts=()) -> str:
+    """Timeout-Fehlermeldung — inkl. Hinweis, wie viel partielle Ausgabe geloggt wurde."""
+    base = f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten"
+    partial = "".join(content_parts)
+    thinking = "".join(thinking_parts)
+    if not partial and not thinking:
+        return base
+    return (
+        f"{base} (partiell geloggt: {len(partial)} Zeichen Antwort, "
+        f"{len(thinking)} Zeichen Thinking)"
+    )
 
 
 class LLMService:
@@ -1033,7 +1049,7 @@ class LLMService:
         for attempt in range(max_retries):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                last_error = f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten"
+                last_error = _timeout_error(timeout)
                 logger.warning(f"convert_image_to_latex total timeout")
                 break
 
@@ -1044,94 +1060,71 @@ class LLMService:
                 start = time.time()
 
                 try:
-                    stream = await client.chat.completions.create(
-                        model=model,
-                        messages=messages,
-                        temperature=0.0,
-                        stream=True,
-                        extra_body=no_thinking_body,
+                    await self._stream_completion(
+                        client,
+                        {
+                            "model": model,
+                            "messages": messages,
+                            "temperature": 0.0,
+                            "extra_body": no_thinking_body,
+                        },
+                        remaining,
+                        content_parts,
+                        thinking_parts,
                     )
                 except BadRequestError:
                     # Provider ohne vLLM-Unterstützung lehnt chat_template_kwargs ab
                     # (z. B. OpenAI) — ohne Thinking-Optimierung erneut versuchen.
-                    stream = await client.chat.completions.create(
-                        model=model,
-                        messages=messages,
-                        temperature=0.0,
-                        stream=True,
+                    await self._stream_completion(
+                        client,
+                        {
+                            "model": model,
+                            "messages": messages,
+                            "temperature": 0.0,
+                        },
+                        remaining,
+                        content_parts,
+                        thinking_parts,
                     )
 
-                stream_task = asyncio.ensure_future(
-                    self._consume_stream(stream, content_parts, thinking_parts)
+                elapsed = time.time() - start
+                total_ms += round(elapsed * 1000)
+                content = "".join(content_parts).strip()
+                thinking = "".join(thinking_parts)
+                last_content = content or "(keine Antwort)"
+                last_thinking = thinking
+
+                if is_temp:
+                    await client.close()
+
+                record_llm_debug_entry(
+                    label="CONVERT_IMAGE_TO_LATEX", model=model, url=url, is_public=is_public,
+                    system_prompt=system_prompt, prompt=log_prompt,
+                    response=last_content, thinking=last_thinking,
+                    success=True, latency_ms=total_ms, attempts=attempt + 1,
                 )
-                timer_task = asyncio.ensure_future(asyncio.sleep(remaining))
-                try:
-                    done, _ = await asyncio.wait(
-                        {stream_task, timer_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if timer_task in done:
-                        # Timeout: Stream abbrechen, partialle Ausgabe behalten
-                        stream_task.cancel()
-                        try:
-                            await stream_task
-                        except (asyncio.CancelledError, Exception):
-                            pass
-                        partial_content = "".join(content_parts)
-                        partial_thinking = "".join(thinking_parts)
-                        last_content = partial_content or "(keine Antwort — durch Timeout abgebrochen)"
-                        last_thinking = partial_thinking
-                        last_error = (
-                            f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten "
-                            f"(partiell geloggt: {len(partial_content)} Zeichen Antwort, "
-                            f"{len(partial_thinking)} Zeichen Thinking)"
-                        )
-                        logger.warning(
-                            f"convert_image_to_latex timeout (attempt {attempt+1}/{max_retries}), "
-                            f"partiell: {len(partial_content)} Zeichen Antwort, "
-                            f"{len(partial_thinking)} Zeichen Thinking"
-                        )
-                    else:
-                        stream_task.result()  # wirft Stream-Fehler weiter
-                        elapsed = time.time() - start
-                        total_ms += round(elapsed * 1000)
-                        content = "".join(content_parts).strip()
-                        thinking = "".join(thinking_parts)
-                        last_content = content or "(keine Antwort)"
-                        last_thinking = thinking
-
-                        if is_temp:
-                            await client.close()
-
-                        record_llm_debug_entry(
-                            label="CONVERT_IMAGE_TO_LATEX", model=model, url=url, is_public=is_public,
-                            system_prompt=system_prompt, prompt=log_prompt,
-                            response=last_content, thinking=last_thinking,
-                            success=True, latency_ms=total_ms, attempts=attempt + 1,
-                        )
-                        return {
-                            "success": True,
-                            "data": {"latex": content},
-                            "latency_ms": round(elapsed * 1000),
-                            "raw_response": content,
-                        }
-                finally:
-                    if not timer_task.done():
-                        timer_task.cancel()
-                    if not stream_task.done():
-                        stream_task.cancel()
-                        try:
-                            await stream_task
-                        except (asyncio.CancelledError, Exception):
-                            pass
+                return {
+                    "success": True,
+                    "data": {"latex": content},
+                    "latency_ms": round(elapsed * 1000),
+                    "raw_response": content,
+                }
 
             except asyncio.TimeoutError:
-                last_error = f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten"
-                logger.warning(f"convert_image_to_latex timeout (attempt {attempt+1}/{max_retries})")
+                last_content = "".join(content_parts) or last_content
+                last_thinking = "".join(thinking_parts) or last_thinking
+                last_error = _timeout_error(timeout, content_parts, thinking_parts)
+                logger.warning(
+                    f"convert_image_to_latex timeout (attempt {attempt+1}/{max_retries}), "
+                    f"partiell: {len(''.join(content_parts))} Zeichen Antwort, "
+                    f"{len(''.join(thinking_parts))} Zeichen Thinking"
+                )
                 if attempt < max_retries - 1:
                     await asyncio.sleep(1 * (attempt + 1))
 
             except Exception as e:
+                last_content = "".join(content_parts) or last_content
+                last_thinking = "".join(thinking_parts) or last_thinking
                 last_error = str(e)
                 logger.error(f"convert_image_to_latex error: {e}")
                 if attempt < max_retries - 1:
@@ -1155,25 +1148,6 @@ class LLMService:
         }
 
     @staticmethod
-    async def _consume_stream(stream, content_parts: list, thinking_parts: list) -> None:
-        """Laeuft einen Chat-Completion-Stream ab und sammelt Content/Thinking.
-
-        Die Teil-Listen werden von auessen uebergeben: Wird der Stream bei
-        Timeout gecancelt, bleiben die bereits empfangenen Teile erhalten.
-        """
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            if delta is None:
-                continue
-            if delta.content:
-                content_parts.append(delta.content)
-            reasoning = LLMService._extract_thinking_delta(delta)
-            if reasoning:
-                thinking_parts.append(reasoning)
-
-    @staticmethod
     def _extract_thinking_delta(delta) -> str:
         """Extrahiert optionales Reasoning/Thinking aus einem Streaming-Delta.
 
@@ -1191,6 +1165,49 @@ class LLMService:
                 if isinstance(value, str) and value:
                     return value
         return ""
+
+    @staticmethod
+    async def _stream_completion(
+        client,
+        create_kwargs: dict,
+        timeout: float,
+        content_parts: list,
+        thinking_parts: list,
+    ) -> str:
+        """Streamt eine Chat-Completion und sammelt die Teile in die uebergebenen Listen.
+
+        Gibt das finish_reason des letzten Chunks zurueck. Bei Timeout wird der
+        Stream abgebrochen und asyncio.TimeoutError geworfen — die bereits
+        empfangenen Teile bleiben in den Listen erhalten, damit der Aufrufer
+        die partielle Ausgabe im Debug-Log loggen kann.
+        """
+        kwargs = dict(create_kwargs)
+        kwargs["stream"] = True
+
+        async def _run() -> str:
+            stream = await client.chat.completions.create(**kwargs)
+            try:
+                finish = ""
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta is not None:
+                        if delta.content:
+                            content_parts.append(delta.content)
+                        reasoning = LLMService._extract_thinking_delta(delta)
+                        if reasoning:
+                            thinking_parts.append(reasoning)
+                    if chunk.choices[0].finish_reason:
+                        finish = chunk.choices[0].finish_reason
+                return finish
+            finally:
+                try:
+                    await stream.close()
+                except Exception:
+                    pass
+
+        return await asyncio.wait_for(_run(), timeout=timeout)
 
     async def _describe_media(
         self,
@@ -1225,17 +1242,23 @@ class LLMService:
         for attempt in range(max_retries):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                last_error = f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten"
+                last_error = _timeout_error(timeout)
                 logger.warning(f"{label} total timeout")
                 break
+
+            # Sammel-Listen ueber den ganzen Versuch: Bei Timeout/Fehler bleibt
+            # die partielle Ausgabe hier erhalten (Debug-Log).
+            attempt_content: list = []
+            attempt_thinking: list = []
 
             try:
                 start = time.time()
 
-                response = await asyncio.wait_for(
-                    client.chat.completions.create(
-                        model=model,
-                        messages=[
+                await self._stream_completion(
+                    client,
+                    {
+                        "model": model,
+                        "messages": [
                             {
                                 "role": "system",
                                 "content": system_prompt,
@@ -1245,16 +1268,18 @@ class LLMService:
                                 "content": [media_part, {"type": "text", "text": prompt_text}],
                             },
                         ],
-                        temperature=0.0,
-                    ),
-                    timeout=remaining,
+                        "temperature": 0.0,
+                    },
+                    remaining,
+                    attempt_content,
+                    attempt_thinking,
                 )
 
                 elapsed = time.time() - start
                 total_ms += round(elapsed * 1000)
-                content = response.choices[0].message.content or ""
+                content = "".join(attempt_content)
                 last_content = content
-                last_thinking = self._extract_thinking(response)
+                last_thinking = "".join(attempt_thinking)
 
                 result = None
                 if content:
@@ -1289,12 +1314,16 @@ class LLMService:
                 }
 
             except asyncio.TimeoutError:
-                last_error = f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten"
+                last_content = "".join(attempt_content) or last_content
+                last_thinking = "".join(attempt_thinking) or last_thinking
+                last_error = _timeout_error(timeout, attempt_content, attempt_thinking)
                 logger.warning(f"{label} timeout (attempt {attempt+1}/{max_retries})")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(1 * (attempt + 1))
 
             except Exception as e:
+                last_content = "".join(attempt_content) or last_content
+                last_thinking = "".join(attempt_thinking) or last_thinking
                 last_error = str(e)
                 logger.error(f"{label} error: {e}")
                 if attempt < max_retries - 1:
@@ -1314,7 +1343,7 @@ class LLMService:
             "error": last_error,
             "data": {"title": "", "description": ""},
             "latency_ms": 0,
-            "raw_response": "",
+            "raw_response": last_content,
         }
 
     _MEDIA_DESCRIBE_PROMPT = (
@@ -1914,6 +1943,9 @@ class LLMService:
     async def _call_plain(self, prompt: str, config: Optional[dict] = None, max_tokens: Optional[int] = None):
         """Einfacher LLM-Aufruf ohne JSON-Parser — gibt rohen Text zurück.
 
+        Gestreamt: Bei Timeout oder Fehler bleibt die bis dahin eingetroffene
+        (partielle) Antwort erhalten und wird im Debug-Log geloggt.
+
         Falls config uebergeben wird, wird ein temporares Client mit dieser Config
         verwendet (unterstuetzt global_settings / course_settings Resolver).
         max_tokens: optionale Obergrenze fuer die Antwortlaenge (sonst Modell-Default).
@@ -1935,9 +1967,15 @@ class LLMService:
         for attempt in range(max_retries):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                last_error = f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten"
+                last_error = _timeout_error(timeout)
                 logger.warning(f"_call_plain total timeout")
                 break
+
+            # Sammel-Listen ueber den ganzen Versuch (inkl. Fortsetzungen):
+            # Bei Timeout/Fehler bleibt die partielle Ausgabe erhalten.
+            attempt_content: list = []
+            attempt_thinking: list = []
+            chunk_parts: list = []
 
             try:
                 start = time.time()
@@ -1954,13 +1992,10 @@ class LLMService:
                 if max_tokens is not None:
                     create_kwargs["max_tokens"] = max_tokens
 
-                response = await asyncio.wait_for(
-                    client.chat.completions.create(**create_kwargs),
-                    timeout=remaining,
+                finish = await self._stream_completion(
+                    client, create_kwargs, remaining, chunk_parts, attempt_thinking
                 )
-                content = response.choices[0].message.content or ""
-                last_thinking = self._extract_thinking(response)
-                finish = response.choices[0].finish_reason
+                attempt_content.extend(chunk_parts)
 
                 # Output-Limit erreicht → an der Bruchstelle fortsetzen (max.
                 # LLM_MAX_CONTINUATIONS Mal): ein Prompt, Output in Teilstücken.
@@ -1973,26 +2008,27 @@ class LLMService:
                     cont_kwargs = {
                         "model": model,
                         "messages": messages + [
-                            {"role": "assistant", "content": content or " "},
+                            {"role": "assistant", "content": "".join(attempt_content) or " "},
                             {"role": "user", "content": _CONTINUE_INSTRUCTION},
                         ],
                         "temperature": self.temperature,
                     }
                     if max_tokens is not None:
                         cont_kwargs["max_tokens"] = max_tokens
-                    c_resp = await asyncio.wait_for(
-                        client.chat.completions.create(**cont_kwargs), timeout=remaining
+                    chunk_parts = []
+                    finish = await self._stream_completion(
+                        client, cont_kwargs, remaining, chunk_parts, attempt_thinking
                     )
-                    chunk = c_resp.choices[0].message.content or ""
+                    chunk = "".join(chunk_parts)
                     # Overlap an der Naht: das Modell wiederholt teils den
                     # vorherigen Endabschnitt — Trimmen.
-                    content += chunk[_overlap_len(content, chunk):]
-                    finish = c_resp.choices[0].finish_reason
+                    attempt_content.extend(chunk[_overlap_len("".join(attempt_content), chunk):])
                     logger.info(f"_call_plain: Fortsetzung {n_cont} (+{len(chunk)} Zeichen)")
 
                 total_ms += round((time.time() - start) * 1000)
-                content = content or "(keine Antwort)"
+                content = "".join(attempt_content) or "(keine Antwort)"
                 last_content = content
+                last_thinking = "".join(attempt_thinking)
 
                 if finish == "length":
                     last_error = (
@@ -2019,12 +2055,16 @@ class LLMService:
                 }
 
             except asyncio.TimeoutError:
-                last_error = f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten"
+                last_content = "".join(attempt_content + chunk_parts) or last_content
+                last_thinking = "".join(attempt_thinking) or last_thinking
+                last_error = _timeout_error(timeout, attempt_content + chunk_parts, attempt_thinking)
                 logger.warning(f"_call_plain timeout (attempt {attempt+1}/{max_retries})")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(1 * (attempt + 1))
 
             except Exception as e:
+                last_content = "".join(attempt_content + chunk_parts) or last_content
+                last_thinking = "".join(attempt_thinking) or last_thinking
                 last_error = str(e)
                 logger.error(f"_call_plain error: {e}")
                 if attempt < max_retries - 1:
@@ -2044,12 +2084,15 @@ class LLMService:
             "error": last_error,
             "data": {"model_solution": ""},
             "latency_ms": 0,
-            "raw_response": "",
+            "raw_response": last_content,
         }
 
     async def _call_with_json(self, prompt: str, response_format: Optional[dict] = None, config: Optional[dict] = None, max_tokens: Optional[int] = None, images: Optional[list[str]] = None):
         """
         Generischer LLM-Aufruf mit JSON-Response-Format.
+
+        Gestreamt: Bei Timeout oder Fehler bleibt die bis dahin eingetroffene
+        (partielle) Antwort erhalten und wird im Debug-Log geloggt.
 
         Falls config uebergeben wird, wird ein temporares Client mit dieser Config
         verwendet (unterstuetzt global_settings / course_settings Resolver).
@@ -2097,27 +2140,36 @@ class LLMService:
         for attempt in range(max_retries):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                last_error = f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten"
+                last_error = _timeout_error(timeout)
                 logger.warning(f"_call_with_json total timeout")
                 break
+
+            # Sammel-Listen ueber den ganzen Versuch: Bei Timeout/Fehler bleibt
+            # die partielle Ausgabe hier erhalten (Debug-Log).
+            attempt_content: list = []
+            attempt_thinking: list = []
 
             try:
                 start = time.time()
 
-                response = await asyncio.wait_for(
-                    client.chat.completions.create(**create_kwargs),
-                    timeout=remaining,
+                finish = await self._stream_completion(
+                    client, create_kwargs, remaining, attempt_content, attempt_thinking
                 )
 
                 elapsed = time.time() - start
                 total_ms += round(elapsed * 1000)
 
-                content = response.choices[0].message.content
-                last_content = content or ""
-                last_thinking = self._extract_thinking(response)
-                if content is None:
-                    # Antwort wurde abgeschnitten (max_tokens erreicht)
-                    last_error = "LLM-Antwort wurde abgeschnitten (max_tokens)."
+                content = "".join(attempt_content)
+                last_content = content
+                last_thinking = "".join(attempt_thinking)
+                if not content:
+                    # Leere Antwort — bei finish=length: max_tokens erreicht
+                    last_error = (
+                        "LLM-Antwort wurde abgeschnitten (max_tokens)."
+                        if finish == "length"
+                        else "LLM hat keine Antwort geliefert."
+                    )
+                    logger.warning(f"_call_with_json empty response (attempt {attempt+1}/{max_retries})")
                     continue
 
                 try:
@@ -2147,12 +2199,16 @@ class LLMService:
                 }
 
             except asyncio.TimeoutError:
-                last_error = f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten"
+                last_content = "".join(attempt_content) or last_content
+                last_thinking = "".join(attempt_thinking) or last_thinking
+                last_error = _timeout_error(timeout, attempt_content, attempt_thinking)
                 logger.warning(f"_call_with_json timeout (attempt {attempt+1}/{max_retries})")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(1 * (attempt + 1))
 
             except Exception as e:
+                last_content = "".join(attempt_content) or last_content
+                last_thinking = "".join(attempt_thinking) or last_thinking
                 last_error = str(e)
                 logger.error(f"_call_with_json error: {e}")
                 if attempt < max_retries - 1:
@@ -2172,7 +2228,7 @@ class LLMService:
             "error": last_error,
             "data": {},
             "latency_ms": 0,
-            "raw_response": "",
+            "raw_response": last_content,
         }
 
     def _public_config(self, config: Optional[dict]) -> Optional[dict]:
@@ -2222,29 +2278,6 @@ class LLMService:
             if public_url:
                 is_public = public_url.rstrip("/") == url.rstrip("/")
         return url, model, is_public
-
-    @staticmethod
-    def _extract_thinking(response) -> str:
-        """Extrahiert optionales Reasoning/Thinking aus einer Chat-Completion-Antwort.
-
-        Je nach Provider (z. B. Qwen3 via vLLM/Ollama) liegt das Reasoning in
-        reasoning_content/reasoning — teils nur in model_extra.
-        """
-        try:
-            message = response.choices[0].message
-            for attr in ("reasoning_content", "reasoning"):
-                value = getattr(message, attr, None)
-                if isinstance(value, str) and value:
-                    return value
-            extra = getattr(message, "model_extra", None)
-            if isinstance(extra, dict):
-                for key in ("reasoning_content", "reasoning"):
-                    value = extra.get(key)
-                    if isinstance(value, str) and value:
-                        return value
-        except Exception:
-            pass
-        return ""
 
     @staticmethod
     def _extract_json(text: str) -> Optional[dict]:
