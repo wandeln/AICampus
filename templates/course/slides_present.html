@@ -312,6 +312,12 @@ async function aicampusDoMount() {
     // Reloads innerhalb derselben Browsersession (Tab).
     chalkboard: HAS_NOTES ? {
       storage: "aicampus-chalkboard-" + courseId + "-" + DECK_ID,
+      // Notes-Canvas (C, Stift-Modus über der Folie) bleibt VOLLSTÄNDIG
+      // transparent: Der Plugin-Default background[0] ist ein 10%-grauer
+      // Schleier (rgba(127,127,127,.1)), der die Folie sichtbar abdunkelt.
+      // background[1] (Textur) bleibt die Theme-Textur — die dient nur dem
+      // Chalkboard-Modus (W) und dem Radiergummi-Pattern.
+      background: [ "rgba(0,0,0,0)", "{{ asset('vendor/reveal/plugin/chalkboard/img/blackboard.png') }}" ],
       keyBindings: {
         // keyCode 87 = Großbuchstaben-ASCII von "W": Moderne Browser (Chrome
         // & Co.) melden bei keydown 65-90, nicht den legacy-Kleinbuchstaben-Code (119).
