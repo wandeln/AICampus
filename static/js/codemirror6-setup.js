@@ -818,38 +818,51 @@ class CM6Editor {
   }
 
   // Zeile exakt an den oberen Rand des Editors scrollen (Folien-
-  // Navigation, Preview-Sync). Wichtig: scroller.scrollTop DIREKT setzen
-  // statt CM6s scrollIntoView (Effect oder Methode) — CM6 scrollt dabei
-  // ALLE scrollbaren Vorfahren des Scrollers mit (scrollRectIntoView
-  // wandert bis doc.body und ruft dort win.scrollBy auf). Auf einer
-  // scrollbaren Seite (z.B. Skript) würde die ganze Seite mitscrollen.
-  // coordsAtPos liefert auch für Zeilen außerhalb des Viewports
-  // (geschätzte Höhen) Koordinaten — darauf basiert auch die interne
-  // CM6-Navigation.
+  // Navigation, Preview-Sync). Zwei Wege:
+  //  a) Ziel im gerenderten Bereich → scroller.scrollTop DIREKT setzen.
+  //     (DIREKT statt CM6s scrollIntoView-Effect: der kann scrollbare
+  //     Vorfahren bis doc.body mitscrollen lassen — auf einer scrollbaren
+  //     Seite wie dem Skript würde bei jedem Sync-Event die Seite
+  //     mitspringen. Nur der Nahbereich läuft hier durch, weil der
+  //     Scroll-Sync pro Event feuert.)
+  //  b) Ziel außerhalb des Viewports → coordsAtPos liefert NULL (CM6
+  //     Virtual Rendering schätzt keine Höhen), also nativer
+  //     EditorView.scrollIntoView-Effect: der konvergiert intern über
+  //     mehrere Frames. Tritt nur bei seltenen Fern-Jumps auf (Folien-
+  //     Navigation), nicht im Sync-Event-Fluss.
   scrollToLineTop(line) {
     const s = this.view.state;
     const n = Math.max(0, Math.min(line | 0, s.doc.lines - 1));
     const from = s.doc.line(n + 1).from;
     const scroller = this.view.scrollDOM;
+    // Selektionsänderung ohne Scroll-Effekt (CM6 scrollt bei
+    // programmatischen Selections nicht) — erst setzen, dann scrollen,
+    // damit der Cursor schon auf der Zielzeile ist, wenn der Viewport
+    // nachzieht.
+    this.view.dispatch({ selection: { anchor: from } });
     if (n === 0) {
-      // Dokumentanfang: direkt ans Scroller-Top — coordsAtPos(0) liefert
-      // außerhalb des Viewports keine verlässlichen Koordinaten.
+      // Dokumentanfang: direkt ans Scroller-Top.
       scroller.scrollTop = 0;
-      this.view.dispatch({ selection: { anchor: from } });
       return;
     }
     const coords = this.view.coordsAtPos(from);
     if (coords) {
-      // Zeilen-Oberrand ans Scroller-Oberrand: scrollTop = Abstand der
-      // Zeile zum Dokumentanfang (beide client-Y-Werte verschieben sich
-      // beim Scrollen gemeinsam → Differenz ist scrollunabhängig).
+      // Ziel im gerenderten Bereich (der übliche Fall: Scroll-Sync, Klicks
+      // in der Nähe): exakt one-shot — Zeilen-Oberrand an Scroller-Top:
+      // scrollTop = coords.top − documentTop (beide client-Y-Werte
+      // verschieben sich beim Scrollen gemeinsam → scrollunabhängig).
       // Wichtig: SETZEN, nicht addieren — sonst addiert sich der Offset
       // bei jedem Sync-Event und der Editor läuft auf den Boden.
       scroller.scrollTop = Math.max(0, coords.top - this.view.documentTop);
+      return;
     }
-    // Selektionsänderung ohne Scroll-Effekt (CM6 scrollt bei
-    // programmatischen Selections nicht).
-    this.view.dispatch({ selection: { anchor: from } });
+    // Ziel AUSSERHALB des gerenderten Viewports: coordsAtPos liefert null
+    // (CM6 Virtual Rendering schätzt keine Höhen) → one-shot würde
+    // „eingefroren“ lassen. Dann den nativen CM6-Effect nehmen (wie vor
+    // dem Scroll-Sync-Tuning): der konvergiert intern über mehrere Frames
+    // und scrollt nur den Editor-Scroller, solange das Ziel darin
+    // darstellbar ist.
+    this.view.dispatch({ effects: EditorView.scrollIntoView(from, { y: "start" }) });
   }
 
   getWrapperElement() { return this.wrapper; }

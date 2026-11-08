@@ -1002,6 +1002,9 @@
     // beim Slide-Navigation-Jump (CM5 setzt das selbst nicht).
     cmContent.getScrollerElement().style.overflowAnchor = "none";
     cmContent.on("change", schedulePreview); // Live-Preview beim Tippen
+    // Debug-Hook (Web-Konsole): aktueller Editor (CM6-Impl per ._impl) für
+    // Fehleranalyse — s. AGENTS.md Debugging.
+    window.__aicampusCmContent = cmContent;
   } else {
     textarea.addEventListener("input", schedulePreview); // Live-Preview beim Tippen
   }
