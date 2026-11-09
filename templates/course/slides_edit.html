@@ -654,19 +654,10 @@
       let prevIndex = null;
       if (previewReveal) {
         try { prevIndex = previewReveal.getIndices(); } catch (e) { /* ältere Instanz */ }
-        // Vorherige Instanz zurückbauen (Reveal 4: destroy() entfernt die
-        // viewport-Klasse, Inline-Styles und alle Komponenten).
-        try { previewReveal.destroy(); } catch (e) { /* ältere Instanz */ }
-        previewReveal = null;
-        window.__aicampusPreviewReveal = null;
       }
       // Nur der eigene Restore am Ende dieses Renders darf einen Jump
       // unterdrücken — Reste aus überlappenden Renders zurücksetzen.
       pendingSkipSlide = null;
-      previewSlidesEl.innerHTML = "";
-      // Footer am Canvas-Element (wandert nicht mit den Slide-Transitions)
-      if (FOOTER_ENABLED && FOOTER_TEXT) previewSlidesEl.setAttribute("data-footer", FOOTER_TEXT);
-      else previewSlidesEl.removeAttribute("data-footer");
       const slides = await parseSlides(content || "");
       // Zeilen-Mapping für den Editor-Jump (Slide-Wechsel in der Vorschau)
       const lineMap = computeSlideLineMap(content || "");
@@ -674,6 +665,14 @@
       const total = countSlides(slides);
       countEl.textContent = total ? `${total} Folie${total === 1 ? "" : "n"}` : "";
       if (slides.length === 0) {
+        if (previewReveal) {
+          // Vorherige Instanz zurückbauen (Reveal 4: destroy() entfernt die
+          // viewport-Klasse, Inline-Styles und alle Komponenten).
+          try { previewReveal.destroy(); } catch (e) { /* ältere Instanz */ }
+          previewReveal = null;
+          window.__aicampusPreviewReveal = null;
+        }
+        previewSlidesEl.innerHTML = "";
         previewEmptyEl.innerHTML =
           'Noch keine Folien. Trenne Folien durch eine eigene Zeile <code>---</code>.';
         previewEmptyEl.classList.remove("hidden");
@@ -681,25 +680,107 @@
         return;
       }
       previewEmptyEl.classList.add("hidden");
-      for (let i = 0; i < slides.length; i++) {
-        if (seq !== previewSeq) return; // neuerer Render hat übernommen
-        const footer = FOOTER_ENABLED && FOOTER_TEXT ? FOOTER_TEXT : null;
-        // Folien-Position (S-Nummern unlabeled Subfigure-Komplexe):
-        const section = await buildSlideSection(slides[i], footer, { deckId: material.id, h: i });
-        // Nach dem await erneut prüfen: ein während des Baus überholter
-        // Render darf sein Section nicht ins neue DOM hängen (sonst
-        // doppelte Folie).
-        if (seq !== previewSeq) return;
-        previewSlidesEl.appendChild(section);
-      }
-      if (seq !== previewSeq) return;
       // Gleiche Logik-Größe wie die Präsentation: Reveal skaliert das Deck
       // (960 × 960/Ratio) auf die Größe des Preview-Fensters.
       const ratio = (theme && theme.aspect_value) || 16 / 9;
       const W = 960;
       const H = Math.round(W / ratio);
-      // Auto-Fit: Folienkörper auf die Folie skalieren (s. fitSlides in slides.js)
-      fitSlides(previewSlidesEl, W, H);
+      // Staging: neues Deck OFFSCREEN bauen + fiten, altes Deck bleibt
+      // sichtbar, bis das neue komplett ist. Mit den Yields pro Folie
+      // (Editor bedienbar halten) würde der Browser sonst den
+      // Zwischenzustand malen: layout-* setzt display:flex !important →
+      // alle Sections wären sichtbar und gestapelt (keine Reveal-Instanz).
+      // Gleiche Klassen wie die Preview-Root (Theme/Logo): die
+      // Font-Size-Kette (.reveal → section → body) muss identisch sein,
+      // damit die Fit-Messung stimmt.
+      const stagingReveal = document.createElement("div");
+      stagingReveal.className = revealRootEl.className;
+      stagingReveal.style.cssText = "position:fixed;left:-99999px;top:0;visibility:hidden;";
+      const stagingSlides = document.createElement("div");
+      stagingSlides.className = "slides";
+      stagingSlides.style.cssText = `width:${W}px;height:${H}px;`;
+      // Footer am Canvas-Element (wandert nicht mit den Slide-Transitions)
+      if (FOOTER_ENABLED && FOOTER_TEXT) stagingSlides.setAttribute("data-footer", FOOTER_TEXT);
+      else stagingSlides.removeAttribute("data-footer");
+      stagingReveal.appendChild(stagingSlides);
+      document.body.appendChild(stagingReveal);
+      try {
+        for (let i = 0; i < slides.length; i++) {
+          if (seq !== previewSeq) return; // neuerer Render hat übernommen
+          const footer = FOOTER_ENABLED && FOOTER_TEXT ? FOOTER_TEXT : null;
+          // Folien-Position (S-Nummern unlabeled Subfigure-Komplexe):
+          const section = await buildSlideSection(slides[i], footer, { deckId: material.id, h: i });
+          // Nach dem await erneut prüfen: ein während des Baus überholter
+          // Render darf sein Section nicht ins neue DOM hängen (sonst
+          // doppelte Folie).
+          if (seq !== previewSeq) return;
+          stagingSlides.appendChild(section);
+          // Yield: ohne Macrotask-Abgabe läuft der Deck-Build als
+          // Microtask-Kette (gecachte Fetch) durch und CodeMirror bekommt
+          // bis zum Deck-Ende keine Eingabe-Events.
+          await yieldToMain();
+        }
+        // KaTeX-Webfonts vor dem Fit fertig laden lassen: die Build-Phase
+        // (KaTeX-Rendering) hat die Fonts angefordert — misst der Fit mit
+        // Fallback-Fonts, ist die Skala falsch und der spätere Font-Refit
+        // korrigiert sie sichtbar (Skala springt beim Laden hin und her).
+        // status "loading" = aktueller Load aktiv (im Gegensatz zu
+        // fonts.ready, das ein One-Shot ist und vor dem KaTeX-Rendering
+        // schon erfüllt sein kann). Max. 800 ms: ein verhängener Load
+        // blockiert die Vorschau nicht.
+        let fontTries = 0;
+        try {
+          while (document.fonts && document.fonts.status === "loading" && fontTries++ < 80 && seq === previewSeq) {
+            await yieldToMain();
+          }
+        } catch (e) { /* Font-Status-Probleme dürfen den Render nicht brechen */ }
+        // Auto-Fit: NUR die Folie fiten, die nach dem Swap sichtbar wird —
+        // der Rest ist Reveal-seitig ausgeblendet und wird im Hintergrund
+        // nachgefitet (fitQueue unten) bzw. lazy beim ersten Ankommen
+        // (slidechanged-Handler). Spart den Bisektions-Aufwand (~10 Reflows
+        // pro Folie) für den Erstanblick → große Decks laden deutlich
+        // schneller.
+        stagingSlides.dataset.slideFitW = String(W);
+        stagingSlides.dataset.slideFitH = String(H);
+        // Ziel = die Folie, zu der der Restore springt (derselbe Ausdruck
+        // wie unten; Snapshot hier, da der Build dazwischen Zeit kostet).
+        const fitIdx = prevIndex || ((lastViewedIndex.h > 0 || lastViewedIndex.v > 0) ? lastViewedIndex : null);
+        const rh = Math.min(fitIdx ? fitIdx.h : 0, slides.length - 1);
+        const subCount = (slides[rh] && slides[rh].children && slides[rh].children.length) || 1;
+        const rv = fitIdx ? Math.min(fitIdx.v || 0, subCount - 1) : 0;
+        const targetSection = subCount > 1
+          ? (stagingSlides.children[rh] && stagingSlides.children[rh].children[rv])
+          : stagingSlides.children[rh];
+        for (const sec of stagingSlides.querySelectorAll("section")) {
+          if (sec.querySelector(":scope > section")) continue;
+          if (sec === targetSection) fitSlideSection(sec, W, H);
+          else sec.dataset.fitPending = "1";
+        }
+        if (seq !== previewSeq) return;
+        // ── Atomarer Swap: ab hier keine Yields bis die neue Instanz
+        //    läuft — sonst sähe der Nutzer das alte Deck zurückkommen.
+        if (previewReveal) {
+          // Vorherige Instanz zurückbauen (Reveal 4: destroy() entfernt
+          // die viewport-Klasse, Inline-Styles und alle Komponenten).
+          try { previewReveal.destroy(); } catch (e) { /* ältere Instanz */ }
+          previewReveal = null;
+          window.__aicampusPreviewReveal = null;
+        }
+        previewSlidesEl.innerHTML = "";
+        while (stagingSlides.firstChild) previewSlidesEl.appendChild(stagingSlides.firstChild);
+        stagingReveal.remove();
+        if (FOOTER_ENABLED && FOOTER_TEXT) previewSlidesEl.setAttribute("data-footer", FOOTER_TEXT);
+        else previewSlidesEl.removeAttribute("data-footer");
+        // Refit-Hooks (Bild-Load, Font-Load) lesen W/H aus dem Container:
+        previewSlidesEl.dataset.slideFitW = String(W);
+        previewSlidesEl.dataset.slideFitH = String(H);
+        // Reveal-Initialisierung überbrücken: ohne die Instanz wären die
+        // neuen Sections nicht laid out (stapeln sich für einen Moment).
+        revealRootEl.style.visibility = "hidden";
+      } finally {
+        // Überholter Render: Staging-Container nicht im DOM lassen.
+        if (stagingReveal.isConnected) stagingReveal.remove();
+      }
       const inst = new Reveal(revealRootEl, {
         embedded: true,
         keyboard: false, // Mini-Vorschau greift keine globalen Tasten ab
@@ -723,7 +804,12 @@
       aicampusWireCodeMath(inst);
       previewReveal = inst;
       window.__aicampusPreviewReveal = inst;
-      await inst.initialize();
+      try {
+        await inst.initialize();
+      } finally {
+        // Swap-Hidden immer zurücknehmen (auch bei Abbruch/Fehler).
+        revealRootEl.style.visibility = "";
+      }
       // Zitations-Links → auto-Quellen-Folie (Click-Handler in slides.js)
       aicampusRegisterSlideReveal(revealRootEl, inst);
       // MCP (get_user_focus): aktuelle Folie bei Folien-Wechsel melden
@@ -753,6 +839,17 @@
           }
         }
         lastViewedIndex = { h, v: v || 0 };
+        // Lazy-Fit: eine Folie, die vor dem Anzeigen nicht gefitet wurde,
+        // bekommt ihre Skala beim ersten Ankommen (~150 ms; überfließender
+        // Inhalt springt einmalig von Skala 1 auf die Zielskala).
+        const fitTop = previewSlidesEl.children[h];
+        const fitSec = fitTop && fitTop.classList.contains("slides-stack")
+          ? (fitTop.children[v || 0] || null)
+          : (fitTop || null);
+        if (fitSec && fitSec.dataset.fitPending !== undefined) {
+          delete fitSec.dataset.fitPending;
+          fitSlideSection(fitSec, W, H);
+        }
         if (!cmContent) return;
         // Kein Eintrag = auto-generierte Quellen-Folie → nichts zu springen
         const entry = lineMap[h];
@@ -820,11 +917,33 @@
           }
         } catch (e) { /* Instanz im Umbau */ }
       }
+      // Hintergrund-Fit: die nicht vor dem Anzeigen gefiteten Folien
+      // (fitPending) nachliefern — Yield pro Folie, Editor bleibt
+      // bedienbar. Laufend (nicht in der Render-Queue): darf den nächsten
+      // Render nicht blockieren. seq-Check: ein neuerer Render hat andere
+      // Sections im DOM → Queue stoppt. Lazy-Fit (slidechanged) und
+      // Font-Refit können Marken vorziehen — dieselbe fitPending-Marke →
+      // keine Doppelarbeit.
+      (async () => {
+        const pending = [...previewSlidesEl.querySelectorAll("section[fitPending]")];
+        for (const sec of pending) {
+          if (seq !== previewSeq) return;
+          if (sec.dataset.fitPending === undefined) continue;
+          delete sec.dataset.fitPending;
+          fitSlideSection(sec, W, H);
+          await yieldToMain();
+        }
+      })();
     } finally {
       // Nur räumen, wenn dieser (noch aktuelle) Render das Flag gesetzt
       // hat — ein überholter Render darf das Flag des Nachfolgers
       // nicht löschen.
-      if (seq === previewSeq) previewRenderContent = null;
+      if (seq === previewSeq) {
+        previewRenderContent = null;
+        // Sicherheitsnetz: ein Fehler zwischen Swap und initialize() darf
+        // die Preview nicht permanent hidden lassen.
+        revealRootEl.style.visibility = "";
+      }
     }
   }
   // ─── LLM: Deck generieren / überarbeiten ────────────────────

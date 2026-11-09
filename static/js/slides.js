@@ -356,21 +356,30 @@ async function renderSlideInto(slide, container, slidePos) {
   const md = slide.columns[0] || "";
   if (md) await renderMarkdown(md, container, { slideMode: true, slidePos: slidePos ? { ...slidePos, p: 0 } : null });
   if (md) {
-    // Folienkörper (alles NACH der ersten Überschrift) in einen
-    // Flex-Container hüllen (.aicampus-slide-body, s. slides.css):
-    // layout "default" zentriert ihn im verbleibenden Folienraum, und der
-    // Auto-Fit (fitSlideSection unten) skaliert ihn per --slides-body-scale
-    // auf die Folie — für ALLE Layouts (center bleibt zentriert, der
-    // zentrierte Block wird nur ggf. kleiner). Ohne Überschrift bzw. ohne
-    // weiteren Inhalt bleibt es beim topleft-Verhalten (Inhalt von oben,
-    // nichts zu zentrieren/skalieren).
+    // Folienkörper in einen Flex-Container hüllen (.aicampus-slide-body,
+    // s. slides.css): layout "default" zentriert ihn im verbleibenden
+    // Folienraum, und der Auto-Fit (fitSlideSection unten) skaliert ihn
+    // per --slides-body-scale auf die Folie — für ALLE Layouts (center
+    // bleibt zentriert, der zentrierte Block wird nur ggf. kleiner).
+    // Normalfall: alles NACH der ersten Überschrift (der Titel bleibt in
+    // voller Größe). Ohne führende Überschrift: der GANZE Inhalt ist der
+    // Körper (kein Titel zu erhalten) → Auto-Fit greift auch dort.
+    // Nur eine Überschrift ohne weiteren Inhalt: nichts zu skalieren.
     const mp = container.querySelector(".markdown-preview");
     const first = mp && mp.children[0];
-    if (mp && first && /^H[1-6]$/.test(first.tagName) && mp.children.length > 1) {
-      const body = document.createElement("div");
-      body.className = "aicampus-slide-body";
-      while (mp.children.length > 1) body.appendChild(mp.children[1]);
-      mp.appendChild(body);
+    if (mp && first) {
+      const isHeading = /^H[1-6]$/.test(first.tagName);
+      if (isHeading && mp.children.length > 1) {
+        const body = document.createElement("div");
+        body.className = "aicampus-slide-body";
+        while (mp.children.length > 1) body.appendChild(mp.children[1]);
+        mp.appendChild(body);
+      } else if (!isHeading) {
+        const body = document.createElement("div");
+        body.className = "aicampus-slide-body";
+        while (mp.children.length > 0) body.appendChild(mp.children[0]);
+        mp.appendChild(body);
+      }
     }
   }
 }
@@ -430,7 +439,10 @@ function fitSlideSection(section, W, H) {
     section.style.removeProperty("--slides-body-scale");
     return;
   }
-  const title = mp.children[0];
+  // Erstes Kind IST der Body (Slide ohne führende Überschrift: ganzer
+  // Inhalt skaliert, s. renderSlideInto) → kein Titel, der Platz
+  // behält.
+  const title = mp.children[0] === body ? null : mp.children[0];
   const prevStyle = section.getAttribute("style");
   // Refit einer bereits layouteten Folie (sichtbar oder im viewDistance):
   // AM ORT messen — die Folie hat dort exakt W×H (height:100% des
@@ -508,6 +520,14 @@ function fitSlideSection(section, W, H) {
   }
 }
 
+/** Macrotask-Yield: Event-Loop an Eingaben/Rendering abgeben — für
+ *  chunked async Pipelines, die die UI nicht einfrieren dürfen (z. B.
+ *  Editor-Preview). `await` auf gecachte Promises ginge nur als
+ *  Microtask → keine Event-Loop-Abgabe. */
+function yieldToMain() {
+  return new Promise((r) => setTimeout(r, 0));
+}
+
 /** Auto-Fit für ALLE (Blatt-)Folien eines .slides-Containers — vor
  *  reveal.initialize() aufrufen (s. o.). W/H = logische Folien-Größe
  *  (960 × 960/Ratio), unabhängig von der Viewport-Größe. */
@@ -547,11 +567,24 @@ document.addEventListener("load", (e) => {
 // One-Shot, der vor dem KaTeX-Rendering schon gefeuert haben kann).
 if (document.fonts && document.fonts.addEventListener) {
   document.fonts.addEventListener("loadingdone", () => {
-    document.querySelectorAll(".slides[data-slide-fit-w]").forEach((slidesEl) => {
-      const W = parseFloat(slidesEl.dataset.slideFitW);
-      const H = parseFloat(slidesEl.dataset.slideFitH);
-      if (isFinite(W) && isFinite(H)) fitSlides(slidesEl, W, H);
-    });
+    // Chunked (Yield pro Folie): die Bisektion pro Folie ist ein gezwungenes
+    // Layout — synchron über ein großes Deck wäre das eine mehrsekündige
+    // Freeze-Strecke (v. a. beim ersten Render, wenn die KaTeX-Fonts hier
+    // nachladen). fitPending-Marken auflösen: diese Folien sind damit
+    // gefitet und brauchen den Lazy-/Background-Fit nicht mehr.
+    (async () => {
+      for (const slidesEl of document.querySelectorAll(".slides[data-slide-fit-w]")) {
+        const W = parseFloat(slidesEl.dataset.slideFitW);
+        const H = parseFloat(slidesEl.dataset.slideFitH);
+        if (!isFinite(W) || !isFinite(H)) continue;
+        for (const s of slidesEl.querySelectorAll("section")) {
+          if (s.querySelector(":scope > section")) continue;
+          if (s.dataset.fitPending !== undefined) delete s.dataset.fitPending;
+          fitSlideSection(s, W, H);
+          await yieldToMain();
+        }
+      }
+    })();
   });
 }
 
@@ -614,6 +647,9 @@ async function buildSlideSection(slide, footerText, slidePos) {
       // v = Unterfolien-Index (Parität zur slides-refmap-Iteration).
       const pos = slidePos ? { ...slidePos, v } : null;
       stack.appendChild(await buildSlideSection(slide.children[v], footerText, pos));
+      // Yield: großer Stack = eine Sync-Strecke pro Unterfolie (KaTeX) —
+      // ohne Yield bliebe der Editor im Editor-Preview-Build eingefroren.
+      await yieldToMain();
     }
     return stack;
   }

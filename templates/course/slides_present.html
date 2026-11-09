@@ -653,6 +653,19 @@ async function aicampusDoMount() {
   const SLIDE_W = 960;
   const SLIDE_H = Math.round(SLIDE_W / ratio);
 
+  // KaTeX-Webfonts vor dem Fit fertig laden lassen: der Build (KaTeX-
+  // Rendering) hat sie angefordert — misst der Fit mit Fallback-Fonts, ist
+  // die Skala falsch und der spätere Font-Refit korrigiert sie sichtbar
+  // (Skala springt beim Laden). status "loading" = aktueller Load aktiv
+  // (fonts.ready wäre ein One-Shot, der vor dem KaTeX-Rendering schon
+  // erfüllt sein kann). Max. 800 ms: ein verhängener Load blockiert nicht.
+  let fontTries = 0;
+  try {
+    while (document.fonts && document.fonts.status === "loading" && fontTries++ < 80) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  } catch (e) { /* Font-Status-Probleme dürfen den Mount nicht brechen */ }
+
   // Auto-Fit: Folienkörper (alles nach der Überschrift) auf die Folie
   // skalieren — synchron, vor dem ersten Render (s. fitSlides in slides.js).
   fitSlides(slidesEl, SLIDE_W, SLIDE_H);
