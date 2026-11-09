@@ -50,7 +50,7 @@
     </div>
   </div>
 
-  <p class="text-sm text-gray-500 mb-2">Klicke auf eine Punktezahl, um die Einreichung zu bewerten. · Spaltenüberschrift anklicken = sortieren (erneuter Klick = auf-/absteigend umschalten).</p>
+  <p class="text-sm text-gray-500 mb-2">Klicke auf eine Punktezahl, um die Einreichung zu bewerten (Strg/Cmd+Klick: in neuem Tab). · Spaltenüberschrift anklicken = sortieren (erneuter Klick = auf-/absteigend umschalten). · Aktive Filter &amp; Sortierung werden beim Öffnen in die Bewertungsseite mitgenommen.</p>
 
   <!-- Loading State -->
   <div id="loading-state" class="hidden text-center py-12">
@@ -235,8 +235,13 @@
             : task.title + ': keine Einreichung';
         const reviewUrl = '/courses/' + courseId + '/tasks/' + task.id + '/students/' + student.id + '/review';
 
-        bodyHtml += '<td data-task-idx="' + i + '" class="py-2 px-3 text-center border-b ' + bgClass + pendingClass + ' font-mono text-sm cursor-pointer hover:opacity-80 hover:ring-2 hover:ring-blue-400 hover:rounded transition" title="' + titleText + '" onclick="window.location.href=\'' + reviewUrl + '\'">' +
+        // Echter Link (nicht onclick): Strg/Cmd+Klick öffnet im neuen Tab,
+        // wie bei allen anderen Links. Der aktuelle Filter-/Sortier-State
+        // wird beim Klick per Delegierung (unten) als Query-Params ergänzt.
+        bodyHtml += '<td data-task-idx="' + i + '" class="py-2 px-3 text-center border-b ' + bgClass + pendingClass + ' font-mono text-sm transition" title="' + titleText + '">' +
+          '<a href="' + reviewUrl + '" data-review-link class="block cursor-pointer text-inherit no-underline focus:outline-none hover:opacity-70">' +
           displayVal + overrideBadge +
+          '</a>' +
         '</td>';
       });
 
@@ -468,6 +473,24 @@
   document.getElementById('table-header').addEventListener('click', (e) => {
     const th = e.target.closest('th[data-sort]');
     if (th) toggleSort(th.dataset.sort);
+  });
+
+  // Review-Links: aktuelle Filter + Sortierung als Query-Parameter
+  // mitschicken — die Review-Seite übernimmt sie für Studenten-Liste
+  // (Filter/Sortierung) und Aufgaben-Navigation (Aufgabenfilter).
+  document.getElementById('table-body').addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-review-link]');
+    if (!a) return;
+    const p = new URLSearchParams();
+    const ft = document.getElementById('filter-input').value.trim();
+    const tf = document.getElementById('type-filter').value;
+    const af = document.getElementById('annotation-filter').value.trim();
+    if (ft) p.set('filter_text', ft);
+    if (tf) p.set('type_filter', tf);
+    if (af) p.set('annotation_filter', af);
+    if (sortState) { p.set('sort', sortState.key); p.set('sort_dir', sortState.dir); }
+    const qs = p.toString();
+    a.href = a.pathname + (qs ? '?' + qs : '');
   });
 
   // Live-Dashboard-Link: aktuelle Filter als Query-Parameter mitschicken,

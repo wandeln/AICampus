@@ -13,7 +13,7 @@
     <!-- Task Navigation -->
     <div class="flex items-center justify-between mb-4 mt-4">
       {% if prev_task %}
-        <a href="/courses/{{ course_id }}/tasks/{{ prev_task.id }}/students/{{ student_id }}/review"
+        <a href="/courses/{{ course_id }}/tasks/{{ prev_task.id }}/students/{{ student_id }}/review{{ review_qs }}"
            class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-300
                   text-gray-700 hover:bg-gray-50 hover:border-gray-400 transition-colors mr-2" style="height:-webkit-fill-available">
           <span class="text-lg">←</span>
@@ -27,7 +27,7 @@
       {% endif %}
 
       {% if next_task %}
-        <a href="/courses/{{ course_id }}/tasks/{{ next_task.id }}/students/{{ student_id }}/review"
+        <a href="/courses/{{ course_id }}/tasks/{{ next_task.id }}/students/{{ student_id }}/review{{ review_qs }}"
            class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-300
                   text-gray-700 hover:bg-gray-50 hover:border-gray-400 transition-colors ml-auto" style="height:-webkit-fill-available">
           <div class="flex flex-col items-end text-right">
@@ -118,6 +118,7 @@
               </button>
             </div>
           </div>
+          <div id="review-filter-note" class="hidden text-xs text-gray-500 mt-3"></div>
         </div>
 
       <!-- Score Display -->
@@ -290,6 +291,97 @@
   var studentsList = [];
   var currentStudentIndex = -1;
 
+  // ─── Aus der Punktetabelle übernommener State (URL-Query-Parameter) ──
+  // annotation_filter + sort/sort_dir wirken auf die Studenten-Liste,
+  // filter_text + type_filter auf die Aufgaben-Navigation (serverseitig).
+  var reviewParams = new URLSearchParams(window.location.search);
+  var reviewState = {
+    filterText: reviewParams.get('filter_text') || '',
+    typeFilter: reviewParams.get('type_filter') || '',
+    annotationFilter: reviewParams.get('annotation_filter') || '',
+    sortKey: reviewParams.get('sort') || '',
+    sortDir: reviewParams.get('sort_dir') || '',
+  };
+
+  // Gleiche Semantik wie in der Punktetabelle: alle leerzeichen-getrennten
+  // Begriffe müssen als Wort-Präfix vorkommen (AND).
+  function annotationMatches(annotation, filterText) {
+    var terms = filterText.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length || !annotation) return false;
+    var words = annotation.toLowerCase().split(/\s+/).filter(Boolean);
+    return terms.every(function (term) {
+      return words.some(function (w) { return w.startsWith(term); });
+    });
+  }
+
+  // Studenten-Liste filtern (Gruppe) + sortieren. Sortier-Schlüssel, die
+  // hier nicht auswertbar sind (Summe, Anteil, andere Aufgabe), fallen
+  // auf den API-Default (Name) zurück.
+  function applyReviewStudentFilter(list) {
+    var filtered = list;
+    if (reviewState.annotationFilter) {
+      filtered = filtered.filter(function (s) {
+        return annotationMatches(s.annotation || '', reviewState.annotationFilter);
+      });
+    }
+    var mul = reviewState.sortDir === 'desc' ? -1 : 1;
+    var key = reviewState.sortKey;
+    if (key === 'name' || key === 'username' || key === 'annotation') {
+      filtered = filtered.slice().sort(function (a, b) {
+        return String(a[key] || '').localeCompare(String(b[key] || ''), 'de') * mul || a.id - b.id;
+      });
+    } else if (key === 'task-' + taskId) {
+      filtered = filtered.slice().sort(function (a, b) {
+        return (a.latest_points - b.latest_points) * mul || a.id - b.id;
+      });
+    }
+    return filtered;
+  }
+
+  // Query-String für die Navigations-Links (Studenten + Aufgaben),
+  // damit der State beim Durchklicken erhalten bleibt.
+  function currentReviewQs() {
+    var p = new URLSearchParams();
+    if (reviewState.filterText) p.set('filter_text', reviewState.filterText);
+    if (reviewState.typeFilter) p.set('type_filter', reviewState.typeFilter);
+    if (reviewState.annotationFilter) p.set('annotation_filter', reviewState.annotationFilter);
+    if (reviewState.sortKey) {
+      p.set('sort', reviewState.sortKey);
+      p.set('sort_dir', reviewState.sortDir || 'asc');
+    }
+    var s = p.toString();
+    return s ? '?' + s : '';
+  }
+
+  function appliedSortLabel() {
+    if (!reviewState.sortKey) return '';
+    var dir = reviewState.sortDir === 'desc' ? 'absteigend' : 'aufsteigend';
+    if (reviewState.sortKey === 'name') return 'Name ' + dir;
+    if (reviewState.sortKey === 'username') return 'Matr.-Nr. ' + dir;
+    if (reviewState.sortKey === 'annotation') return 'Gruppe ' + dir;
+    if (reviewState.sortKey === 'task-' + taskId) return 'Punkten ' + dir;
+    return '';
+  }
+
+  function renderReviewFilterNote() {
+    var note = document.getElementById('review-filter-note');
+    if (!note) return;
+    var parts = [];
+    if (reviewState.annotationFilter) parts.push('Gruppe \u201E' + reviewState.annotationFilter + '\u201C');
+    var sortLabel = appliedSortLabel();
+    if (sortLabel) parts.push('sortiert nach ' + sortLabel);
+    if (reviewState.filterText) parts.push('Aufgabensuche \u201E' + reviewState.filterText + '\u201C (Aufgaben-Navigation)');
+    if (reviewState.typeFilter) parts.push('Aufgabentyp \u201E' + reviewState.typeFilter + '\u201C (Aufgaben-Navigation)');
+    if (!parts.length) {
+      note.classList.add('hidden');
+      return;
+    }
+    note.innerHTML = '🔍 Aus der Übersicht übernommen: ' + parts.join(' · ') +
+      ' — <a href="/courses/' + courseId + '/tasks/' + taskId + '/students/' + studentId + '/review"' +
+      ' class="text-blue-600 hover:underline">✕ zurücksetzen</a>';
+    note.classList.remove('hidden');
+  }
+
   // MC: Persistiertes Grading-Ergebnis der Einreichung (sub.mc_result,
   // JSON-String) als Karte rendern — identisch zur Student-View
   // (renderMcResultCard in task_solve_base.html). Das Ergebnis wird beim
@@ -379,7 +471,7 @@
         return;
       }
       var data = await res.json();
-      studentsList = data.students;
+      studentsList = applyReviewStudentFilter(data.students);
 
       var select = document.getElementById('student-select');
       select.innerHTML = '';
@@ -405,8 +497,11 @@
       // Enable/disable nav buttons
       updateNavButtons();
 
-      // Select current student in dropdown
+      // Select current student in dropdown (fehlt er aus der gefilterten
+      // Liste, bleibt der aktuelle Student trotzdem auf der Seite)
       select.value = studentId;
+
+      renderReviewFilterNote();
 
       // Handle dropdown change
       select.addEventListener('change', function() {
@@ -424,7 +519,7 @@
     var prevBtn = document.getElementById('prev-student-btn');
     var nextBtn = document.getElementById('next-student-btn');
     if (prevBtn) prevBtn.disabled = currentStudentIndex <= 0;
-    if (nextBtn) nextBtn.disabled = currentStudentIndex >= studentsList.length - 1;
+    if (nextBtn) nextBtn.disabled = currentStudentIndex < 0 || currentStudentIndex >= studentsList.length - 1;
   }
 
   function navigateToStudent(newStudentId) {
@@ -434,8 +529,9 @@
       studentId = newStudentId;
       updateNavButtons();
       document.getElementById('student-select').value = newStudentId;
-      // Navigate to the new student's review page
-      window.location.href = '/courses/' + courseId + '/tasks/' + taskId + '/students/' + newStudentId + '/review';
+      // Navigate to the new student's review page (Filter-/Sortier-State
+      // aus der Übersicht mitgeben)
+      window.location.href = '/courses/' + courseId + '/tasks/' + taskId + '/students/' + newStudentId + '/review' + currentReviewQs();
     }
   }
 
@@ -1107,7 +1203,7 @@
   });
 
   document.getElementById('next-student-btn').addEventListener('click', function() {
-    if (currentStudentIndex < studentsList.length - 1) {
+    if (currentStudentIndex >= 0 && currentStudentIndex < studentsList.length - 1) {
       navigateToStudent(studentsList[currentStudentIndex + 1].id);
     }
   });

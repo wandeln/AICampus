@@ -2008,11 +2008,11 @@ async def get_task_students(
         .where(UserCourse.course_id == course_id)
         .where(UserCourse.role_in_course == CourseRole.STUDENT)
     ).all()
-    students = [m.user for m in memberships]
 
     # Für jeden Student prüfen, ob Einreichungen existieren
     result = []
-    for student in students:
+    for m in memberships:
+        student = m.user
         subs = session.exec(
             select(Submission)
             .where(Submission.task_id == task_id)
@@ -2040,6 +2040,9 @@ async def get_task_students(
             "id": student.id,
             "name": student.name,
             "username": student.username,
+            # Annotations (Gruppe) der Membership — für den aus der
+            # Übersicht übernommenen Filter in der Bewertungsseite.
+            "annotation": m.annotation,
             "has_submissions": has_submissions,
             "latest_points": latest_points,
             "has_override": has_override,

@@ -116,6 +116,7 @@ def review_ctx(task):
         "student_username": "testuser",
         "hints": [],
         "hints_enabled": task["hints_enabled"],
+        "review_qs": "?annotation_filter=%C3%9CG-1&sort=task-42&sort_dir=asc",
     })
     return ctx
 

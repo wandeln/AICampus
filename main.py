@@ -16,7 +16,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 # Logging konfigurieren
 logging.basicConfig(
@@ -73,6 +73,7 @@ from services.mc_service import (
 )
 from services import image_spec_service
 from services import upload_service
+from services.task_filter import multi_keyword_matches
 from services import trash_service
 from services.workspace_service import workspace_service, prune_backup_loop
 from services.slides_service import (
@@ -2753,22 +2754,40 @@ async def submission_review_page(
         session, user, request, course_id, active_tab="overview"
     )
 
-    # Previous and next visible tasks (like student view)
-    prev_task_obj = session.exec(
-        select(Task)
-        .where(Task.course_id == course_id)
-        .where(Task.display_order < task.display_order)  # type: ignore[operator]
-        .where(Task.is_visible == True)
-        .order_by(Task.display_order.desc())  # type: ignore[attr-defined]
-    ).first()
+    # Previous and next visible tasks (like student view) — bei übergebenem
+    # Aufgabenfilter (aus der Übersicht) nur innerhalb der gefilterten
+    # Aufgaben navigieren; gleiche Semantik wie in der Punktetabelle.
+    filter_text = request.query_params.get("filter_text", "").strip()
+    type_filter = request.query_params.get("type_filter", "").strip()
 
-    next_task_obj = session.exec(
+    nav_tasks = session.exec(
         select(Task)
         .where(Task.course_id == course_id)
-        .where(Task.display_order > task.display_order)  # type: ignore[operator]
         .where(Task.is_visible == True)
         .order_by(Task.display_order.asc())  # type: ignore[attr-defined]
-    ).first()
+    ).all()
+    if filter_text:
+        nav_tasks = [t for t in nav_tasks if multi_keyword_matches(t.title, filter_text)]
+    if type_filter:
+        nav_tasks = [t for t in nav_tasks if t.task_type.value == type_filter]
+
+    prev_task_obj = None
+    next_task_obj = None
+    for i, t in enumerate(nav_tasks):
+        if t.id == task.id:
+            prev_task_obj = nav_tasks[i - 1] if i > 0 else None
+            next_task_obj = nav_tasks[i + 1] if i + 1 < len(nav_tasks) else None
+            break
+
+    # Aus der Übersicht übernommener Filter-/Sortier-State: wird von der
+    # Review-Seite für die Studenten-Liste genutzt und bei allen
+    # Navigations-Links unverändert mitgegeben.
+    review_params = {
+        k: request.query_params[k]
+        for k in ("filter_text", "type_filter", "annotation_filter", "sort", "sort_dir")
+        if request.query_params.get(k)
+    }
+    review_qs = ("?" + urlencode(review_params)) if review_params else ""
 
     # Calculate student's latest points for this task (like student view)
     student_subs = session.exec(
@@ -2849,6 +2868,7 @@ async def submission_review_page(
             "hints_enabled": task.hints_enabled,
             "prev_task": {"id": prev_task_obj.id, "title": prev_task_obj.title} if prev_task_obj else None,
             "next_task": {"id": next_task_obj.id, "title": next_task_obj.title} if next_task_obj else None,
+            "review_qs": review_qs,
         },
     )
 
