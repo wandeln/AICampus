@@ -968,6 +968,14 @@
   background: rgba(0, 0, 0, 0.25);
   border-radius: 9999px;
 }
+
+/* Reaktions-Leiste (Forum + DM): bei Message-Hover oben rechts an der
+   Nachricht eingeblendet (Tailwind-Group im Markup); "force-visible"
+   wird auf Touch-Geräten (kein Hover) per Nachricht-Tap toggelt. */
+.react-bar.force-visible {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
 /* DM-Eingabefeld: ab der Auto-Grow-Obergrenze (120px) scrollt es —
    schlichte, dünne Scrollbar wie bei den Skript-Fragen. */
 #dm-input {

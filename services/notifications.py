@@ -108,6 +108,35 @@ def push_dm_message(session: Session, chat_id: int, message_id: int) -> None:
         logger.exception("[Notifications] DM-Live-Event (Chat %s) fehlgeschlagen.", chat_id)
 
 
+def push_forum_reaction(session: Session, course_id: int, channel_id: int, message_id: int) -> None:
+    """Live-Event (SSE): Emoji-Reaktion geändert → offene Forum-Seiten updaten.
+
+    Wie push_forum_message: alle Kurs-Mitglieder bekommen das Event;
+    Payload ohne Inhalt — die Seite holt die Reaktionen per GET nach.
+    """
+    try:
+        payload = {
+            "event": "forum_reaction",
+            "course_id": course_id,
+            "channel_id": channel_id,
+            "message_id": message_id,
+        }
+        for uid in course_member_ids(session, course_id):
+            _push(uid, payload)
+    except Exception:
+        logger.exception("[Notifications] Forum-Reaktions-Live-Event (Kurs %s, Kanal %s) fehlgeschlagen.", course_id, channel_id)
+
+
+def push_dm_reaction(session: Session, chat_id: int, message_id: int) -> None:
+    """Live-Event (SSE): Emoji-Reaktion geändert → offene DM-Panels updaten."""
+    try:
+        payload = {"event": "dm_reaction", "chat_id": chat_id, "message_id": message_id}
+        for uid in chat_member_ids(session, chat_id):
+            _push(uid, payload)
+    except Exception:
+        logger.exception("[Notifications] DM-Reaktions-Live-Event (Chat %s) fehlgeschlagen.", chat_id)
+
+
 def push_dm_webpush(session: Session, chat_id: int, chat_title: str,
                     sender: User, content: str) -> None:
     """Browser-Web-Push für eine neue DM — bewusst OHNE Glocke-Eintrag.

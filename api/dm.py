@@ -22,6 +22,10 @@ Nachrichten (im Chat):
 - POST   /api/dm/chats/{id}/messages
 - POST   /api/dm/chats/{id}/read?up_to_id=N
 
+Emoji-Reaktionen (Messenger-Stil, Toggle):
+- POST   /api/dm/chats/{id}/messages/{message_id}/reactions  (Body {emoji})
+- GET    /api/dm/chats/{id}/messages/{message_id}/reactions
+
 User-Suche (für „Neuer Chat"):
 - GET    /api/users/search?q=
 """
@@ -43,10 +47,11 @@ from database.models import (
     DmGroupChatCreate,
     DmMessage,
     DmMessageCreate,
+    MessageReactionToggle,
     Notification,
     User,
 )
-from services import notifications
+from services import notifications, reactions
 from services.auth_service import get_current_user
 from services.timeutil import campus_date, utc_iso
 
@@ -267,8 +272,10 @@ def _ensure_member(session: Session, chat: DmChat, user_id: int) -> None:
 
 
 def _delete_chat(session: Session, chat: DmChat) -> None:
-    """Chat inkl. Nachrichten, Read-States + DM-Benachrichtigungen löschen."""
-    for m in session.exec(select(DmMessage).where(DmMessage.chat_id == chat.id)).all():
+    """Chat inkl. Nachrichten, Reaktionen, Read-States + DM-Benachrichtigungen löschen."""
+    msgs = session.exec(select(DmMessage).where(DmMessage.chat_id == chat.id)).all()
+    reactions.delete_reactions_for_messages(session, reactions.KIND_DM, [m.id for m in msgs])
+    for m in msgs:
         session.delete(m)
     for rs in session.exec(select(DmChatReadState).where(DmChatReadState.chat_id == chat.id)).all():
         session.delete(rs)
@@ -279,7 +286,12 @@ def _delete_chat(session: Session, chat: DmChat) -> None:
     session.delete(chat)
 
 
-def _message_dict(msg: DmMessage, sender: Optional[User], viewer: User) -> dict[str, Any]:
+def _message_dict(
+    msg: DmMessage,
+    sender: Optional[User],
+    viewer: User,
+    reactions_list: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
     return {
         "id": msg.id,
         "chat_id": msg.chat_id,
@@ -290,6 +302,7 @@ def _message_dict(msg: DmMessage, sender: Optional[User], viewer: User) -> dict[
         "name": sender.name if sender else "unknown",
         "avatar": f"/avatars/{sender.avatar.rsplit('/', 1)[-1]}" if sender and sender.avatar else None,
         "is_self": msg.user_id == viewer.id,
+        "reactions": reactions_list or [],
     }
 
 
@@ -316,7 +329,11 @@ def load_messages_payload(
         msgs = msgs[-DM_PAGE_SIZE:]
 
     users = _users_by_id(session, {m.user_id for m in msgs})
-    return [_message_dict(m, users.get(m.user_id), viewer) for m in msgs]
+    msg_reactions = reactions.load_reactions(session, reactions.KIND_DM, [m.id for m in msgs], viewer.id)
+    return [
+        _message_dict(m, users.get(m.user_id), viewer, reactions_list=msg_reactions.get(m.id))
+        for m in msgs
+    ]
 
 
 def latest_message_id(session: Session, chat_id: int) -> int:
@@ -590,6 +607,55 @@ async def create_dm_message(
     notifications.push_dm_webpush(session, chat.id, chat_title(session, chat, viewer, members, users), viewer, content)
 
     return _message_dict(msg, viewer, viewer)
+
+
+def _get_dm_message(session: Session, chat: DmChat, message_id: int) -> DmMessage:
+    msg = session.exec(
+        select(DmMessage)
+        .where(DmMessage.id == message_id)
+        .where(DmMessage.chat_id == chat.id)
+    ).first()
+    if not msg:
+        raise HTTPException(404, "Nachricht nicht gefunden.")
+    return msg
+
+
+@router.post("/dm/chats/{chat_id}/messages/{message_id}/reactions")
+async def toggle_dm_message_reaction(
+    chat_id: int,
+    message_id: int,
+    data: MessageReactionToggle,
+    session: Session = Depends(get_session),
+    viewer: User = Depends(get_current_user),
+):
+    """Eigene Emoji-Reaktion auf die Nachricht setzen — oder entfernen, wenn sie
+    schon da ist (Toggle wie in Messengern). Liefert die neue Reaktionsliste."""
+    chat = _get_chat_or_404(session, chat_id)
+    _require_membership(session, chat, viewer)
+    msg = _get_dm_message(session, chat, message_id)
+    emoji = data.emoji.strip()
+    if not emoji:
+        raise HTTPException(400, "Emoji darf nicht leer sein.")
+
+    new_reactions = reactions.toggle_reaction(session, reactions.KIND_DM, msg.id, viewer.id, emoji)
+    session.commit()
+    notifications.push_dm_reaction(session, chat.id, msg.id)  # type: ignore[arg-type]
+    return {"message_id": msg.id, "reactions": new_reactions}
+
+
+@router.get("/dm/chats/{chat_id}/messages/{message_id}/reactions")
+async def get_dm_message_reactions(
+    chat_id: int,
+    message_id: int,
+    session: Session = Depends(get_session),
+    viewer: User = Depends(get_current_user),
+):
+    """Aktuelle Reaktionen der Nachricht (z. B. nach einem Live-Reaktions-Event)."""
+    chat = _get_chat_or_404(session, chat_id)
+    _require_membership(session, chat, viewer)
+    msg = _get_dm_message(session, chat, message_id)
+    all_reactions = reactions.load_reactions(session, reactions.KIND_DM, [msg.id], viewer.id)
+    return {"message_id": msg.id, "reactions": all_reactions.get(msg.id, [])}
 
 
 @router.post("/dm/chats/{chat_id}/read")

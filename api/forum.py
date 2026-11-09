@@ -18,6 +18,11 @@ Nachrichten (im Kanal):
 - POST   /courses/{course_id}/forum/channels/{channel_id}/messages
 - DELETE /courses/{course_id}/forum/channels/{channel_id}/messages/{message_id}
 
+Emoji-Reaktionen (Messenger-Stil, Toggle):
+- POST   /courses/{course_id}/forum/channels/{channel_id}/messages/{message_id}/reactions
+         - Body {emoji}: eigene Reaktion setzen/entfernen, liefert neue Liste
+- GET    /courses/{course_id}/forum/channels/{channel_id}/messages/{message_id}/reactions
+
 Gelesen-Status (für Ungelesen-Zähler):
 - POST   /courses/{course_id}/forum/channels/{channel_id}/read
          - ?up_to_id=N: Kanal als gelesen bis Nachricht N markieren
@@ -45,11 +50,12 @@ from database.models import (
     ForumMessage,
     ForumMessageCreate,
     GlobalUserRole,
+    MessageReactionToggle,
     Notification,
     User,
     UserCourse,
 )
-from services import notifications
+from services import notifications, reactions
 from services.auth_service import require_course_access
 from services.timeutil import campus_date, utc_iso
 
@@ -122,8 +128,9 @@ def _message_dict(
     sender: Optional[User],
     role: str,
     can_delete: bool,
+    reactions: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
-    """Eine Nachricht als Template-/API-JSON (inkl. Sender-Infos)."""
+    """Eine Nachricht als Template-/API-JSON (inkl. Sender-Infos + Reaktionen)."""
     return {
         "id": msg.id,
         "channel_id": msg.channel_id,
@@ -135,6 +142,7 @@ def _message_dict(
         "role": role,
         "avatar": f"/avatars/{sender.avatar.rsplit('/', 1)[-1]}" if sender and sender.avatar else None,
         "can_delete": can_delete,
+        "reactions": reactions or [],
     }
 
 
@@ -252,12 +260,16 @@ def load_forum_payload(
     }
 
     is_staff = viewer.role == GlobalUserRole.ADMIN or viewer_role in (CourseRole.PROF.value, CourseRole.TUTOR.value)
+    msg_reactions = reactions.load_reactions(
+        session, reactions.KIND_FORUM, [m.id for m in msgs], viewer.id
+    )
     return [
         _message_dict(
             m,
             users.get(m.user_id),
             roles.get(m.user_id) or "STUDENT",
             can_delete=is_staff or m.user_id == viewer.id,
+            reactions=msg_reactions.get(m.id),
         )
         for m in msgs
     ]
@@ -388,6 +400,9 @@ async def delete_forum_channel(
         select(Notification).where(Notification.channel_id == channel_id)
     ).all():
         session.delete(note)
+    reactions.delete_reactions_for_messages(
+        session, reactions.KIND_FORUM, [m.id for m in msg_count]
+    )
     session.delete(ch)
     session.commit()
     return {"message": f"Kanal '{ch.name}' gelöscht."}
@@ -466,6 +481,58 @@ async def create_forum_message(
     return _message_dict(msg, viewer, role, can_delete=True)
 
 
+def _get_message(session: Session, course_id: int, channel_id: int, message_id: int) -> ForumMessage:
+    msg = session.exec(
+        select(ForumMessage)
+        .where(ForumMessage.id == message_id)
+        .where(ForumMessage.course_id == course_id)
+        .where(ForumMessage.channel_id == channel_id)
+    ).first()
+    if not msg:
+        raise HTTPException(404, "Nachricht nicht gefunden.")
+    return msg
+
+
+@router.post("/courses/{course_id}/forum/channels/{channel_id}/messages/{message_id}/reactions")
+async def toggle_forum_message_reaction(
+    course_id: int,
+    channel_id: int,
+    message_id: int,
+    data: MessageReactionToggle,
+    session: Session = Depends(get_session),
+    viewer_and_course: tuple[User, int] = Depends(require_course_access(*_ALL_COURSE_ROLES)),
+):
+    """Eigene Emoji-Reaktion auf die Nachricht setzen — oder entfernen, wenn sie
+    schon da ist (Toggle wie in Messengern). Liefert die neue Reaktionsliste."""
+    viewer, _ = viewer_and_course
+    ch = _get_channel(session, course_id, channel_id)
+    msg = _get_message(session, course_id, ch.id, message_id)
+    emoji = data.emoji.strip()
+    if not emoji:
+        raise HTTPException(400, "Emoji darf nicht leer sein.")
+
+    new_reactions = reactions.toggle_reaction(session, reactions.KIND_FORUM, msg.id, viewer.id, emoji)
+    session.commit()
+    notifications.push_forum_reaction(session, course_id, ch.id, msg.id)  # type: ignore[arg-type]
+    return {"message_id": msg.id, "reactions": new_reactions}
+
+
+@router.get("/courses/{course_id}/forum/channels/{channel_id}/messages/{message_id}/reactions")
+async def get_forum_message_reactions(
+    course_id: int,
+    channel_id: int,
+    message_id: int,
+    session: Session = Depends(get_session),
+    viewer_and_course: tuple[User, int] = Depends(require_course_access(*_ALL_COURSE_ROLES)),
+):
+    """Aktuelle Reaktionen der Nachricht (z. B. nach einem Live-Reaktions-Event)."""
+    viewer, _ = viewer_and_course
+    ch = _get_channel(session, course_id, channel_id)
+    msg = _get_message(session, course_id, ch.id, message_id)
+    all_reactions = reactions.load_reactions(session, reactions.KIND_FORUM, [msg.id], viewer.id)
+    return {"message_id": msg.id, "reactions": all_reactions.get(msg.id, [])}
+
+
 @router.delete("/courses/{course_id}/forum/channels/{channel_id}/messages/{message_id}")
 async def delete_forum_message(
     course_id: int,
@@ -476,20 +543,13 @@ async def delete_forum_message(
 ):
     """Forum-Nachricht löschen (eigene; Tutor/PROF dürfen alle löschen)."""
     viewer, _ = viewer_and_course
-    _get_channel(session, course_id, channel_id)
-    msg = session.exec(
-        select(ForumMessage)
-        .where(ForumMessage.id == message_id)
-        .where(ForumMessage.course_id == course_id)
-        .where(ForumMessage.channel_id == channel_id)
-    ).first()
-    if not msg:
-        raise HTTPException(404, "Nachricht nicht gefunden.")
+    msg = _get_message(session, course_id, channel_id, message_id)
 
     is_staff = _is_staff(session, viewer, course_id)
     if not is_staff and msg.user_id != viewer.id:
         raise HTTPException(403, "Nur eigene Nachrichten löschen (oder als Tutor/PROF).")
 
+    reactions.delete_reactions_for_messages(session, reactions.KIND_FORUM, [msg.id])
     session.delete(msg)
     session.commit()
     return {"message": "Nachricht gelöscht."}

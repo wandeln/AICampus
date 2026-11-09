@@ -143,6 +143,12 @@
 
     <!-- Eingabefeld -->
     <form id="forum-form" class="my-3 flex items-end gap-2 px-4 sm:px-0">
+      {# Emoji-Button öffnet den geteilten Picker (emoji-picker.js);
+         das Emoji wird an die Cursorposition eingefügt. #}
+      <button type="button" id="forum-emoji-btn" title="Emoji einfügen"
+        class="shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition">
+        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/></svg>
+      </button>
       <textarea
         id="forum-input"
         rows="1"
@@ -257,9 +263,25 @@
     return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' + time;
   }
 
+  // Reaktions-Leiste (Messenger-Stil): bei Hover oben rechts an der
+  // Nachricht; die 8 häufigsten Emojis direkt, „…" öffnet den vollen
+  // Picker (emoji-picker.js). Auf Touch-Geräten per Tap (s. unten).
+  function forumReactionBarHtml() {
+    const emojis = (window.EMOJIS_QUICK || [])
+      .map((e) => `<button type="button" class="react-emoji w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 transition text-base leading-none" data-emoji="${e}">${e}</button>`)
+      .join('');
+    // right-7: die Lösch-Spalte (✕, rechte Kante) bleibt frei klickbar.
+    return `<div class="react-bar absolute -top-3 right-7 z-10 flex items-center gap-0.5 bg-white border border-gray-200 rounded-lg shadow-md px-1 py-0.5
+                   opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto transition">
+      ${emojis}
+      <button type="button" class="react-more w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 transition text-gray-400 text-sm leading-none" title="Mehr Emojis">⋯</button>
+    </div>`;
+  }
+
   function forumMessageEl(m) {
     const el = document.createElement('div');
-    el.className = 'forum-message flex gap-3 group';
+    el.className = 'forum-message relative flex gap-3 group';
+    el.dataset.msgId = m.id;
     const roleClass = ROLE_STYLES[m.role] || 'bg-gray-100 text-gray-600';
     el.innerHTML = `
       ${forumAvatarHtml(m)}
@@ -275,11 +297,16 @@
           <span class="text-xs text-gray-400">${forumTimeLabel(m.created_at)}</span>
         </div>
         <div class="forum-content text-sm text-gray-700 break-words mt-0.5"></div>
+        <div class="forum-reactions flex flex-wrap gap-1 mt-1 hidden"></div>
       </div>
-       ${m.can_delete
-         ? `<button type="button" class="forum-delete opacity-0 group-hover:opacity-100 self-start mt-0.5 text-gray-300 hover:text-red-500 transition" data-id="${m.id}" title="Nachricht löschen">✕</button>`
-         : ''}
+      <div class="flex flex-col gap-0.5 self-start mt-0.5">
+        ${m.can_delete
+          ? `<button type="button" class="forum-delete opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition" data-id="${m.id}" title="Nachricht löschen">✕</button>`
+          : ''}
+      </div>
+      ${forumReactionBarHtml()}
     `;
+    renderForumReactions(el.querySelector('.forum-reactions'), m.reactions);
     // Markdown + KaTeX + Querverweise: derselbe Renderer wie Skript/Slides
     // (breaks: einzelne Zeilenumbrüche bleiben, wie im Chat gewohnt).
     // Kein Zwischen-Rohtext: der Initial-Load wartet auf die Refmaps (s. u.),
@@ -385,8 +412,77 @@
     if (chatVisible()) markChannelRead();
   }
 
-  // ─── Löschen (Event-Delegation) ──────────────────────────────
+  // ─── Emoji-Reaktionen (Messenger-Stil) ─────────────────────────
+  function renderForumReactions(container, reactions) {
+    if (!container) return;
+    container.innerHTML = (reactions || []).map((r) => {
+      const names = (r.users || []).map((u) => escapeHtml(u.name)).join(', ');
+      return `<button type="button" class="react-chip inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs border transition ${
+        r.mine ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-gray-100 border-gray-200 text-gray-600 hover:bg-gray-200'
+      }" data-emoji="${r.emoji}" title="${names}">${r.emoji} <span class="font-semibold">${r.count}</span></button>`;
+    }).join('');
+    container.classList.toggle('hidden', !(reactions || []).length);
+  }
+
+  function updateForumReactionsDom(messageId, reactions) {
+    const el = forumList.querySelector(`.forum-message[data-msg-id="${messageId}"]`);
+    if (el) renderForumReactions(el.querySelector('.forum-reactions'), reactions);
+  }
+
+  async function toggleForumReaction(messageId, emoji) {
+    if (activeChannelId == null) return;
+    try {
+      const res = await fetch(`${forumBase}/channels/${activeChannelId}/messages/${messageId}/reactions`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emoji }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.detail || 'Reaktion fehlgeschlagen.', 'error');
+        return;
+      }
+      updateForumReactionsDom(messageId, (await res.json()).reactions);
+    } catch (err) {
+      showToast('Fehler: ' + err.message, 'error');
+    }
+  }
+
+  async function refreshForumReactions(messageId) {
+    // Nach einem Live-Reaktions-Event: Stand der einen Nachricht nachladen
+    // (taucht im after_id-Poll nicht auf — der holt nur neuere Nachrichten).
+    if (activeChannelId == null) return;
+    try {
+      const res = await fetch(`${forumBase}/channels/${activeChannelId}/messages/${messageId}/reactions`, { credentials: 'same-origin' });
+      if (res.ok) updateForumReactionsDom(messageId, (await res.json()).reactions);
+    } catch { /* kein Netz — nächster Poll/Reload zeigt den Stand */ }
+  }
+
+  // ─── Löschen / Reagieren (Event-Delegation) ───────────────────
+  function closeForumReactionBars() {
+    document.querySelectorAll('#forum-messages .react-bar.force-visible').forEach((b) => b.classList.remove('force-visible'));
+  }
   forumList.addEventListener('click', async (e) => {
+    const chip = e.target.closest('.react-chip');
+    if (chip) {
+      const msgEl = chip.closest('.forum-message');
+      if (msgEl) { toggleForumReaction(Number(msgEl.dataset.msgId), chip.dataset.emoji); closeForumReactionBars(); }
+      return;
+    }
+    // Leisten-Emoji (Hover-Leiste) = Toggle; „…" = voller Picker
+    const barEmoji = e.target.closest('.react-emoji');
+    if (barEmoji) {
+      const msgEl = barEmoji.closest('.forum-message');
+      if (msgEl) { toggleForumReaction(Number(msgEl.dataset.msgId), barEmoji.dataset.emoji); closeForumReactionBars(); }
+      return;
+    }
+    const more = e.target.closest('.react-more');
+    if (more) {
+      const msgEl = more.closest('.forum-message');
+      if (msgEl) emojiPicker.open(more, (emoji) => { toggleForumReaction(Number(msgEl.dataset.msgId), emoji); closeForumReactionBars(); });
+      return;
+    }
     const btn = e.target.closest('.forum-delete');
     if (!btn) return;
     if (!confirm('Diese Nachricht wirklich löschen?')) return;
@@ -405,6 +501,21 @@
       showToast('Fehler: ' + err.message, 'error');
     }
   });
+
+  // Touch (kein Hover): Tap auf die Nachricht toggelt die Reaktions-Leiste,
+  // Tap woanders/andere Nachricht schließt sie.
+  if (window.matchMedia('(hover: none)').matches) {
+    forumList.addEventListener('click', (e) => {
+      if (e.target.closest('.react-bar')) return; // Bar-Interaktion läuft oben
+      const msgEl = e.target.closest('.forum-message');
+      if (!msgEl) return;
+      const bar = msgEl.querySelector('.react-bar');
+      if (!bar) return;
+      const wasVisible = bar.classList.contains('force-visible');
+      closeForumReactionBars();
+      if (!wasVisible) bar.classList.add('force-visible');
+    });
+  }
 
   // ─── Senden ──────────────────────────────────────────────────
   forumForm.addEventListener('submit', async (e) => {
@@ -452,6 +563,14 @@
     const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
     forumInput.style.height = Math.min(forumInput.scrollHeight + border, 160) + 'px';
   });
+
+  // Emoji-Button: Picker öffnen, Auswahl an die Cursorposition einfügen.
+  const forumEmojiBtn = document.getElementById('forum-emoji-btn');
+  if (forumEmojiBtn) {
+    forumEmojiBtn.addEventListener('click', () => {
+      emojiPicker.open(forumEmojiBtn, (emoji) => insertEmojiAtCursor(forumInput, emoji));
+    });
+  }
 
   // ─── Polling: neue Nachrichten alle 4 s ──────────────────────
   let forumPolling = false;
@@ -547,6 +666,8 @@
         const data = JSON.parse(e.data);
         if (data.event === 'forum_message' && data.course_id === courseId && data.channel_id === activeChannelId) {
           pollForum();
+        } else if (data.event === 'forum_reaction' && data.course_id === courseId && data.channel_id === activeChannelId) {
+          refreshForumReactions(data.message_id);
         } else if (data.event === 'read') {
           refreshForumBadges();
         }

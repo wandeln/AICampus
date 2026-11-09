@@ -357,9 +357,24 @@
     }
   }
 
+  // Reaktions-Leiste (Messenger-Stil): bei Hover oben rechts an der
+  // Nachricht; die 8 häufigsten Emojis direkt, „…" öffnet den vollen
+  // Picker (emoji-picker.js). Auf Touch-Geräten per Tap (s. Init).
+  function dmReactionBarHtml() {
+    const emojis = (window.EMOJIS_QUICK || [])
+      .map((e) => `<button type="button" class="react-emoji w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 transition text-base leading-none" data-emoji="${e}">${e}</button>`)
+      .join("");
+    return `<div class="react-bar absolute -top-3 right-0 z-10 flex items-center gap-0.5 bg-white border border-gray-200 rounded-lg shadow-md px-1 py-0.5
+                   opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto transition">
+      ${emojis}
+      <button type="button" class="react-more w-7 h-7 flex items-center justify-center rounded-md hover:bg-gray-100 transition text-gray-400 text-sm leading-none" title="Mehr Emojis">⋯</button>
+    </div>`;
+  }
+
   function dmMessageEl(m) {
     const el = document.createElement("div");
-    el.className = "dm-message flex gap-3 group";
+    el.className = "dm-message relative flex gap-3 group";
+    el.dataset.msgId = m.id;
     // Avatar/Name → Profil (wie im Forum). "unknown" = gelöschter Nutzer.
     const profile = m.username && m.username !== "unknown" ? `/u/${m.username}` : null;
     const avatar = profile
@@ -376,8 +391,11 @@
           <span class="text-xs text-gray-400">${new Date(m.created_at).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
         </span>
         <span class="dm-content block text-sm text-gray-700 break-words mt-0.5"></span>
+        <span class="dm-reactions flex flex-wrap gap-1 mt-1 hidden"></span>
       </span>
+      ${dmReactionBarHtml()}
     `;
+    renderDmReactions(el.querySelector(".dm-reactions"), m.reactions);
     const md = el.querySelector(".dm-content");
     // Dasselbe Markdown-Rendering wie Forum/Skript (breaks: Zeilenumbrüche bleiben).
     el._renderDone = renderMarkdown(m.content, md, { breaks: true }).catch((e) => {
@@ -385,6 +403,53 @@
       md.textContent = m.content;
     });
     return el;
+  }
+
+  // ─── Emoji-Reaktionen (Messenger-Stil) ─────────────────────────
+
+  function dmReactionChipsHtml(reactions) {
+    return reactions
+      .map((r) => {
+        const names = (r.users || []).map((u) => escHtml(u.name)).join(", ");
+        return `<button type="button" class="react-chip inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs border transition ${
+          r.mine ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-gray-100 border-gray-200 text-gray-600 hover:bg-gray-200"
+        }" data-emoji="${r.emoji}" title="${names}">${r.emoji} <span class="font-semibold">${r.count}</span></button>`;
+      })
+      .join("");
+  }
+
+  function renderDmReactions(container, reactions) {
+    if (!container) return;
+    container.innerHTML = dmReactionChipsHtml(reactions || []);
+    container.classList.toggle("hidden", !(reactions || []).length);
+  }
+
+  function updateDmReactionsDom(messageId, reactions) {
+    const el = document.querySelector(`#dm-messages .dm-message[data-msg-id="${messageId}"]`);
+    if (!el) return; // noch nicht gerendert (ältere Seite) — nächster (Re-)Load zeigt sie
+    renderDmReactions(el.querySelector(".dm-reactions"), reactions);
+  }
+
+  async function dmToggleReaction(messageId, emoji) {
+    if (state.activeChatId == null) return;
+    try {
+      const res = await api(`/api/dm/chats/${state.activeChatId}/messages/${messageId}/reactions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emoji }),
+      });
+      updateDmReactionsDom(messageId, res.reactions);
+    } catch (e) {
+      showToast(e.message, "error");
+    }
+  }
+
+  async function refreshDmReactions(messageId) {
+    if (state.activeChatId == null) return;
+    try {
+      const res = await api(`/api/dm/chats/${state.activeChatId}/messages/${messageId}/reactions`);
+      updateDmReactionsDom(messageId, res.reactions);
+    } catch { /* kein Netz — nächster Poll/Lad zeigt den Stand */ }
   }
 
   function dmIsNearBottom() {
@@ -470,6 +535,10 @@
       if (!document.hidden) loadChats().catch(() => {});
       // Sofort nachladen, statt den 4-s-Timer zurückzusetzen und zu warten.
       if (state.open && p.chat_id === state.activeChatId) pollActiveMessages();
+    } else if (p.event === "dm_reaction") {
+      // Reaktions-Change auf eine ältere Nachricht (taucht im Poll nicht auf,
+      // der holt nur id > lastMsgId) → Reaktionen dieser Nachricht nachladen.
+      if (state.open && p.chat_id === state.activeChatId) refreshDmReactions(p.message_id);
     } else if (p.event === "read") {
       if (!document.hidden) loadChats().catch(() => {});
     }
@@ -810,6 +879,56 @@
       });
     }
 
+    // Emoji-Button im Composer: Picker öffnen, Auswahl an Cursorposition.
+    const emojiBtn = $("dm-emoji-btn");
+    if (emojiBtn && input) {
+      emojiBtn.addEventListener("click", () => {
+        emojiPicker.open(emojiBtn, (emoji) => insertEmojiAtCursor(input, emoji));
+      });
+    }
+
+    // Reaktionen: Event-Delegation über den Verlauf (dynamische Elemente).
+    // Chip- oder Leisten-Emoji = Toggle der eigenen Reaktion; „…" in der
+    // Hover-Leiste öffnet den vollen Picker (emoji-picker.js).
+    function closeDmReactionBars() {
+      document.querySelectorAll("#dm-messages .react-bar.force-visible").forEach((b) => b.classList.remove("force-visible"));
+    }
+    $("dm-messages").addEventListener("click", (e) => {
+      const chip = e.target.closest(".react-chip");
+      if (chip) {
+        const msgEl = chip.closest(".dm-message");
+        if (msgEl) { dmToggleReaction(Number(msgEl.dataset.msgId), chip.dataset.emoji); closeDmReactionBars(); }
+        return;
+      }
+      const barEmoji = e.target.closest(".react-emoji");
+      if (barEmoji) {
+        const msgEl = barEmoji.closest(".dm-message");
+        if (msgEl) { dmToggleReaction(Number(msgEl.dataset.msgId), barEmoji.dataset.emoji); closeDmReactionBars(); }
+        return;
+      }
+      const more = e.target.closest(".react-more");
+      if (more) {
+        const msgEl = more.closest(".dm-message");
+        if (msgEl) emojiPicker.open(more, (emoji) => { dmToggleReaction(Number(msgEl.dataset.msgId), emoji); closeDmReactionBars(); });
+        return;
+      }
+    });
+
+    // Touch (kein Hover): Tap auf die Nachricht toggelt die Leiste,
+    // Tap woanders/andere Nachricht schließt sie.
+    if (window.matchMedia("(hover: none)").matches) {
+      $("dm-messages").addEventListener("click", (e) => {
+        if (e.target.closest(".react-bar")) return; // Bar-Interaktion läuft oben
+        const msgEl = e.target.closest(".dm-message");
+        if (!msgEl) return;
+        const bar = msgEl.querySelector(".react-bar");
+        if (!bar) return;
+        const wasVisible = bar.classList.contains("force-visible");
+        closeDmReactionBars();
+        if (!wasVisible) bar.classList.add("force-visible");
+      });
+    }
+
     const search = $("dm-search-input");
     if (search) {
       search.addEventListener("input", () => {
@@ -837,12 +956,16 @@
         menu.classList.add("hidden");
       }
       // Panel: Klick außerhalb (auch auf die Navbar) schließt es —
-      // außer angeheftet (bleibt per Definition beim Klicken stehen).
+      // außer angeheftet (bleibt per Definition beim Klicken stehen)
+      // oder Klick im Emoji-Popover (liegt im <body> über dem Panel,
+      // s. emoji-picker.js — wäre sonst "außerhalb").
       // composedPath() = Event-Pfad vom Dispatch-Zeitpunkt, bleibt valide,
       // wenn der Handler das DOM zwischenzeitlich neu gerendert hat.
       if (!state.open || state.pinned) return;
-      const wrap = $("dm-wrap");
       const path = typeof e.composedPath === "function" ? e.composedPath() : [e.target];
+      const emojiPop = document.querySelector(".emoji-pop");
+      if (emojiPop && path.includes(emojiPop)) return;
+      const wrap = $("dm-wrap");
       if (!path.includes(panel) && !(wrap && path.includes(wrap))) setPanelOpen(false);
     });
     document.addEventListener("keydown", (e) => {

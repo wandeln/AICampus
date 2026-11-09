@@ -1221,6 +1221,38 @@ class DmMessageRead(SQLModel):
     is_self: bool = False
 
 
+class MessageReactionBase(SQLModel):
+    kind: str = Field(max_length=10)  # "forum" (forum_messages.id) | "dm" (dm_messages.id)
+    message_id: int = Field(index=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    emoji: str = Field(max_length=16)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class MessageReaction(MessageReactionBase, table=True):
+    """Emoji-Reaktion auf eine Forum- oder DM-Nachricht (Messenger-Stil).
+
+    Polymorph über ``kind`` — keine FK, da zwei verschiedene
+    Nachrichten-Tabellen (forum_messages / dm_messages). Maximal eine
+    Reaktion pro User+Emoji: erneut reagieren entfernt sie (Toggle).
+    Neue Tabelle wird beim App-Start per create_all angelegt.
+    """
+
+    __tablename__ = "message_reactions"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    user: Optional["User"] = Relationship()
+
+    __table_args__ = (UniqueConstraint("kind", "message_id", "user_id", "emoji"),)
+
+
+class MessageReactionToggle(SQLModel):
+    """Body für das Toggle-Endpoint: welches Emoji."""
+
+    emoji: str = Field(min_length=1, max_length=16)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # SKRIPT-FRAGEN (Studenten-Fragen zum Skript, inkl. LLM- +
 # Human-Antworten; für Tutoren/Profs zur Skript-Verbesserung)
