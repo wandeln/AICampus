@@ -498,6 +498,47 @@
                 </div>
               </div>
 
+              <div class="border-t border-gray-200 pt-4">
+                <h3 class="text-sm font-semibold text-gray-700">Image Endpoint (optional)</h3>
+                <p class="text-xs text-gray-400 mt-1 mb-3">
+                  Für die <strong>Erstellung &amp; Bearbeitung von Bildern</strong>
+                  (z. B. Qwen-Image via vLLM-Omni). OpenAI-kompatibler
+                  <code>/v1</code> mit <code>/v1/images/generations</code>.
+                  Leer lassen = Defaults aus <code>config.py</code> werden verwendet.
+                </p>
+
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">API-Endpoint</label>
+                    <input type="text" id="setting-llm-url-image"
+                           placeholder="http://localhost:8002/v1"
+                           class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono">
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 mb-1">Modell</label>
+                      <input type="text" id="setting-llm-model-image"
+                             placeholder="qwen-image-turbo"
+                             class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 mb-1">API-Key</label>
+                      <input type="password" id="setting-llm-key-image"
+                             placeholder="sk-..."
+                             class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                    </div>
+                  </div>
+
+                  <div class="flex gap-3">
+                    <button onclick="testLlmImageConnection()" class="bg-purple-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-purple-700 transition">
+                      🧪 Image Endpoint testen
+                    </button>
+                  </div>
+                  <div id="llm-test-result-image" class="hidden text-sm"></div>
+                </div>
+              </div>
+
               <div class="flex gap-3">
                 <button onclick="saveLlmSettings()" class="bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700 transition">
                   💾 LLM-Einstellungen speichern
@@ -1056,6 +1097,11 @@
       document.getElementById('setting-llm-url-public').value = data.llm_api_url_public || '';
       document.getElementById('setting-llm-model-public').value = data.llm_model_public || '';
       document.getElementById('setting-llm-key-public').value = '';
+
+      // Image Endpoint (Bilder); Key wird NICHT befuellen
+      document.getElementById('setting-llm-url-image').value = data.llm_image_api_url || '';
+      document.getElementById('setting-llm-model-image').value = data.llm_image_model || '';
+      document.getElementById('setting-llm-key-image').value = '';
 
       // LDAP-Fields befuellen
       document.getElementById('setting-ldap-enabled').checked = data.use_ldap || false;
@@ -1662,6 +1708,11 @@
       llm_api_url_public: document.getElementById('setting-llm-url-public').value.trim(),
       llm_api_key_public: document.getElementById('setting-llm-key-public').value.trim() || null,
       llm_model_public: document.getElementById('setting-llm-model-public').value.trim(),
+      // Image Endpoint: URL/Modell "" = Fallback auf config.py-Defaults (erlaubt Löschen);
+      // API-Key "" = bestehenden Key behalten (Feld wird nicht befuellt).
+      llm_image_api_url: document.getElementById('setting-llm-url-image').value.trim(),
+      llm_image_api_key: document.getElementById('setting-llm-key-image').value.trim() || null,
+      llm_image_model: document.getElementById('setting-llm-model-image').value.trim(),
     };
 
     try {
@@ -1790,6 +1841,37 @@
     }
   }
 
+  // ─── Test Image Endpoint (echte Mini-Generierung) ───────────────
+  async function testLlmImageConnection() {
+    const url = document.getElementById('setting-llm-url-image').value.trim();
+    const model = document.getElementById('setting-llm-model-image').value.trim();
+    const apiKey = document.getElementById('setting-llm-key-image').value.trim();
+    const result = document.getElementById('llm-test-result-image');
+
+    result.classList.remove('hidden');
+    result.innerHTML = '<span class="text-blue-600"><span class="animate-spin">⏳</span> Bild wird generiert (512×512, ~2-30 s)...</span>';
+
+    try {
+      const res = await fetch('/api/admin/llm/test-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_url: url, api_key: apiKey || null, model: model }),
+        credentials: 'same-origin',
+      });
+
+      if (!res.ok) throw new Error('HTTP ' + res.status + ' — App nicht erreichbar (gerade neu gestartet? Bitte erneut versuchen).');
+      const data = await res.json();
+
+      if (data.success) {
+        result.innerHTML = `<span class="text-green-600">✅ Bild erfolgreich erzeugt! (${data.latency_ms}ms, ${data.size})</span>`;
+      } else {
+        result.innerHTML = `<span class="text-red-600">❌ Fehler: ${data.error || 'Keine Verbindung'}</span>`;
+      }
+
+    } catch (err) {
+      result.innerHTML = `<span class="text-red-600">❌ Fehler: ${err.message}</span>`;
+    }
+  }
 
 
   // ─── Delete Course ───────────────────────────────────────────────

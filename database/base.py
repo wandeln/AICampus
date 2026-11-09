@@ -135,6 +135,10 @@ def migrate_schema():
             "llm_api_url_public": "VARCHAR",
             "llm_api_key_public": "VARCHAR",
             "llm_model_public": "VARCHAR",
+            # Image-Endpoint (Bilder erstellen/editieren, z. B. Qwen-Image via vLLM-Omni)
+            "llm_image_api_url": "VARCHAR",
+            "llm_image_api_key": "VARCHAR",
+            "llm_image_model": "VARCHAR",
             # Compute/Workspaces (per-Student-Docker-Container)
             "compute_enabled": "BOOLEAN DEFAULT 0",
             "compute_agents": "VARCHAR",  # JSON-Liste [{name,url,key,gpu}]

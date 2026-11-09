@@ -106,6 +106,13 @@ LLM_API_URL_PUBLIC = os.getenv("LLM_API_URL_PUBLIC", "")
 LLM_API_KEY_PUBLIC = os.getenv("LLM_API_KEY_PUBLIC", "")
 LLM_MODEL_PUBLIC = os.getenv("LLM_MODEL_PUBLIC", "")
 
+# Image-Endpoint (Bilder erstellen/editieren, z. B. Qwen-Image via vLLM-Omni).
+# OpenAI-kompatibler /v1 mit /v1/images/generations + /v1/images/edits.
+# Default zeigt auf den venusberg-Image-Tunnel (8002).
+LLM_IMAGE_API_URL = os.getenv("LLM_IMAGE_API_URL", "http://localhost:8002/v1")
+LLM_IMAGE_API_KEY = os.getenv("LLM_IMAGE_API_KEY", "sk-default")
+LLM_IMAGE_MODEL = os.getenv("LLM_IMAGE_MODEL", "qwen-image-turbo")
+
 # ─── LDAP (optional) ───────────────────────────────────────────
 LDAP_ENABLED = os.getenv("LDAP_ENABLED", "false").lower() in ("true", "1", "yes")
 LDAP_SERVER = os.getenv("LDAP_SERVER", "ldap.uni.de")

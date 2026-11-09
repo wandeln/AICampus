@@ -469,6 +469,9 @@ async def get_global_settings(
         # Public Endpoint (nicht-sensitive Aufgaben); API-Key wird nicht ausgegeben
         "llm_api_url_public": gs.llm_api_url_public,
         "llm_model_public": gs.llm_model_public,
+        # Image-Endpoint (Bilder erstellen/editieren); API-Key wird nicht ausgegeben
+        "llm_image_api_url": gs.llm_image_api_url,
+        "llm_image_model": gs.llm_image_model,
         "use_ldap": gs.use_ldap,
         "ldap_server": gs.ldap_server,
         "ldap_base_dn": gs.ldap_base_dn,
@@ -515,6 +518,8 @@ async def update_global_settings(
             "llm_model": gs.llm_model,
             "llm_api_url_public": gs.llm_api_url_public,
             "llm_model_public": gs.llm_model_public,
+            "llm_image_api_url": gs.llm_image_api_url,
+            "llm_image_model": gs.llm_image_model,
             "ldap_server": gs.ldap_server,
             "ldap_base_dn": gs.ldap_base_dn,
             "ldap_bind_dn": gs.ldap_bind_dn,
@@ -767,6 +772,89 @@ async def test_llm(
     if test_error is not None:
         record_llm_debug_entry(
             label="ADMIN_LLM_TEST", model=model, url=api_url, is_public=False,
+            system_prompt="", prompt=test_prompt,
+            response="", success=False, error=test_error, attempts=1,
+        )
+        return {"success": False, "error": test_error}
+
+
+@router.post("/llm/test-image")
+async def test_llm_image(
+    data: LlmTestRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_global_admin()),
+):
+    """
+    Testet den Image-Endpoint (Bilder erstellen/editieren).
+    Nutzt die eingegebene URL/das eingegebene Modell oder sonst die globale
+    Image-Konfiguration. Führt eine echte kleine Generierung (512×512) durch
+    und gibt Latenz zurueck.
+    """
+    from time import monotonic
+    from openai import AsyncOpenAI, APIConnectionError, APITimeoutError, AuthenticationError, BadRequestError
+
+    # Resolve: request body > global_settings > config.py default
+    cfg = get_effective_llm_config(session)
+    api_url = data.api_url or cfg["api_url_image"]
+    api_key = data.api_key or cfg["api_key_image"]
+    model = data.model or cfg["model_image"]
+
+    if not api_url or not model:
+        return {"success": False, "error": "API-URL und Modell sind erforderlich."}
+
+    client = AsyncOpenAI(
+        base_url=api_url,
+        api_key=api_key,
+        timeout=120,
+    )
+
+    test_prompt = "a single red cube on a white background, minimal 3d render"
+    test_error = None
+    start = monotonic()
+    try:
+        response = await client.images.generate(
+            model=model,
+            prompt=test_prompt,
+            n=1,
+            size="512x512",
+        )
+        latency_ms = int((monotonic() - start) * 1000)
+        items = getattr(response, "data", None) or []
+        item = items[0] if items else None
+        has_image = bool(item) and bool(
+            getattr(item, "b64_json", None) or getattr(item, "url", None)
+        )
+        record_llm_debug_entry(
+            label="ADMIN_LLM_TEST_IMAGE", model=model, url=api_url, is_public=False,
+            system_prompt="", prompt=test_prompt,
+            response="Bild erzeugt (512x512)" if has_image else "(keine Bilddaten)",
+            success=has_image, latency_ms=latency_ms, attempts=1,
+        )
+        if not has_image:
+            return {"success": False, "error": "Antwort ohne Bilddaten erhalten."}
+        return {
+            "success": True,
+            "latency_ms": latency_ms,
+            "model": model,
+            "size": "512x512",
+            "source": "global" if not data.api_url else "input",
+        }
+    except APIConnectionError as e:
+        test_error = f"Keine Verbindung: {e}"
+    except APITimeoutError:
+        test_error = "Zeitueberschreitung (>120s)."
+    except AuthenticationError as e:
+        test_error = f"Authentifizierung fehlgeschlagen: {e}"
+    except BadRequestError as e:
+        test_error = f"Request abgelehnt (u.U. falsches Modell/Endpoint): {e}"
+    except Exception as e:
+        test_error = f"Fehler: {e}"
+    finally:
+        await client.close()
+
+    if test_error is not None:
+        record_llm_debug_entry(
+            label="ADMIN_LLM_TEST_IMAGE", model=model, url=api_url, is_public=False,
             system_prompt="", prompt=test_prompt,
             response="", success=False, error=test_error, attempts=1,
         )

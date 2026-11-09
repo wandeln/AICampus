@@ -15,6 +15,7 @@ from sqlmodel import Session, select
 from config import (
     LLM_API_URL, LLM_API_KEY, LLM_MODEL,
     LLM_API_URL_PUBLIC, LLM_API_KEY_PUBLIC, LLM_MODEL_PUBLIC,
+    LLM_IMAGE_API_URL, LLM_IMAGE_API_KEY, LLM_IMAGE_MODEL,
     LDAP_ENABLED, LDAP_SERVER, LDAP_BASE_DN,
     LDAP_BIND_DN, LDAP_BIND_PW, LDAP_USER_SEARCH,
     COMPUTE_AGENT_URL, COMPUTE_AGENT_KEY,
@@ -42,6 +43,10 @@ def get_effective_llm_config(
             "api_url_public": str,
             "api_key_public": str,
             "model_public": str,
+            # Image-Endpoint (Bilder erstellen/editieren; nur global, kein Kurs-Override)
+            "api_url_image": str,
+            "api_key_image": str,
+            "model_image": str,
         }
     """
     # Start: config.py Defaults (.env + hardcoded)
@@ -51,6 +56,9 @@ def get_effective_llm_config(
     api_url_public = LLM_API_URL_PUBLIC
     api_key_public = LLM_API_KEY_PUBLIC
     model_public = LLM_MODEL_PUBLIC
+    api_url_image = LLM_IMAGE_API_URL
+    api_key_image = LLM_IMAGE_API_KEY
+    model_image = LLM_IMAGE_MODEL
     grading_prompt = None
     source = "env"
 
@@ -72,6 +80,12 @@ def get_effective_llm_config(
             api_key_public = gs.llm_api_key_public
         if gs.llm_model_public:
             model_public = gs.llm_model_public
+        if gs.llm_image_api_url:
+            api_url_image = gs.llm_image_api_url
+        if gs.llm_image_api_key:
+            api_key_image = gs.llm_image_api_key
+        if gs.llm_image_model:
+            model_image = gs.llm_image_model
 
     # Ebene 1: course_settings (Override)
     if course_id:
@@ -97,6 +111,10 @@ def get_effective_llm_config(
         "api_url_public": api_url_public,
         "api_key_public": api_key_public,
         "model_public": model_public,
+        # Image-Endpoint (Bilder erstellen/editieren)
+        "api_url_image": api_url_image,
+        "api_key_image": api_key_image,
+        "model_image": model_image,
     }
 
 
