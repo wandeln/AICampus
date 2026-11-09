@@ -1328,6 +1328,21 @@ const initChalkboard = function ( Reveal ) {
 
 	function startPlayback( timestamp, finalMode ) {
 //console.log("playback " + timestamp );
+		// AICAMPUS PATCH: keinen laufenden Strich unterbrechen –
+		// clearCanvas + lastX=null würde sonst mitten im Strich eine
+		// Linie von (0,0) zeichnen und im Storage speichern.
+		if ( drawing || erasing ) {
+			slidechangeTimeout = setTimeout( startPlayback, 200, timestamp, finalMode );
+			return;
+		}
+		// AICAMPUS PATCH: Duration neu bestimmen. `timestamp` wurde beim
+		// Slide-Wechsel gefangen – Striche, die in den 800ms danach
+		// gezeichnet wurden, hätten event.time > timestamp und würden
+		// nie re-rendered (Tinte verschwindet vom Canvas).
+		if ( !playback ) {
+			var d = getSlideDuration();
+			if ( d > timestamp ) timestamp = d;
+		}
 		slideStart = Date.now() - timestamp;
 		closeChalkboard();
 		mode = 0;
@@ -1587,9 +1602,17 @@ const initChalkboard = function ( Reveal ) {
 
 	function setupCanvasEvents( canvas ) {
 // TODO: check all touchevents
+		// AICAMPUS PATCH: nur EIN Finger/Stift pro Strich. Ein zweiter Touch
+		// (z.B. die ruhende Hand) startete sonst selbst einen neuen
+		// startDrawing an SEINER Position (zusätzliche Linie, oft zur
+		// Bildschirmecke — landet im Storage und erscheint beim Slide-
+		// Re-Render) und sein touchend brach den laufenden Strich ab
+		// (Lücken im Storage).
+		var drawTouchId = null;
 		canvas.addEventListener( 'touchstart', function ( evt ) {
 			evt.preventDefault();
 //console.log("Touch start");
+			if ( drawTouchId != null ) return;
 			if ( !readOnly && evt.target.getAttribute( 'data-chalkboard' ) == mode ) {
 				var scale = drawingCanvas[ mode ].scale;
 				var xOffset = drawingCanvas[ mode ].xOffset;
@@ -1598,6 +1621,7 @@ const initChalkboard = function ( Reveal ) {
 				var touch = evt.touches[ 0 ];
 				mouseX = touch.pageX;
 				mouseY = touch.pageY;
+				drawTouchId = touch.identifier;
         if ( color[ mode ]  < 0 ) {
           startErasing( ( mouseX - xOffset ) / scale, ( mouseY - yOffset ) / scale);
         }
@@ -1617,28 +1641,43 @@ const initChalkboard = function ( Reveal ) {
 				var xOffset = drawingCanvas[ mode ].xOffset;
 				var yOffset = drawingCanvas[ mode ].yOffset;
 
-				var touch = evt.touches[ 0 ];
+				// AICAMPUS PATCH: den Zeichen-Finger verfolgen statt blind
+				// touches[0] (bei Multi-Touch wäre das der ANDERE Finger →
+				// Linie springt dorthin). Zeichen-Finger weg → Strich endet.
+				var touch = null;
+				for ( var ti = 0; ti < evt.touches.length; ti++ ) {
+					if ( evt.touches[ ti ].identifier === drawTouchId ) { touch = evt.touches[ ti ]; break; }
+				}
+				if ( !touch ) {
+					drawTouchId = null;
+					stopDrawing();
+					stopErasing();
+					return;
+				}
 				mouseX = touch.pageX;
 				mouseY = touch.pageY;
 
 				if ( drawing ) {
-					drawSegment( ( lastX - xOffset ) / scale, ( lastY - yOffset ) / scale, ( mouseX - xOffset ) / scale, ( mouseY - yOffset ) / scale, color[ mode ] );
-					// broadcast
-					var message = new CustomEvent( messageType );
-					message.content = {
-						sender: 'chalkboard-plugin',
-						type: 'draw',
-						timestamp: Date.now() - slideStart,
-						mode,
-						board,
-						fromX: ( lastX - xOffset ) / scale,
-						fromY: ( lastY - yOffset ) / scale,
-						toX: ( mouseX - xOffset ) / scale,
-						toY: ( mouseY - yOffset ) / scale,
-						color: color[ mode ]
-					};
-					document.dispatchEvent( message );
-
+					// AICAMPUS PATCH: lastX==null (z. B. Slide-Wechsel
+					// mitten im Strich) -> kein Segment von (0,0)
+					if ( lastX != null ) {
+						drawSegment( ( lastX - xOffset ) / scale, ( lastY - yOffset ) / scale, ( mouseX - xOffset ) / scale, ( mouseY - yOffset ) / scale, color[ mode ] );
+						// broadcast
+						var message = new CustomEvent( messageType );
+						message.content = {
+							sender: 'chalkboard-plugin',
+							type: 'draw',
+							timestamp: Date.now() - slideStart,
+							mode,
+							board,
+							fromX: ( lastX - xOffset ) / scale,
+							fromY: ( lastY - yOffset ) / scale,
+							toX: ( mouseX - xOffset ) / scale,
+							toY: ( mouseY - yOffset ) / scale,
+							color: color[ mode ]
+						};
+						document.dispatchEvent( message );
+					}
 					lastX = mouseX;
 					lastY = mouseY;
 				} else {
@@ -1663,6 +1702,20 @@ const initChalkboard = function ( Reveal ) {
 
 		canvas.addEventListener( 'touchend', function ( evt ) {
 			evt.preventDefault();
+			// AICAMPUS PATCH: nur der Zeichen-Finger beendet den Strich;
+			// ein zweiter Finger, der loslässt, darf ihn nicht abbrechen.
+			var t = evt.changedTouches[ 0 ];
+			if ( drawTouchId != null && t && t.identifier !== drawTouchId && evt.touches.length > 0 ) return;
+			drawTouchId = null;
+			stopDrawing();
+			stopErasing();
+		}, false );
+
+		// AICAMPUS PATCH: touchcancel (System-Geste greift ein) bricht den
+		// Strich sauber ab, statt "drawing" stecken zu lassen.
+		canvas.addEventListener( 'touchcancel', function ( evt ) {
+			evt.preventDefault();
+			drawTouchId = null;
 			stopDrawing();
 			stopErasing();
 		}, false );
@@ -1722,23 +1775,25 @@ const initChalkboard = function ( Reveal ) {
 				mouseY = evt.pageY;
 
 				if ( drawing ) {
-					drawSegment( ( lastX - xOffset ) / scale, ( lastY - yOffset ) / scale, ( mouseX - xOffset ) / scale, ( mouseY - yOffset ) / scale, color[ mode ] );
-					// broadcast
-					var message = new CustomEvent( messageType );
-					message.content = {
-						sender: 'chalkboard-plugin',
-						type: 'draw',
-						timestamp: Date.now() - slideStart,
-						mode,
-						board,
-						fromX: ( lastX - xOffset ) / scale,
-						fromY: ( lastY - yOffset ) / scale,
-						toX: ( mouseX - xOffset ) / scale,
-						toY: ( mouseY - yOffset ) / scale,
-						color: color[ mode ]
-					};
-					document.dispatchEvent( message );
-
+					// AICAMPUS PATCH: lastX==null -> kein Segment von (0,0)
+					if ( lastX != null ) {
+						drawSegment( ( lastX - xOffset ) / scale, ( lastY - yOffset ) / scale, ( mouseX - xOffset ) / scale, ( mouseY - yOffset ) / scale, color[ mode ] );
+						// broadcast
+						var message = new CustomEvent( messageType );
+						message.content = {
+							sender: 'chalkboard-plugin',
+							type: 'draw',
+							timestamp: Date.now() - slideStart,
+							mode,
+							board,
+							fromX: ( lastX - xOffset ) / scale,
+							fromY: ( lastY - yOffset ) / scale,
+							toX: ( mouseX - xOffset ) / scale,
+							toY: ( mouseY - yOffset ) / scale,
+							color: color[ mode ]
+						};
+						document.dispatchEvent( message );
+					}
 					lastX = mouseX;
 					lastY = mouseY;
 				} else {
@@ -1756,7 +1811,6 @@ const initChalkboard = function ( Reveal ) {
 					};
 					document.dispatchEvent( message );
 				}
-
 			}
 		} );
 
@@ -1832,7 +1886,10 @@ const initChalkboard = function ( Reveal ) {
 			clearCanvas( 0 );
 			clearCanvas( 1 );
 			if ( !playback ) {
-				slidechangeTimeout = setTimeout( startPlayback, transition, getSlideDuration(), 0 );
+				// AICAMPUS PATCH: sofort re-rendern statt nach der
+				// Transition (800ms) – Zeichnungen direkt sichtbar und
+				// sofort weiter gezeichnet werden kann.
+				startPlayback( getSlideDuration(), 0 );
 			}
 			if ( Reveal.isAutoSliding() ) {
 				var event = new CustomEvent( 'startplayback' );

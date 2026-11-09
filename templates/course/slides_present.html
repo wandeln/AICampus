@@ -26,6 +26,51 @@
    + Whiteboard. #}
 {% if is_tutor %}
 <link rel="stylesheet" href="{{ asset('vendor/reveal/plugin/chalkboard/style.css') }}">
+<style>
+/* Laser-Pointer (L / Farbfeld in der Chalkboard-Palette): Leuchtender
+   roter Punkt folgt dem Cursor — die Folie bleibt unverändert, Zeichnen
+   ist währenddessen auf beiden Canvases deaktiviert, der Cursor wird
+   durch den Punkt ersetzt. */
+#laser-dot {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff 0%, #ffb3b3 35%, #ff3b3b 80%);
+  box-shadow: 0 0 10px 3px rgba(255, 59, 59, 0.6), 0 0 26px 12px rgba(255, 59, 59, 0.28);
+  pointer-events: none;
+  z-index: 40; /* über notecanvas (24) + chalkboard (26) */
+}
+/* Laser-Spur: transparenter Vollbild-Canvas, Segment für Segment nachge-
+   zeichnet (nur, während gedrückt/gezeichnet wird) und in ~1s ausbleibt. */
+#laser-trail {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 39; /* direkt unter dem Laser-Punkt */
+}
+/* Während des Lasers ist der Cursor überall ersetzt durch den Punkt und
+   Text darf nicht markiert werden (Drag = Spur ziehen, kein Auswahl). */
+body.aicampus-laser,
+body.aicampus-laser * {
+  cursor: none !important;
+  user-select: none !important;
+}
+/* Laser-Farbfeld in der Chalkboard-Palette: runder, leuchtender Punkt
+   (cb-swatch nutzt currentColor). */
+.palette li[data-laser] {
+  color: #ff3b3b;
+}
+.palette li[data-laser] .cb-swatch {
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffd7d7 0%, #ff3b3b 80%);
+  box-shadow: 0 0 6px 2px rgba(255, 59, 59, 0.7);
+}
+</style>
 {% endif %}
 {% endblock %}
 
@@ -67,6 +112,7 @@
     {% if is_tutor %}
     <button type="button" data-key="67"><kbd>C</kbd><span>Stift (Folie)</span></button>
     <button type="button" data-key="87"><kbd>W</kbd><span>Whiteboard</span></button>
+    <button type="button" data-key="76"><kbd>L</kbd><span>Laser-Pointer</span></button>
     <button type="button" data-action="undo"><kbd>Strg</kbd><kbd>Z</kbd><span>Zug zurücknehmen</span></button>
     <button type="button" data-action="redo"><kbd>Strg</kbd><kbd>Y</kbd><span>Zug wiederholen</span></button>
     {% endif %}
@@ -159,6 +205,368 @@ document.querySelector("#reveal-root .slides-overview-btn")?.addEventListener("c
   e.currentTarget.blur();
   if (aicampusCurrentReveal) aicampusCurrentReveal.toggleOverview();
 });
+
+// ─── Laser-Pointer (nur Tutoren): konsistentes Modus-Framework Laser + Stift
+// Zustände (Laser-Flag + C-Zustand = Palette-Visibility):
+//   OFF   – nichts aktiv (Color-Picker verborgen)
+//   PEN   – Color-Picker + Zeichnen auf der Folie
+//   LASER – Laser-Punkt + Spur + Color-Picker, kein Zeichnen
+// Übergänge (C und L werden komplett von hier gesteuert):
+//   L (Taste oder Laser-Feld):  OFF→LASER, PEN→LASER, LASER→OFF
+//   C (Taste):                  OFF→PEN, PEN→OFF; LASER→PEN (schwarz);
+//                               Whiteboard (W) geöffnet → W schließt
+//   Farbfeld/Radier:            LASER→PEN (mit der gewählten Farbe); PEN: Plugin
+//   X/Y (Farbwechsel):          LASER→PEN (der Farbwechsel greift weiterhin)
+// Der Color-Picker ist in PEN und LASER sichtbar; das Laser-Feld wird wie die
+// anderen Einträge behandelt (oben im Panel, click + touch).
+// C wird vollständig abgefangen (nicht nur beim Laser), weil das Plugin's
+// eigener C-Toggle auf dem nackten Identifier `notescanvas` (HTML Named
+// Access: window.<id>) beruht — nach einem Live-Remount existieren zwei
+// Container mit derselben ID → Named Access liefert ein NodeList → Crash.
+// Deshalb greifen C- und L-Übergänge direkt auf die aktuellen Container zu.
+// Touch/Stift verhält sich wie bei den Farben: der notescanvas fängt die
+// Events (preventDefault → kein Swipe/Navigieren, keine synthetisierten
+// Mouse-Events → kein Punkt-Springen; data-prevent-swipe → Reveal ignoriert
+// das Gesten-Event), das Plugin ist während des Lasers readOnly.
+// L überschreibt Reveal's System-Bindung L = "nach rechts" (registrierte
+// Bindings werden vor den System-Defaults geprüft).
+// Live-Remount: das Plugin legt pro Mount neue Container an (die alten bleiben
+// träge) → bind() verdrahtet pro Mount das jeweils JÜNGSTE Paar; Zustand,
+// Listener, Punkt und Spur überleben den Remount.
+const aicampusLaser = HAS_NOTES ? (function () {
+  let active = false;       // Laser an?
+  let canvases = [];        // aktuelle [notescanvas, chalkboard]-Container
+  let mx = 0, my = 0;       // letzte Pointer-Position
+  let pressed = false;      // Pointer gedrückt (Spur nur dann, wie beim Stift)
+  let strokeId = null;      // PointerId des aktiven Strokes (2. Finger/Hand/Stift wird ignoriert)
+  let strokeLastT = 0;      // letztes Event des Stroke-Pointers (Stale-Schutz)
+  let pts = [];             // Punkte der aktuellen Spur
+  let strokeEndT = 0;       // Stroke-Ende (Fade-Auslauf)
+  let prevActive = [];      // zuvor markiertes Farbfeld/Radier
+  let trailRaf = 0;
+
+  // ── Persistente DOM-Teile + Document-Listener (einmalig) ─────────────────
+  const trail = document.createElement("canvas");
+  trail.id = "laser-trail";
+  const sizeTrail = () => {
+    const dpr = window.devicePixelRatio || 1;
+    trail.width = window.innerWidth * dpr;
+    trail.height = window.innerHeight * dpr;
+    trail.style.width = window.innerWidth + "px";
+    trail.style.height = window.innerHeight + "px";
+    trail.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
+  };
+  window.addEventListener("resize", sizeTrail);
+  sizeTrail();
+  document.body.appendChild(trail);
+
+  const dot = document.createElement("div");
+  dot.id = "laser-dot";
+  dot.style.display = "none";
+  document.body.appendChild(dot);
+
+  // ── Laser-Position + Spurpunkte: für ALLE Eingaben (Maus, Stift, Touch)
+  // laufen nur die Pointer-Events; die Touch-Handler in bind() machen
+  // lediglich preventDefault (Capture wie bei den Farben). ─────────────────
+  // NUR EIN Pointer pro Stroke (strokeId): ein zweiter Finger/die Hand
+  // dürfte sonst den Stroke an ihre Position zurücksetzen (Segment in deren
+  // Richtung, z.B. zur Bildschirmecke) und per Up/End den laufenden Stroke
+  // unterbrechen.
+  const laserTo = (x, y) => {
+    mx = x; my = y;
+    dot.style.transform = `translate(${mx}px, ${my}px)`;
+    // Spur wie beim Stift: nur, während gedrückt/gezeichnet wird.
+    // Punkte dezimieren (>=1.5px).
+    if (active && pressed && pts.length) {
+      const last = pts[pts.length - 1];
+      if (Math.abs(mx - last.x) + Math.abs(my - last.y) >= 1.5) {
+        pts.push({ x: mx, y: my });
+        if (pts.length > 8000) pts.splice(0, 4000);
+      }
+    }
+  };
+  // Neuer Stroke am REALEN Startpunkt der Eingabe (x,y) — nicht an der
+  // zuletzt bekannten Position: bei Touch ist der Finger woanders, und ein
+  // Seed mit der alten Position würde die Linie dorthin springen lassen.
+  const strokeDown = (x, y, id) => {
+    if (strokeId != null) {
+      // Stale-Schutz: Up/Cancel-Event verpasst oder PointerId gesprungen
+      // (manche Pen-Treiber) → nach 1.5s Inaktivität den Slot freigeben.
+      if (Date.now() - strokeLastT > 1500) strokeUp(null);
+      else return; // aktiver Stroke läuft → weiterer Pointer wird ignoriert
+    }
+    strokeId = id ?? -1;
+    strokeLastT = Date.now();
+    pressed = true;
+    if (active) pts = x != null ? [{ x, y }] : [];
+  };
+  const strokeUp = (id) => {
+    if (strokeId != null && id != null && id !== strokeId) return; // anderer Finger
+    strokeId = null;
+    pressed = false;
+    strokeEndT = performance.now();
+  };
+  document.addEventListener("pointermove", (e) => {
+    if (pressed && strokeId != null) {
+      if (e.pointerId !== strokeId) return; // nur der Stroke-Pointer
+      strokeLastT = Date.now();
+    }
+    laserTo(e.clientX, e.clientY);
+  }, { passive: true });
+  document.addEventListener("pointerdown", (e) => strokeDown(e.clientX, e.clientY, e.pointerId), { passive: true });
+  document.addEventListener("pointerup", (e) => strokeUp(e.pointerId), { passive: true });
+  document.addEventListener("pointercancel", (e) => strokeUp(e.pointerId), { passive: true });
+  // C wird IMMER abgefangen (Framework; s. Header — Plugin-C ist nach
+  // Remounts defekt). X/Y während des Lasers → Stift-Modus (der Farbwechsel
+  // greift weiterhin); sonst X/Y über Plugin/Reveal.
+  document.addEventListener("keydown", (e) => {
+    if (e.keyCode === 67) {
+      // Auch für synthetic Events (Shortcuts-Panel dispatcht auf document,
+      // wo Reveal's Handler als Bubble-Listener hängt) muss der Rest hier
+      // enden → sonst würde das Plugin C zusätzlich umschalten.
+      e.stopImmediatePropagation();
+      handleC();
+    } else if (active && (e.keyCode === 88 || e.keyCode === 89)) {
+      setActive(false);
+    }
+  }, true);
+
+  // ── Zustandsableitung ─────────────────────────────────────────────────────
+  const cOn = () => {
+    const pal = canvases[0]?.querySelector(".palette");
+    return !!(pal && pal.style.visibility !== "hidden");
+  };
+  const mode = () => (active ? "LASER" : cOn() ? "PEN" : "OFF");
+
+  // ── Spur: die aktuelle Kurve als EINE Path (ein stroke() → keine
+  // Überlappungs-Verdunkelungen). Gedrückt: volle Intensität; nach dem
+  // Loslassen ~1s exponentiell aus.
+  function trailFrame(t) {
+    if (!active) {
+      cancelAnimationFrame(trailRaf);
+      trailRaf = 0;
+      return;
+    }
+    trailRaf = requestAnimationFrame(trailFrame);
+    const ctx = trail.getContext("2d");
+    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    if (!pts.length) return;
+    let alpha = 0.55;
+    if (!pressed) {
+      alpha = 0.55 * Math.exp(-(t - strokeEndT) / 1000 / 0.25);
+      if (alpha < 0.01) {
+        pts = [];
+        return;
+      }
+    }
+    ctx.strokeStyle = `rgba(255,59,59,${alpha})`;
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+  }
+  const setTrail = (on) => {
+    if (on) {
+      strokeEndT = performance.now();
+      if (!trailRaf) trailRaf = requestAnimationFrame(trailFrame);
+    } else if (trailRaf) {
+      cancelAnimationFrame(trailRaf);
+      trailRaf = 0;
+      pts = [];
+      trail.getContext("2d").clearRect(0, 0, window.innerWidth, window.innerHeight);
+    }
+  };
+
+  // ── Aktive Markierung + pointer-events ───────────────────────────────────
+  const markLaser = (on) => {
+    canvases.forEach((c) => c?.querySelector(".palette li[data-laser]")?.classList.toggle("cb-active", on));
+  };
+  // pointer-events nach Plugin-Zustand auflösen: notescanvas C = Palette-
+  // Visibility; chalkboard W = Container-Visibility (verborgenes Chalkboard
+  // kann ohnehin nichts empfangen).
+  const restorePointerEvents = () => {
+    canvases.forEach((c) => {
+      if (!c) return;
+      const pal = c.querySelector(".palette");
+      c.style.pointerEvents =
+        c.id === "notescanvas" && (!pal || pal.style.visibility === "hidden") ? "none" : "auto";
+      c.querySelectorAll(".palette, .boardhandle").forEach((el) => { el.style.pointerEvents = ""; });
+    });
+  };
+
+  function setActive(on) {
+    if (on === active) return;
+    active = on;
+    dot.style.display = on ? "block" : "none";
+    document.body.classList.toggle("aicampus-laser", on);
+    setTrail(on);
+    if (on) {
+      // Bisher gewähltes Farbfeld/Radier abmarkieren (bleibt gespeichert,
+      // wird beim Laser-Ausschalten wieder markiert).
+      prevActive = [];
+      canvases.forEach((c) => {
+        const li = c?.querySelector(".palette li.cb-active");
+        if (li && !li.hasAttribute("data-laser")) {
+          prevActive.push(li);
+          li.classList.remove("cb-active");
+        }
+      });
+      // Input-Capture wie im PEN-Modus: der notescanvas bleibt "auto" und
+      // fängt Maus UND Touch (Touch-Handler in bind()); nur das Chalkboard
+      // ist unter dem Laser nicht klickbar. Das Plugin wird readOnly →
+      // kein Zeichnen mehr über seine eigenen Handler, seine W/C/X/Y/D-
+      // Tasten sind inaktiv.
+      canvases.forEach((c) => {
+        if (!c) return;
+        if (c.id === "chalkboard") c.style.pointerEvents = "none";
+        c.querySelectorAll(".palette, .boardhandle").forEach((el) => { el.style.pointerEvents = "auto"; });
+      });
+      RevealChalkboard.configure({ readOnly: true });
+    } else {
+      prevActive.forEach((li) => li.classList.add("cb-active"));
+      prevActive = [];
+      restorePointerEvents();
+      RevealChalkboard.configure({ readOnly: false });
+    }
+    markLaser(on);
+  }
+
+  // ── Übergänge (s. Header) ────────────────────────────────────────────────
+  // C-Modus (Color-Picker) direkt auf dem aktuellen Container anwenden —
+  // Spiegel der Plugin-Zweige (show/hide), ohne den Plugin-Toggle:
+  const showPicker = () => {
+    const nc = canvases[0];
+    if (!nc) return;
+    const pal = nc.querySelector(".palette");
+    if (pal) pal.style.visibility = "visible";
+    nc.style.background = "rgba(0,0,0,0)";
+    nc.style.pointerEvents = "auto";
+  };
+  const hidePicker = () => {
+    const nc = canvases[0];
+    if (!nc) return;
+    const pal = nc.querySelector(".palette");
+    if (pal) pal.style.visibility = "hidden";
+    nc.style.background = "rgba(0,0,0,0)";
+    nc.style.pointerEvents = "none";
+  };
+  // L: OFF→LASER (Color-Picker zuerst), PEN→LASER, LASER→OFF (Laser + Picker).
+  function handleL() {
+    if (mode() === "LASER") {
+      setActive(false);
+      hidePicker();
+    } else if (mode() === "PEN") {
+      setActive(true);
+    } else {
+      const cb = canvases[1];
+      if (cb && cb.style.visibility === "visible") RevealChalkboard.toggleChalkboard();
+      showPicker();
+      setActive(true);
+    }
+  }
+  // C: Whiteboard (W) geöffnet → W schließt (wie im Plugin); sonst
+  // OFF→PEN, PEN→OFF, LASER→PEN mit schwarzer Farbe.
+  function handleC() {
+    const cb = canvases[1];
+    if (cb && cb.style.visibility === "visible") {
+      RevealChalkboard.toggleChalkboard();
+      return;
+    }
+    if (mode() === "LASER") {
+      setActive(false);
+      RevealChalkboard.colorIndex(0); // schwarze Farbe
+    } else if (mode() === "PEN") {
+      hidePicker();
+    } else {
+      showPicker();
+      // Beim ersten Öffnen markiert das Plugin noch keine Farbe –
+      // dann Schwarz aktivieren (vorherige Auswahl bleibt erhalten).
+      const pal = canvases[0]?.querySelector(".palette");
+      const marked = pal?.querySelector("li.cb-active");
+      if (!marked || marked.hasAttribute("data-laser")) {
+        RevealChalkboard.colorIndex(0);
+      }
+    }
+  }
+
+  // ── Pro-Mount-Verdrahtung (wird aus aicampusDoMount aufgerufen) ─────────
+  function bind() {
+    const lastOf = (sel) => {
+      const els = document.querySelectorAll(sel);
+      return els.length ? els[els.length - 1] : null;
+    };
+    canvases = [lastOf("#reveal-root > #notescanvas"), lastOf("#reveal-root > #chalkboard")];
+
+    // Touch-Capture: identisch wie bei den Farben — der Container fängt
+    // das Touch-Event ab und preventDefaultet es (kein Scroll, keine
+    // synthetisierten Mouse-Events → der Punkt springt nicht; der Container
+    // trägt data-prevent-swipe → Reveal's Swipe-Navigation ignoriert es).
+    // Die eigentliche Logik (Punkt, Stroke) läuft NUR über die
+    // Pointer-Events — die decken Maus, Stift und Touch einheitlich ab
+    // (Pointer- und Touch-Ids sind verschiedene Welten → nicht mischen).
+    const nc = canvases[0];
+    if (nc) {
+      const noDefault = (e) => e.preventDefault();
+      nc.addEventListener("touchstart", noDefault, { passive: false });
+      nc.addEventListener("touchmove", noDefault, { passive: false });
+      nc.addEventListener("touchend", noDefault, { passive: false });
+      nc.addEventListener("touchcancel", noDefault, { passive: false });
+    }
+
+    canvases.forEach((c) => {
+      const ul = c?.querySelector(".palette ul");
+      if (!ul) return;
+      if (!ul.querySelector("li[data-laser]")) {
+        const li = document.createElement("li");
+        li.setAttribute("data-laser", "true");
+        li.title = "Laser-Pointer (L)";
+        li.innerHTML = '<span class="cb-swatch"></span>';
+        // Wie die anderen Einträge: click UND touchstart (auf Touch-Geräten
+        // wird click hier nicht zuverlässig ausgelöst — das Plugin bindet
+        // deshalb beide). lastTouchGuard: falls click doch noch nach
+        // touchstart kommt, nicht doppelt umschalten.
+        let lastTouch = 0;
+        li.addEventListener("click", () => {
+          if (Date.now() - lastTouch < 700) return;
+          handleL();
+        });
+        li.addEventListener("touchstart", () => {
+          lastTouch = Date.now();
+          handleL();
+        });
+        ul.insertBefore(li, ul.firstChild); // ganz oben im Color-Picker
+      }
+      // Farbfeld/Radier anklicken/antippen, während der Laser aktiv ist →
+      // erst in den Stift-Modus zurück, dann die gewählte Farbe setzen
+      // (capture: vor dem Plugin-Farb-Handler).
+      const pickPen = (e) => {
+        if (active && e.target.closest("li[data-color], li[data-eraser]")) setActive(false);
+      };
+      ul.addEventListener("click", pickPen, true);
+      ul.addEventListener("touchstart", pickPen, true);
+    });
+
+    // Pro Mount frische Reveal-Instanz (und frisches Keyboard) → Binding neu
+    // registrieren. (Das Plugin bindet seine Keys über dieselbe Instanz-API.)
+    aicampusCurrentReveal.addKeyBinding(
+      { keyCode: 76, key: "L", description: "Toggle laser pointer" },
+      handleL,
+    );
+
+    // Laser überlebt den Remount: aktiven Zustand auf die neuen Container
+    // anwenden (die starten mit pe none + verborgenem Picker).
+    if (active) {
+      active = false;
+      setActive(true);
+      showPicker(); // LASER ⇒ Picker ist immer sichtbar
+    }
+  }
+
+  return { bind };
+})() : null;
 
 // Deck (neu) mounten: Inhalt laden → Sections → neue Reveal-Instanz.
 // isLive = Live-Remount via MCP: die Folie des Nutzers bleibt erhalten;
@@ -330,6 +738,9 @@ async function aicampusDoMount() {
   aicampusWireCodeMath(reveal);
   await reveal.initialize();
   aicampusCurrentReveal = reveal;
+  // Laser-Pointer (nur Tutoren): Taste L + Color-Picker-Feld am frischen
+  // Chalkboard-Container verdrahten (s. aicampusLaser oben).
+  aicampusLaser?.bind();
   // Live-Remount: zur Folie des Nutzers zurück. Der Hash zeigt schon darauf
   // (hash: true) — slide() als Absicherung, rAF gegen Reveal's interne
   // URL-Lektüre beim Start (Muster aus slides.html, Voll-Deck-Upgrade).
