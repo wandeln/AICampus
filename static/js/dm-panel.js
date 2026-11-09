@@ -222,9 +222,11 @@
         if (c.last_message) {
           const mine = c.last_message.user_id === currentUserId;
           const prefix = mine ? "Du: " : c.is_group ? escHtml((c.last_message.name || "").split(" ")[0]) + ": " : "";
-          preview = `<span class="text-xs text-gray-500 truncate">${prefix}${escHtml(c.last_message.content)}</span>`;
+          // block: truncate (Ellipsis) wirkt nur auf Block-Elemente,
+          // sonst laufen lange Wörter über den Rand der Liste hinaus.
+          preview = `<span class="block text-xs text-gray-500 truncate">${prefix}${escHtml(c.last_message.content)}</span>`;
         } else {
-          preview = '<span class="text-xs text-gray-400 italic truncate">Noch keine Nachrichten</span>';
+          preview = '<span class="block text-xs text-gray-400 italic truncate">Noch keine Nachrichten</span>';
         }
         const badge = c.unread_count
           ? `<span class="shrink-0 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[11px] font-bold">${c.unread_count > 99 ? "99+" : c.unread_count}</span>`
