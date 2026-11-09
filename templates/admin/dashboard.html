@@ -372,6 +372,37 @@
           <div id="mcp-recent-table" class="overflow-x-auto"></div>
         </div>
 
+        <!-- Handschrift → LaTeX -->
+        <div class="card p-4 mb-4">
+          <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h3 class="font-semibold text-gray-800">Handschrift → LaTeX</h3>
+            <span class="text-xs text-gray-400">Foto-/Zeichnung-Konvertierung (nur Metadaten)</span>
+          </div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="hw-kpi-calls" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Konvertierungen (Fenster)</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="hw-kpi-users" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Aktive User</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="hw-kpi-source" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Foto / Zeichen</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="hw-kpi-errors" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Fehlgeschlagen</div>
+            </div>
+          </div>
+          <div class="bg-gray-50 rounded-lg p-4">
+            <div class="text-xs text-gray-500">Text-Abgaben mit Handschrift</div>
+            <div id="hw-adoption" class="text-2xl font-bold text-gray-900 mt-1">–</div>
+            <div class="text-xs text-gray-400 mt-1">Abgaben im Fenster mit ≥1 erfolgreicher Konvertierung</div>
+          </div>
+        </div>
+
         <!-- Letzte Aktivität -->
         <div class="card p-4">
           <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
@@ -2161,7 +2192,7 @@
   async function loadAnalytics() {
     const days = document.getElementById('analytics-days').value || '30';
     const courseId = document.getElementById('analytics-course').value;
-    const [ov, pages, courses, users, mcp, mcpRecent, dm, fb] = await Promise.all([
+    const [ov, pages, courses, users, mcp, mcpRecent, dm, fb, hw] = await Promise.all([
       fetch(`/api/admin/analytics/overview?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/top-pages?days=${days}${courseId ? `&course_id=${courseId}` : ''}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/top-courses?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
@@ -2170,6 +2201,7 @@
       fetch('/api/admin/analytics/mcp/recent?limit=50', { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/dm?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/feedback?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
+      fetch(`/api/admin/analytics/handwriting?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
     ]);
 
     // KPIs
@@ -2178,6 +2210,14 @@
     document.getElementById('kpi-mau').textContent = ov.mau_30 ?? 0;
     document.getElementById('kpi-active-7').textContent = ov.active_last7 ?? 0;
     document.getElementById('kpi-views').textContent = ov.total_views ?? 0;
+
+    // Handschrift → LaTeX
+    document.getElementById('hw-kpi-calls').textContent = hw.calls ?? 0;
+    document.getElementById('hw-kpi-users').textContent = hw.users ?? 0;
+    document.getElementById('hw-kpi-source').textContent = `${hw.photo ?? 0} / ${hw.draw ?? 0}`;
+    document.getElementById('hw-kpi-errors').textContent = hw.errors ?? 0;
+    document.getElementById('hw-adoption').textContent =
+      hw.adoption_pct == null ? '–' : `${hw.subs_with_handwriting ?? 0} von ${hw.text_submissions ?? 0} (${hw.adoption_pct} %)`;
 
     // DAU-Chart
     const canvas = document.getElementById('dau-chart');

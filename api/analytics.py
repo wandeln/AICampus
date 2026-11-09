@@ -101,6 +101,16 @@ async def dm_usage(
     return analytics.dm_usage(days)
 
 
+@router.get("/handwriting")
+async def handwriting_usage_endpoint(
+    days: int = Query(30, ge=1, le=365),
+    course_id: Optional[int] = Query(None),
+    user: User = Depends(require_global_admin()),
+):
+    """Handschrift-→-LaTeX-Nutzung: KPIs + Adoption (Begleitforschung)."""
+    return analytics.handwriting_usage(days, course_id=course_id)
+
+
 @router.get("/mcp/recent")
 async def mcp_recent(
     limit: int = Query(100, ge=10, le=500),
@@ -144,4 +154,5 @@ async def course_overview(
         "active_last7": analytics.count_active_users(7, course_id=course_id),
         "total_views": analytics.count_views(days, course_id=course_id),
         "feedback": analytics.feedback_performance(days, course_id=course_id),
+        "handwriting": analytics.handwriting_usage(days, course_id=course_id),
     }

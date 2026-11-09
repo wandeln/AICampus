@@ -201,6 +201,37 @@
       </div>
     </div>
 
+    <!-- Handschrift → LaTeX -->
+    <div class="card p-4 mt-4">
+      <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h3 class="font-semibold text-gray-800">Handschrift → LaTeX</h3>
+        <span class="text-xs text-gray-400">Foto-/Zeichnung-Konvertierung (nur Metadaten)</span>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div id="ca-hw-kpi-calls" class="text-xl font-bold text-gray-900">–</div>
+          <div class="text-xs text-gray-500 mt-1">Konvertierungen (Fenster)</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div id="ca-hw-kpi-users" class="text-xl font-bold text-gray-900">–</div>
+          <div class="text-xs text-gray-500 mt-1">Aktive User</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div id="ca-hw-kpi-source" class="text-xl font-bold text-gray-900">–</div>
+          <div class="text-xs text-gray-500 mt-1">Foto / Zeichen</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div id="ca-hw-kpi-errors" class="text-xl font-bold text-gray-900">–</div>
+          <div class="text-xs text-gray-500 mt-1">Fehlgeschlagen</div>
+        </div>
+      </div>
+      <div class="bg-gray-50 rounded-lg p-4">
+        <div class="text-xs text-gray-500">Text-Abgaben mit Handschrift</div>
+        <div id="ca-hw-adoption" class="text-2xl font-bold text-gray-900 mt-1">–</div>
+        <div class="text-xs text-gray-400 mt-1">Abgaben im Fenster mit ≥1 erfolgreicher Konvertierung</div>
+      </div>
+    </div>
+
     <!-- Chart.js (MIT) — lokal gespiegelt -->
     <script src="{{ asset('vendor/chart.umd.js') }}"></script>
   </div>
@@ -585,6 +616,15 @@
         },
       },
     });
+
+    // Handschrift → LaTeX
+    const hw = data.handwriting || {};
+    document.getElementById('ca-hw-kpi-calls').textContent = hw.calls ?? 0;
+    document.getElementById('ca-hw-kpi-users').textContent = hw.users ?? 0;
+    document.getElementById('ca-hw-kpi-source').textContent = `${hw.photo ?? 0} / ${hw.draw ?? 0}`;
+    document.getElementById('ca-hw-kpi-errors').textContent = hw.errors ?? 0;
+    document.getElementById('ca-hw-adoption').textContent =
+      hw.adoption_pct == null ? '–' : `${hw.subs_with_handwriting ?? 0} von ${hw.text_submissions ?? 0} (${hw.adoption_pct} %)`;
   }
   showSettingsTab(location.hash.slice(1));
   </script>

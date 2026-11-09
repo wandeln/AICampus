@@ -1445,6 +1445,34 @@ class PageView(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.now, index=True)
 
 
+class HandwritingConversion(SQLModel, table=True):
+    """Nutzungs-Protokoll der Handschrift-→-LaTeX-Konvertierung (Foto / Zeichnen).
+
+    Eine Zeile pro Aufruf von POST /api/student/latex-from-image. Dient der
+    Auswertung, wie häufig und wann Studierende ihre Lösungen handschriftlich
+    erarbeiten (Begleitforschung, Wirksamkeitsanalyse).
+
+    Bewusst gespeichert werden NUR Metadaten — weder das Bild noch der
+    erkannte LaTeX-Text. submission_id wird beim nächsten Einreichen derselben
+    Aufgabe gesetzt (s. api/student.submit_solution) und verknüpft so die
+    Konvertierungen mit der Einreichung, in die sie eingeflossen sind.
+    Neue Tabelle wird beim App-Start per create_all angelegt.
+    """
+
+    __tablename__ = "handwriting_conversions"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    course_id: Optional[int] = Field(default=None, foreign_key="courses.id", index=True)
+    task_id: Optional[int] = Field(default=None, foreign_key="tasks.id", index=True)
+    submission_id: Optional[int] = Field(default=None, foreign_key="submissions.id", index=True)
+    source: str = Field(default="unknown", max_length=10)  # "photo" | "draw" | "unknown"
+    success: bool = True
+    latency_ms: int = 0
+    image_kb: int = 0  # Größe des übertragenen Bildes (nur Kennzahl, Bild wird NICHT gespeichert)
+    created_at: datetime = Field(default_factory=datetime.now, index=True)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # MCP TOKENS (MCP-Anbindung: ein Token pro User + Kurs-Allowlist)
 # ═══════════════════════════════════════════════════════════════════

@@ -662,7 +662,10 @@
         credentials: "same-origin",
         body: JSON.stringify({
           image_base64: base64Data,
-          mime_type: mimeType
+          mime_type: mimeType,
+          // Nutzungs-Protokoll (Begleitforschung): nur Metadaten, kein Bild
+          task_id: {{ task.id }},
+          source: "photo"
         }),
       })
       .then(async (res) => {
@@ -719,7 +722,10 @@
         credentials: "same-origin",
         body: JSON.stringify({
           image_base64: base64Data,
-          mime_type: "image/jpeg"
+          mime_type: "image/jpeg",
+          // Nutzungs-Protokoll (Begleitforschung): nur Metadaten, kein Bild
+          task_id: {{ task.id }},
+          source: "draw"
         }),
       })
       .then(async (res) => {

@@ -648,6 +648,64 @@ def dm_usage(days: int) -> dict[str, Any]:
     }
 
 
+def handwriting_usage(days: int, course_id: Optional[int] = None) -> dict[str, Any]:
+    """Handschrift-→-LaTeX-Nutzung im Fenster: KPIs + Adoption.
+
+    Adoption: Anteil der Text-Einreichungen im Fenster, die mindestens eine
+    erfolgreiche Konvertierung tragen (Begleitforschung).
+    """
+    since = _since(days)
+    conv_course_filter = " AND course_id = :course_id" if course_id is not None else ""
+    task_course_filter = " AND t.course_id = :course_id" if course_id is not None else ""
+    params: dict[str, Any] = {"since": since}
+    if course_id is not None:
+        params["course_id"] = course_id
+    with Session(engine) as session:
+        row = session.execute(
+            text(
+                "SELECT COUNT(*), COUNT(DISTINCT user_id), "
+                "COALESCE(SUM(CASE WHEN source = 'photo' THEN 1 ELSE 0 END), 0), "
+                "COALESCE(SUM(CASE WHEN source = 'draw' THEN 1 ELSE 0 END), 0), "
+                "COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0), "
+                "AVG(latency_ms) "
+                "FROM handwriting_conversions WHERE created_at >= :since" + conv_course_filter
+            ),
+            params,
+        ).first()
+        subs = session.execute(
+            text(
+                "SELECT COUNT(*) FROM submissions s "
+                "JOIN tasks t ON t.id = s.task_id "
+                "WHERE t.task_type = 'TEXT' AND s.submitted_at >= :since" + task_course_filter
+            ),
+            params,
+        ).first()
+        subs_hw = session.execute(
+            text(
+                "SELECT COUNT(DISTINCT h.submission_id) FROM handwriting_conversions h "
+                "JOIN submissions s ON s.id = h.submission_id "
+                "JOIN tasks t ON t.id = s.task_id "
+                "WHERE h.success = 1 AND h.submission_id IS NOT NULL "
+                "AND s.submitted_at >= :since" + task_course_filter
+            ),
+            params,
+        ).first()
+    text_subs = subs[0] if subs else 0
+    subs_hw_n = subs_hw[0] if subs_hw else 0
+    return {
+        "days": days,
+        "calls": row[0] if row else 0,
+        "users": row[1] if row else 0,
+        "photo": int(row[2] or 0) if row else 0,
+        "draw": int(row[3] or 0) if row else 0,
+        "errors": int(row[4] or 0) if row else 0,
+        "avg_latency_ms": int(round(row[5])) if row and row[5] is not None else None,
+        "text_submissions": text_subs,
+        "subs_with_handwriting": subs_hw_n,
+        "adoption_pct": round(subs_hw_n / text_subs * 100) if text_subs else None,
+    }
+
+
 def mcp_recent(limit: int = 100) -> list[dict[str, Any]]:
     """Neueste MCP-Tool-Calls (Wer-Wann-Was), inkl. User-/Kursname."""
     sql = (

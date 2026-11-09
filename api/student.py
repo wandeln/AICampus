@@ -29,6 +29,7 @@ from database.models import (
     User, Task, Submission, Feedback, HintExchange, ScriptSection,
     TaskDraft, TaskType, SubmissionStatus, FeedbackSource,
     Course, UserCourse, CourseRole, WorkspaceRun, GlobalUserRole,
+    HandwritingConversion,
 )
 from services import notifications
 from services import upload_service
@@ -323,6 +324,11 @@ async def submit_solution(
 
     # Type narrowing: Nach refresh() ist die ID gesetzt
     assert submission.id is not None
+
+    # Handschrift-Konvertierungen seit der letzten Einreichung dieser Aufgabe
+    # mit dieser Einreichung verknüpfen (Begleitforschung).
+    if task.task_type.value == "text":
+        _link_handwriting_conversions(session, user.id, task.id, submission.id)
 
     # Workspace-Aufgabe: Loesung = ganzes /workspace-Volume → Snapshot aus
     # dem Student-Container sichern und an die Einreichung hängen. Bei
@@ -1152,6 +1158,74 @@ async def get_my_points(
 # FOTO -> LATEX KONVERTIERUNG
 # =================================================================
 
+def _resolve_handwriting_task(
+    session: Session, user: User, raw_task_id
+) -> tuple[Optional[int], Optional[int]]:
+    """task_id aus dem Request validieren → (task_id, course_id) oder (None, None).
+
+    Nur Aufgaben eines Kurses, in dem der User Mitglied ist, werden übernommen.
+    """
+    try:
+        task_id = int(raw_task_id) if raw_task_id is not None else None
+    except (TypeError, ValueError):
+        return None, None
+    if task_id is None:
+        return None, None
+    task = session.get(Task, task_id)
+    if not task or not _check_course_access(session, user, task.course_id):
+        return None, None
+    return task.id, task.course_id
+
+
+def _record_handwriting_conversion(
+    user_id: Optional[int],
+    course_id: Optional[int],
+    task_id: Optional[int],
+    source: str,
+    success: bool,
+    latency_ms: int,
+    image_kb: int,
+) -> None:
+    """Hängt einen Eintrag an das Handschrift-Nutzungsprotokoll an.
+
+    Eigene Session (die Request-Session wurde vor dem LLM-Call zurückgesetzt).
+    Fehler beim Protokollieren dürfen die Konvertierung nie scheitern lassen.
+    """
+    if user_id is None:
+        return
+    try:
+        with Session(engine) as log_session:
+            log_session.add(HandwritingConversion(
+                user_id=user_id,
+                course_id=course_id,
+                task_id=task_id,
+                source=source,
+                success=success,
+                latency_ms=latency_ms,
+                image_kb=image_kb,
+            ))
+            log_session.commit()
+    except Exception as e:
+        logger.warning(f"Handschrift-Protokoll: Eintrag konnte nicht gespeichert werden: {e}")
+
+
+def _link_handwriting_conversions(session: Session, user_id: int, task_id: int, submission_id: int) -> None:
+    """Ordnet alle noch offenen Konvertierungen (submission_id IS NULL) dieses
+    Users für diese Aufgabe der gerade erzeugten Einreichung zu."""
+    try:
+        session.exec(
+            update(HandwritingConversion)
+            .where(HandwritingConversion.user_id == user_id)
+            .where(HandwritingConversion.task_id == task_id)
+            .where(HandwritingConversion.submission_id.is_(None))  # type: ignore[union-attr]
+            .values(submission_id=submission_id)
+        )
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.warning(f"Handschrift-Protokoll: Verknüpfung mit Einreichung {submission_id} fehlgeschlagen: {e}")
+
+
 @router.post("/latex-from-image")
 async def latex_from_image(
     request: Request,
@@ -1169,6 +1243,12 @@ async def latex_from_image(
     if not image_base64:
         raise HTTPException(400, "Kein Bild uebergeben.")
 
+    # Kontext fürs Nutzungs-Protokoll (optional, ältere Clients senden ihn nicht).
+    # Ein ungültiger/fremder task_id-Wert führt NICHT zum Fehler — die
+    # Konvertierung läuft weiter, protokolliert wird dann ohne Aufgabenbezug.
+    log_task_id, log_course_id = _resolve_handwriting_task(session, user, body.get("task_id"))
+    log_source = body.get("source") if body.get("source") in ("photo", "draw") else "unknown"
+
     # Resolve effektive LLM-Config (wird vom LLM-Service genutzt)
     llm_cfg = get_effective_llm_config(session)
 
@@ -1181,6 +1261,16 @@ async def latex_from_image(
         image_base64=image_base64,
         mime_type=mime_type,
         config=llm_cfg,
+    )
+
+    _record_handwriting_conversion(
+        user_id=user.id,
+        course_id=log_course_id,
+        task_id=log_task_id,
+        source=log_source,
+        success=bool(result.get("success")),
+        latency_ms=int(result.get("latency_ms", 0) or 0),
+        image_kb=len(image_base64) * 3 // 4 // 1024,
     )
 
     if not result.get("success"):
