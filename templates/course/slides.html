@@ -200,10 +200,22 @@
       // Folien-Position (S-Nummern unlabeled Subfigure-Komplexe):
       slidesEl.appendChild(await buildSlideSection(slidesToShow[h], FOOTER, { deckId, h }));
     }
-    // Auto-Fit: Folienkörper auf die Folie skalieren (s. fitSlides in slides.js)
-    fitSlides(slidesEl, TILE_W, TILE_H);
+    // Auto-Fit: Folienkörper auf die Folie skalieren (s. fitSlides in
+    // slides.js) — .reveal muss dabei LAYOUT haben: ohne has-slides ist
+    // sie display:none (slides.css) → clientHeight/scrollHeight = 0 →
+    // avail < 0 → jede Folie auf MIN-Skala (0.45) gefitet ("erste Folie
+    // sehr klein", erst nach Navigation/Refit korrigiert). visibility
+    // hidden behält das Layout (messbar) und blendet aus, bis die neue
+    // Instanz läuft (kein Flash der unlayouteten Sections).
+    const revealEl = shell.querySelector(".reveal");
+    revealEl.style.visibility = "hidden";
     shell.classList.add("has-slides");
-    return initPreviewReveal(shell, totalSlides);
+    fitSlides(slidesEl, TILE_W, TILE_H);
+    try {
+      return await initPreviewReveal(shell, totalSlides);
+    } finally {
+      revealEl.style.visibility = "";
+    }
   }
 
   // Volles Deck nachladen: Restfolien asynchron rendern (Mini-Deck bleibt
