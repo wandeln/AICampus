@@ -244,6 +244,7 @@ const aicampusLaser = HAS_NOTES ? (function () {
   let strokeEndT = 0;       // Stroke-Ende (Fade-Auslauf)
   let prevActive = [];      // zuvor markiertes Farbfeld/Radier
   let trailRaf = 0;
+  let notesPickerWasOn = false; // Folien-Picker-Zustand vor W (zurück bei W aus)
 
   // ── Persistente DOM-Teile + Document-Listener (einmalig) ─────────────────
   const trail = document.createElement("canvas");
@@ -316,9 +317,9 @@ const aicampusLaser = HAS_NOTES ? (function () {
   document.addEventListener("pointerdown", (e) => strokeDown(e.clientX, e.clientY, e.pointerId), { passive: true });
   document.addEventListener("pointerup", (e) => strokeUp(e.pointerId), { passive: true });
   document.addEventListener("pointercancel", (e) => strokeUp(e.pointerId), { passive: true });
-  // C wird IMMER abgefangen (Framework; s. Header — Plugin-C ist nach
-  // Remounts defekt). X/Y während des Lasers → Stift-Modus (der Farbwechsel
-  // greift weiterhin); sonst X/Y über Plugin/Reveal.
+  // C und W werden IMMER abgefangen (Framework; s. Header — Plugin-Keys
+  // sind nach Remounts defekt). X/Y während des Lasers → Stift-Modus (der
+  // Farbwechsel greift weiterhin); sonst X/Y über Plugin/Reveal.
   document.addEventListener("keydown", (e) => {
     if (e.keyCode === 67) {
       // Auch für synthetic Events (Shortcuts-Panel dispatcht auf document,
@@ -326,14 +327,20 @@ const aicampusLaser = HAS_NOTES ? (function () {
       // enden → sonst würde das Plugin C zusätzlich umschalten.
       e.stopImmediatePropagation();
       handleC();
+    } else if (e.keyCode === 87) {
+      e.stopImmediatePropagation();
+      handleW();
     } else if (active && (e.keyCode === 88 || e.keyCode === 89)) {
       setActive(false);
     }
   }, true);
 
   // ── Zustandsableitung ─────────────────────────────────────────────────────
+  // Der "aktive Board": Whiteboard sichtbar → Tafel, sonst Folien-Notizen.
+  // Picker/Modus beziehen sich immer auf den aktuellen Board.
+  const curBoard = () => (canvases[1]?.style.visibility === "visible" ? 1 : 0);
   const cOn = () => {
-    const pal = canvases[0]?.querySelector(".palette");
+    const pal = canvases[curBoard()]?.querySelector(".palette");
     return !!(pal && pal.style.visibility !== "hidden");
   };
   const mode = () => (active ? "LASER" : cOn() ? "PEN" : "OFF");
@@ -384,15 +391,15 @@ const aicampusLaser = HAS_NOTES ? (function () {
   const markLaser = (on) => {
     canvases.forEach((c) => c?.querySelector(".palette li[data-laser]")?.classList.toggle("cb-active", on));
   };
-  // pointer-events nach Plugin-Zustand auflösen: notescanvas C = Palette-
-  // Visibility; chalkboard W = Container-Visibility (verborgenes Chalkboard
-  // kann ohnehin nichts empfangen).
+  // pointer-events nach Plugin-Zustand auflösen (beide Boards): Picker
+  // sichtbar = klick/zeichbar, sonst nicht; verborgenes Chalkboard kann
+  // ohnehin nichts empfangen.
   const restorePointerEvents = () => {
     canvases.forEach((c) => {
       if (!c) return;
       const pal = c.querySelector(".palette");
-      c.style.pointerEvents =
-        c.id === "notescanvas" && (!pal || pal.style.visibility === "hidden") ? "none" : "auto";
+      const pickerOn = !!(pal && pal.style.visibility !== "hidden");
+      c.style.pointerEvents = pickerOn ? "auto" : "none";
       c.querySelectorAll(".palette, .boardhandle").forEach((el) => { el.style.pointerEvents = ""; });
     });
   };
@@ -421,7 +428,10 @@ const aicampusLaser = HAS_NOTES ? (function () {
       // Tasten sind inaktiv.
       canvases.forEach((c) => {
         if (!c) return;
-        if (c.id === "chalkboard") c.style.pointerEvents = "none";
+        // Der notescanvas fängt immer (egal ob sein Picker sichtbar ist),
+        // das Chalkboard unter dem Laser nicht — die Paletten bleiben
+        // klickbar (Child mit pe auto durchschlägt pe none).
+        c.style.pointerEvents = c.id === "notescanvas" ? "auto" : "none";
         c.querySelectorAll(".palette, .boardhandle").forEach((el) => { el.style.pointerEvents = "auto"; });
       });
       RevealChalkboard.configure({ readOnly: true });
@@ -438,62 +448,80 @@ const aicampusLaser = HAS_NOTES ? (function () {
   // C-Modus (Color-Picker) direkt auf dem aktuellen Container anwenden —
   // Spiegel der Plugin-Zweige (show/hide), ohne den Plugin-Toggle:
   const showPicker = () => {
-    const nc = canvases[0];
-    if (!nc) return;
-    const pal = nc.querySelector(".palette");
+    const c = canvases[curBoard()];
+    if (!c) return;
+    const pal = c.querySelector(".palette");
     if (pal) pal.style.visibility = "visible";
-    nc.style.background = "rgba(0,0,0,0)";
-    nc.style.pointerEvents = "auto";
+    if (c.id === "notescanvas") c.style.background = "rgba(0,0,0,0)";
+    c.style.pointerEvents = "auto";
   };
   const hidePicker = () => {
-    const nc = canvases[0];
-    if (!nc) return;
-    const pal = nc.querySelector(".palette");
+    const c = canvases[curBoard()];
+    if (!c) return;
+    const pal = c.querySelector(".palette");
     if (pal) pal.style.visibility = "hidden";
-    nc.style.background = "rgba(0,0,0,0)";
-    nc.style.pointerEvents = "none";
+    if (c.id === "notescanvas") c.style.background = "rgba(0,0,0,0)";
+    c.style.pointerEvents = "none";
   };
   // L: OFF→LASER (Color-Picker zuerst), PEN→LASER, LASER→OFF (Laser + Picker).
+  // Auf beiden Boards identisch.
   function handleL() {
     if (mode() === "LASER") {
       setActive(false);
-      hidePicker();
+      if (curBoard() === 0) hidePicker(); // auf der Tafel bleibt der Picker an
     } else if (mode() === "PEN") {
       setActive(true);
     } else {
-      const cb = canvases[1];
-      if (cb && cb.style.visibility === "visible") RevealChalkboard.toggleChalkboard();
       showPicker();
       setActive(true);
     }
   }
-  // C: Whiteboard (W) geöffnet → W schließt (wie im Plugin); sonst
-  // OFF→PEN, PEN→OFF, LASER→PEN mit schwarzer Farbe.
+  // C: OFF→PEN, PEN→OFF, LASER→PEN (erste Farbe: schwarz bzw. auf der
+  // Tafel weiß). Auf der Tafel lässt sich der Picker NICHT ausschalten
+  // (Maus-Modus macht dort keinen Sinn) – C ist dort ein No-Op. Das Board
+  // selbst rührt C nicht an (das macht W).
   function handleC() {
-    const cb = canvases[1];
-    if (cb && cb.style.visibility === "visible") {
-      RevealChalkboard.toggleChalkboard();
-      return;
-    }
     if (mode() === "LASER") {
       setActive(false);
-      RevealChalkboard.colorIndex(0); // schwarze Farbe
-    } else if (mode() === "PEN") {
+      RevealChalkboard.colorIndex(0);
+    } else if (mode() === "PEN" && curBoard() === 0) {
       hidePicker();
-    } else {
+    } else if (mode() === "OFF") {
       showPicker();
       // Beim ersten Öffnen markiert das Plugin noch keine Farbe –
-      // dann Schwarz aktivieren (vorherige Auswahl bleibt erhalten).
-      const pal = canvases[0]?.querySelector(".palette");
+      // dann die erste Farbe aktivieren (vorherige Auswahl bleibt erhalten).
+      const pal = canvases[curBoard()]?.querySelector(".palette");
       const marked = pal?.querySelector("li.cb-active");
       if (!marked || marked.hasAttribute("data-laser")) {
         RevealChalkboard.colorIndex(0);
       }
     }
   }
+  // W: Whiteboard einfach an/aus – von jedem Zustand aus. Beim
+  // Einschalten (Picker bisher zu) zeigt es die Tafel-Palette, das Plugin
+  // markiert dort die weiße Kreide. Beim Ausschalten kommt man in denselben
+  // Zustand zurück, den der Folien-Picker vorher hatte.
+  function handleW() {
+    const wb = canvases[1];
+    if (!wb) return;
+    if (wb.style.visibility === "visible") {
+      RevealChalkboard.toggleChalkboard();
+      notesPickerWasOn ? showPicker() : hidePicker();
+    } else {
+      notesPickerWasOn = cOn();
+      RevealChalkboard.toggleChalkboard();
+      showPicker();
+    }
+  }
 
   // ── Pro-Mount-Verdrahtung (wird aus aicampusDoMount aufgerufen) ─────────
   function bind() {
+    // Alter Zustand (die alten Container sitzen noch in `canvases`):
+    const wbWasOn = canvases[1]?.style.visibility === "visible";
+    const pickerWasOn = wbWasOn ? true : (() => {
+      const p = canvases[0]?.querySelector(".palette");
+      return !!(p && p.style.visibility !== "hidden");
+    })();
     const lastOf = (sel) => {
       const els = document.querySelectorAll(sel);
       return els.length ? els[els.length - 1] : null;
@@ -556,8 +584,13 @@ const aicampusLaser = HAS_NOTES ? (function () {
       handleL,
     );
 
-    // Laser überlebt den Remount: aktiven Zustand auf die neuen Container
-    // anwenden (die starten mit pe none + verborgenem Picker).
+    // Zustand überlebt den Remount (neue Container starten mit pe none +
+    // verborgenem Picker, Whiteboard zu): Tafel, Picker und Laser neu anwenden.
+    if (wbWasOn) {
+      RevealChalkboard.toggleChalkboard();
+      notesPickerWasOn = true;
+    }
+    if (pickerWasOn) showPicker();
     if (active) {
       active = false;
       setActive(true);
