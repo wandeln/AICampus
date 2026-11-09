@@ -505,6 +505,15 @@
   // destroy() würde eine Instanz treffen, deren initialize() noch läuft.
   // Überholte Renders skippt renderPreviewInner per seq-Check.
   let previewRenderQueue = Promise.resolve();
+  // Inkrementeller Rebuild: saubere Section-HTML (post-Build, VOR Fit und
+  // Reveal → ohne Reveal-Zustand) pro Slide-Signatur aus dem VORHERIGEN
+  // Render. Treffer werden per innerHTML wiederbelebt statt neu geparsed —
+  // spart den KaTeX/Code-Markdown-Aufwand für unveränderte Folien.
+  // Pro Render wird newCache gefüllt und NACH dem Swap ersetzt; ein
+  // überholter Render überschreibt die Map nicht (Signatur-Hits sind
+  // inhaltsgebunden und damit auch mit älteren Einträgen korrekt).
+  let _slideBuildCache = new Map();
+  let _slideFitW = 0, _slideFitH = 0;
   // Inhalt des gerade laufenden Renders (null = keiner): ein
   // gleich-contentiger Render dahinter würde ihn nur überholen und den
   // Position-Restore verlieren (s. renderPreview).
@@ -704,22 +713,42 @@
       else stagingSlides.removeAttribute("data-footer");
       stagingReveal.appendChild(stagingSlides);
       document.body.appendChild(stagingReveal);
-      try {
-        for (let i = 0; i < slides.length; i++) {
-          if (seq !== previewSeq) return; // neuerer Render hat übernommen
-          const footer = FOOTER_ENABLED && FOOTER_TEXT ? FOOTER_TEXT : null;
-          // Folien-Position (S-Nummern unlabeled Subfigure-Komplexe):
-          const section = await buildSlideSection(slides[i], footer, { deckId: material.id, h: i });
-          // Nach dem await erneut prüfen: ein während des Baus überholter
-          // Render darf sein Section nicht ins neue DOM hängen (sonst
-          // doppelte Folie).
-          if (seq !== previewSeq) return;
-          stagingSlides.appendChild(section);
-          // Yield: ohne Macrotask-Abgabe läuft der Deck-Build als
-          // Microtask-Kette (gecachte Fetch) durch und CodeMirror bekommt
-          // bis zum Deck-Ende keine Eingabe-Events.
-          await yieldToMain();
-        }
+       try {
+         const prevCache = _slideBuildCache;
+         const newCache = new Map();
+         // Skala-Übernahme nur bei gleicher Logik-Größe (Format-Wechsel im
+         // Theme → alle Skalen veraltet → neu fiten).
+         const sameWH = _slideFitW === W && _slideFitH === H;
+         for (let i = 0; i < slides.length; i++) {
+           if (seq !== previewSeq) return; // neuerer Render hat übernommen
+           const footer = FOOTER_ENABLED && FOOTER_TEXT ? FOOTER_TEXT : null;
+           // Inkrementeller Rebuild: unveränderte Folie (Inhalt + Position
+           // + Footer identisch) aus dem sauberen HTML-Cache statt neu
+           // parsen. Footer als Key-Suffix: er sitzt im data-footer-Attribut
+           // der Sectionen.
+           const sig = slideSignature(slides[i], i) + "\u0000" + (footer || "");
+           const hit = prevCache.get(sig);
+           let section;
+           if (hit) {
+             const holder = document.createElement("div");
+             holder.innerHTML = hit;
+             section = holder.firstElementChild;
+             newCache.set(sig, hit); // in der neuen Map behalten
+           } else {
+             // Folien-Position (S-Nummern unlabeled Subfigure-Komplexe):
+             section = await buildSlideSection(slides[i], footer, { deckId: material.id, h: i });
+             // Nach dem await erneut prüfen: ein während des Baus überholter
+             // Render darf sein Section nicht ins neue DOM hängen (sonst
+             // doppelte Folie).
+             if (seq !== previewSeq) return;
+             newCache.set(sig, section.outerHTML);
+           }
+           stagingSlides.appendChild(section);
+           // Yield: ohne Macrotask-Abgabe läuft der Deck-Build als
+           // Microtask-Kette (gecachte Fetch) durch und CodeMirror bekommt
+           // bis zum Deck-Ende keine Eingabe-Events.
+           await yieldToMain();
+         }
         // KaTeX-Webfonts vor dem Fit fertig laden lassen: die Build-Phase
         // (KaTeX-Rendering) hat die Fonts angefordert — misst der Fit mit
         // Fallback-Fonts, ist die Skala falsch und der spätere Font-Refit
@@ -751,12 +780,36 @@
         const targetSection = subCount > 1
           ? (stagingSlides.children[rh] && stagingSlides.children[rh].children[rv])
           : stagingSlides.children[rh];
-        for (const sec of stagingSlides.querySelectorAll("section")) {
-          if (sec.querySelector(":scope > section")) continue;
-          if (sec === targetSection) fitSlideSection(sec, W, H);
-          else sec.dataset.fitPending = "1";
+        // Ziel-Folie synchron fiten (nach dem Swap sichtbar). Caches
+        // überlebende Folien behalten ihre Skala (gleicher Inhalt,
+        // gleiche Größe → Messung weiterhin gültig) und brauchen kein
+        // (Background-)Refit; alles andere markieren + lazy fiten.
+        // Die Skala kommt vom LEBENDEN alten Deck (gleicher Index),
+        // nicht vom Cache (der hält Pre-Fit-Snapshots).
+        const oldTops = previewSlidesEl.children;
+        for (let ti = 0; ti < stagingSlides.children.length; ti++) {
+          const top = stagingSlides.children[ti];
+          const oldTop = oldTops[ti] || null;
+          const leaves = top.querySelector(":scope > section") ? [...top.children] : [top];
+          const oldLeaves = oldTop
+            ? (oldTop.querySelector(":scope > section") ? [...oldTop.children] : [oldTop])
+            : null;
+          for (let v = 0; v < leaves.length; v++) {
+            const leaf = leaves[v];
+            if (leaf === targetSection) { fitSlideSection(leaf, W, H); continue; }
+            const oldLeaf = oldLeaves ? oldLeaves[v] : null;
+            const scale = sameWH && oldLeaf ? oldLeaf.style.getPropertyValue("--slides-body-scale") : "";
+            if (scale) leaf.style.setProperty("--slides-body-scale", scale);
+            else leaf.dataset.fitPending = "1";
+          }
         }
         if (seq !== previewSeq) return;
+        // Map ERSETZEN (nicht mergen): newCache enthält genau die Folien
+        // dieses Decks — verwaiste Einträge (gelöschte/geänderte Folien)
+        // fallen damit aus dem Cache.
+        _slideBuildCache = newCache;
+        _slideFitW = W;
+        _slideFitH = H;
         // ── Atomarer Swap: ab hier keine Yields bis die neue Instanz
         //    läuft — sonst sähe der Nutzer das alte Deck zurückkommen.
         if (previewReveal) {
@@ -925,7 +978,7 @@
       // Font-Refit können Marken vorziehen — dieselbe fitPending-Marke →
       // keine Doppelarbeit.
       (async () => {
-        const pending = [...previewSlidesEl.querySelectorAll("section[fitPending]")];
+        const pending = [...previewSlidesEl.querySelectorAll("section[data-fit-pending]")];
         for (const sec of pending) {
           if (seq !== previewSeq) return;
           if (sec.dataset.fitPending === undefined) continue;

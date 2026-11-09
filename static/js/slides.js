@@ -279,6 +279,28 @@ async function parseSlides(content) {
   return slides;
 }
 
+/** Inhalts-Signatur einer Folie für den inkrementellen Rebuild (Editor-
+ *  Preview): alles, was ins Rendering einfließt. h ist TEIL der Signatur —
+ *  positionsabhängige Nummerierung (unlabeled Figures, S-Nummern,
+ *  Cross-Slide-Links) ändert sich, wenn Folien dazwischen eingeffügt/
+ *  entfernt werden; ein Hit gilt also nur für unveränderte Position. */
+function slideSignature(slide, h) {
+  const parts = [
+    h,
+    slide.layout,
+    slide.transition || "",
+    slide.css_class || "",
+    slide.notes || "",
+    slide.background ? slide.background.src + "|" + slide.background.alt + "|" + slide.background.zoom : "",
+  ];
+  if (slide.children && slide.children.length) {
+    for (const c of slide.children) parts.push(slideSignature(c, h));
+  } else {
+    parts.push((slide.columns || []).join("\n"));
+  }
+  return parts.join("\u0000");
+}
+
 // ─── Zitations-Links → auto-Quellen-Folie ─────────────────────────────────
 // Die auto-Quellen-Folie (parseSlides) trägt die Einträge mit id + data-refkey.
 // Zitations-Links (@cite: etc., data-refkey) navigieren zur jeweiligen Quelle
