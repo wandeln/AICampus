@@ -1748,11 +1748,11 @@ async def applet_new_page(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Applet-Studio: neues Applet generieren (nur PROF/Admin)."""
+    """Media-Studio: neues Medium (Applet/Bild) generieren (nur PROF/Admin)."""
     membership, ctx = _course_tab_context(session, user, request, course_id, active_tab="media")
     if not (ctx["is_prof"] or ctx["is_admin"]):
         raise HTTPException(403, "Nur PROFs und Administratoren dürfen Medien verwalten.")
-    ctx["page_title"] = f"Applet erstellen — {ctx['course']['name']}"
+    ctx["page_title"] = f"Medium erstellen — {ctx['course']['name']}"
     ctx["media"] = None
     ctx["code_editor"] = True
     return templates.TemplateResponse("course/applet_studio.html", ctx)
@@ -1766,14 +1766,14 @@ async def applet_edit_page(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Applet-Studio: Applet bearbeiten (nur PROF/Admin)."""
+    """Media-Studio: Medium bearbeiten (nur PROF/Admin)."""
     membership, ctx = _course_tab_context(session, user, request, course_id, active_tab="media")
     if not (ctx["is_prof"] or ctx["is_admin"]):
         raise HTTPException(403, "Nur PROFs und Administratoren dürfen Medien verwalten.")
     media = session.get(CourseMedia, media_id)
-    if not media or media.course_id != course_id or media.media_type != "applet":
-        raise HTTPException(404, "Applet nicht gefunden.")
-    ctx["page_title"] = f"Applet bearbeiten — {ctx['course']['name']}"
+    if not media or media.course_id != course_id or media.media_type not in ("applet", "image"):
+        raise HTTPException(404, "Medium nicht gefunden.")
+    ctx["page_title"] = f"Medium bearbeiten — {ctx['course']['name']}"
     ctx["media"] = media
     ctx["code_editor"] = True
     return templates.TemplateResponse("course/applet_studio.html", ctx)

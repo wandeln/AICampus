@@ -27,6 +27,7 @@ from database.models import CourseMedia, CourseRole, MediaUsage, ScriptSection, 
 from services.auth_service import require_course_access
 from services.llm_service import LLMService
 from services.settings_resolver import get_effective_llm_config
+from services import image_service
 from services import media_service
 from services import notifications
 from services import trash_service
@@ -286,17 +287,40 @@ async def list_media(
     )
 
 
+async def _generate_image_meta(file_path: str, mime: str, llm_cfg) -> tuple[str, str]:
+    """Titel + Beschreibung per Text-LLM (multimodal) aus einer gespeicherten
+    Bilddatei. Best-effort: schlägt es fehl, bleibt ("","") (Titel-Fallback)."""
+    try:
+        p = media_service.MEDIA_DIR / file_path
+        if not p.is_file():
+            return "", ""
+        b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+        meta = await llm_service.describe_media_image(image_base64=b64, mime_type=mime, config=llm_cfg)
+        if meta.get("success"):
+            d = meta.get("data", {}) or {}
+            return (d.get("title") or "").strip(), (d.get("description") or "").strip()
+    except Exception:  # noqa: BLE001 — Metadaten sind optional
+        pass
+    return "", ""
+
+
 @router.post("/courses/{course_id}/media")
 async def upload_media(
     course_id: int,
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
     llm_description: Optional[str] = Form(None),
+    version: bool = Form(False),
+    generate_meta: bool = Form(False),
     session: Session = Depends(get_session),
     user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
     """Medium hochladen (PNG/JPG/WebP/GIF, max. 5 MB; SVG → Applet, sanitized;
-    Video mp4/webm, max. 500 MB — chunkweise auf Disk, ohne RAM-Peak)."""
+    Video mp4/webm, max. 500 MB — chunkweise auf Disk, ohne RAM-Peak).
+
+    `version=True` (nur Raster-Bilder): legt zusätzlich eine Bild-Version an.
+    `generate_meta=True` (nur Raster-Bilder): Titel + Beschreibung per LLM aus
+    dem Bild (Media-Studio; explizit übergebene Felder haben Vorrang)."""
     user, _ = user_and_course
     ext = Path(file.filename or "").suffix.lower()
     if ext == ".svg":
@@ -312,15 +336,21 @@ async def upload_media(
         rel_path, mime, size = media_service.save_upload(course_id, file.filename or "upload.png", await file.read())
         media_type = "image"
 
+    gen_title = gen_desc = ""
+    if generate_meta and media_type == "image":
+        llm_cfg = dict(get_effective_llm_config(session, course_id))
+        session.rollback()  # DB-Connection vor dem LLM-Call freigeben
+        gen_title, gen_desc = await _generate_image_meta(rel_path, mime, llm_cfg)
+
     default_title = (file.filename or "Medium").rsplit(".", 1)[0]
     media = CourseMedia(
         course_id=course_id,
-        title=(title or "").strip() or default_title,
+        title=(title or "").strip() or gen_title or default_title,
         file_path=rel_path,
         media_type=media_type,
         mime_type=mime,
         file_size=size,
-        llm_description=(llm_description or "").strip() or None,
+        llm_description=(llm_description or "").strip() or (gen_desc or None),
         created_by=user.id,  # type: ignore[arg-type]
     )
     session.add(media)
@@ -331,10 +361,17 @@ async def upload_media(
     notifications.push_content_updated(
         session, course_id, "applet" if media.media_type == "applet" else "media", media.id)
 
+    version_id = None
+    if version and media.media_type == "image":
+        v = version_service.mark_created(session, user, "image", media.id)  # type: ignore[arg-type]
+        version_id = v["id"] if v else None
     counts = media_service.reference_counts(session, course_id)
+    d = _media_to_dict(media, [], counts)
+    if version_id:
+        d["version_id"] = version_id
     return {
         "message": f"Medium '{media.title}' hochgeladen.",
-        "media": _media_to_dict(media, [], counts),
+        "media": d,
     }
 
 
@@ -343,13 +380,18 @@ async def replace_media_file(
     course_id: int,
     media_id: int,
     file: UploadFile = File(...),
+    version: bool = Form(False),
+    generate_meta: bool = Form(False),
     session: Session = Depends(get_session),
-    _user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
+    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
     """Ersetzt die Datei eines Mediums (gleicher Pfad → Markdown-Referenzen bleiben gültig).
 
     Der Dateityp muss zum Mediumstyp passen (Video ← mp4/webm, Bild ← Raster).
-    """
+    `version=True` (nur Raster-Bilder): legt zusätzlich eine Bild-Version an
+    (z. B. Media-Studio: Zuschnitt oder Bild-Ersatz). `generate_meta=True`
+    (nur Raster-Bilder): Titel + Beschreibung per LLM neu aus dem Bild."""
+    user, _ = user_and_course
     media = _get_media(session, course_id, media_id)
     if media.media_type == "video":
         rel_path, mime, size = await run_in_threadpool(
@@ -367,8 +409,29 @@ async def replace_media_file(
     session.commit()
     session.refresh(media)
 
+    if generate_meta and media.media_type == "image":
+        llm_cfg = dict(get_effective_llm_config(session, course_id))
+        session.rollback()  # Read-Txn vor dem LLM-Call freigeben
+        gen_title, gen_desc = await _generate_image_meta(rel_path, mime, llm_cfg)
+        if gen_title:
+            media.title = gen_title
+        if gen_desc:
+            media.llm_description = gen_desc
+        session.add(media)
+        session.commit()
+        session.refresh(media)
+
+    version_id = None
+    if version and media.media_type == "image":
+        v = version_service.snapshot_current(
+            session, user, "image", media.id, name="Datei ersetzt (Upload/Crop)"  # type: ignore[arg-type]
+        )
+        version_id = v["id"] if v else None
     counts = media_service.reference_counts(session, course_id)
-    return {"message": "Datei ersetzt.", "media": _media_to_dict(media, [], counts)}
+    d = _media_to_dict(media, [], counts)
+    if version_id:
+        d["version_id"] = version_id
+    return {"message": "Datei ersetzt.", "media": d}
 
 
 # ─── Applets (LLM-generierte, self-contained HTML-Medien) ──────────────
@@ -536,10 +599,13 @@ async def create_applet_media(
     session.add(media)
     session.commit()
     session.refresh(media)
-    version_service.mark_created(session, user, "applet", media.id)
+    version = version_service.mark_created(session, user, "applet", media.id)
 
     counts = media_service.reference_counts(session, course_id)
-    return {"message": f"Applet '{media.title}' erstellt.", "media": _media_to_dict(media, [], counts)}
+    media_dict = _media_to_dict(media, [], counts)
+    if version:
+        media_dict["version_id"] = version["id"]
+    return {"message": f"Applet '{media.title}' erstellt.", "media": media_dict}
 
 
 @router.put("/courses/{course_id}/media/{media_id}/applet")
@@ -588,8 +654,18 @@ async def get_applet_media(
     session: Session = Depends(get_session),
     _user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
-    """Applet-Quelle (HTML oder SVG + Metadaten) für das Applet-Studio."""
+    """Applet-Quelle (HTML/SVG + Metadaten) bzw. Bild-Info für das Media-Studio."""
     media = _get_media(session, course_id, media_id)
+    if media.media_type == "image":
+        # Bild: kein Code, dafür die URL (Studio lädt das <img> daraus).
+        return {
+            "id": media.id,
+            "title": media.title,
+            "llm_description": media.llm_description or "",
+            "media": "",
+            "format": "image",
+            "url": media_service.media_url(media),
+        }
     if media.media_type != "applet":
         raise HTTPException(400, "Dieses Medium ist kein Applet.")
     path = media_service.MEDIA_DIR / media.file_path
@@ -644,6 +720,194 @@ async def switch_applet_format_endpoint(
         "message": f"Format auf „{fmt}“ gewechselt — bitte passe den Code entsprechend an (manuell oder per LLM, z. B. „Bitte konvertiere das folgende {old_format} möglichst getreu in {target}“).",
         "media": _media_to_dict(media, [], counts),
     }
+
+
+# ─── Bilder (LLM-Generierung, Text→Bild über den globalen Image-Endpoint) ──
+#
+# Das Media-Studio (course/applet_studio.html) nutzt diese Endpoints für das
+# Format „Bild“: Erzeugen (speichert NICHT) → speichern (neu anlegen oder die
+# Datei eines bestehenden Bild-Mediums ersetzen). Dateien:
+# data/media/course_{id}/<uuid>.png  (media_type = "image").
+
+def _decode_image_data_url(data_url: str) -> tuple[str, bytes]:
+    """Validiert eine Data-URL (PNG/JPEG/WebP) und liefert (mime, bytes)."""
+    m = _REFERENCE_IMAGE_URL_RE.fullmatch(data_url or "")
+    if not m:
+        raise HTTPException(400, "Ungültiges Bild (PNG, JPEG oder WebP als Data-URL erwartet).")
+    if len(m.group(2)) > MAX_REFERENCE_IMAGE_B64:
+        raise HTTPException(413, "Bild zu groß (max. ca. 10 MB).")
+    return m.group(1), base64.b64decode(m.group(2))
+
+
+@router.post("/courses/{course_id}/media/image-llm")
+async def generate_image_llm(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
+):
+    """Erzeugt ein Bild (Text→Bild) UND speichert es direkt als Medium.
+
+    Der Server hat die Bytes von der KI → sie landen direkt auf Disk (Datei +
+    Medium + Initial-Version). Der Client bekommt nur eine URL, kein 5-MB-
+    Base64-Roundtrip.
+
+    Body: {"prompt": str, "size"?: str, "media_id"?: int, "edit"?: bool}
+    media_id gesetzt → Datei des bestehenden Bild-Mediums wird ersetzt
+    (Neu-Generierung), sonst wird ein neues Medium angelegt.
+    edit=True (nur mit media_id) → Bild-Bearbeitung (Bild→Bild): das aktuelle
+    Bild des Mediums ist die Basis, `prompt` beschreibt die Änderung.
+    Returns: {"media": {id, url, version_id, …}, "title", "description", "latency_ms"}
+    """
+    user, _ = user_and_course
+    body = await request.json()
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(400, "Bitte beschreibe das Bild, das erzeugt werden soll.")
+    size = (body.get("size") or image_service.DEFAULT_IMAGE_SIZE).strip()
+    media_id = body.get("media_id")
+    edit = bool(body.get("edit", False))
+    if edit and media_id is None:
+        raise HTTPException(400, "Zum Bearbeiten braucht es ein bestehendes Bild.")
+
+    base_bytes: Optional[bytes] = None
+    base_mime = "image/png"
+    if edit:
+        media = _get_media(session, course_id, media_id)
+        if media.media_type != "image":
+            raise HTTPException(400, "Dieses Medium ist kein Bild.")
+        base_path = media_service.MEDIA_DIR / media.file_path
+        if not base_path.is_file():
+            raise HTTPException(404, "Ausgangsbild nicht gefunden.")
+        base_bytes = base_path.read_bytes()
+        base_mime = media.mime_type or "image/png"
+        # Großes Ausgangsbild vor dem Edit-Call runterskalieren (längste Kante),
+        # damit der Versand + das Modell keine übermäßig große Eingabe bekommen.
+        ds_bytes, ds_mime = image_service.downscale_for_edit(base_bytes)
+        if ds_mime:
+            base_bytes, base_mime = ds_bytes, ds_mime
+
+    llm_cfg = dict(get_effective_llm_config(session, course_id))
+    # DB-Connection vor dem langen KI-Call freigeben (s. generate_applet_llm).
+    session.rollback()
+
+    if edit:
+        result = await image_service.edit_image(prompt=prompt, base_image=(base_bytes, base_mime), size=size, config=llm_cfg)
+    else:
+        result = await image_service.generate_image(prompt=prompt, size=size, config=llm_cfg)
+    if not result.get("success"):
+        raise HTTPException(502, f"Image-Fehler: {result.get('error', 'Unbekannter Fehler')}")
+    data = result["data"]
+    png_bytes = data["png_bytes"]
+    mime = data["mime"]
+    latency_ms = data.get("latency_ms", 0)
+
+    # Titel + Beschreibung per Text-LLM (multimodal) — best-effort; schlägt es
+    # fehl, bleibt das Bild nutzbar (Titel-Fallback = Prompt).
+    title = description = ""
+    try:
+        b64 = base64.b64encode(png_bytes).decode("ascii")
+        meta = await llm_service.describe_media_image(image_base64=b64, mime_type=mime, config=llm_cfg)
+        if meta.get("success"):
+            d = meta.get("data", {}) or {}
+            title = (d.get("title") or "").strip()
+            description = (d.get("description") or "").strip()
+    except Exception:  # noqa: BLE001 — Metadaten sind optional
+        pass
+    final_title = title or (prompt if len(prompt) <= 80 else prompt[:77] + "…")
+
+    ext = image_service._MIME_TO_EXT[mime]
+    if media_id is not None:
+        # Neu-Generierung: Datei des bestehenden Bild-Mediums ersetzen (gleicher
+        # Pfad → Markdown-Referenzen bleiben gültig).
+        media = _get_media(session, course_id, media_id)
+        if media.media_type != "image":
+            raise HTTPException(400, "Dieses Medium ist kein Bild.")
+        rel_path, mime, n_bytes = media_service.replace_file(media.file_path, "image" + ext, png_bytes)
+        media.file_path = rel_path
+        media.mime_type = mime
+        media.file_size = n_bytes
+        media.title = final_title
+        media.llm_description = description or None
+        session.add(media)
+        session.commit()
+        session.refresh(media)
+        version = version_service.snapshot_current(session, user, "image", media.id)
+    else:
+        rel_path, mime, n_bytes = media_service.save_upload(course_id, "generated" + ext, png_bytes)
+        media = CourseMedia(
+            course_id=course_id,
+            title=final_title,
+            file_path=rel_path,
+            media_type="image",
+            mime_type=mime,
+            file_size=n_bytes,
+            llm_description=description or None,
+            created_by=user.id,  # type: ignore[arg-type]
+        )
+        session.add(media)
+        session.commit()
+        session.refresh(media)
+        version = version_service.mark_created(session, user, "image", media.id)
+    notifications.push_content_updated(session, course_id, "media", media.id)
+
+    counts = media_service.reference_counts(session, course_id)
+    media_dict = _media_to_dict(media, [], counts)
+    if version:
+        media_dict["version_id"] = version["id"]
+    return {
+        "media": media_dict,
+        "title": title,
+        "description": description,
+        "latency_ms": latency_ms,
+        "size": size,
+    }
+
+
+@router.post("/courses/{course_id}/media/image")
+async def create_image_media(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
+):
+    """Neues Bild-Medium aus dem Media-Studio anlegen (Base64-Payload).
+
+    Body: {"title": str, "llm_description": str, "image_data_url": "data:image/png;base64,…"}
+    """
+    user, _ = user_and_course
+    body = await request.json()
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "Titel darf nicht leer sein.")
+    description = (body.get("llm_description") or "").strip()
+    mime, raw = _decode_image_data_url((body.get("image_data_url") or "").strip())
+    ext = image_service._MIME_TO_EXT[mime]
+
+    rel_path, mime, size = media_service.save_upload(course_id, "generated" + ext, raw)
+    media = CourseMedia(
+        course_id=course_id,
+        title=title,
+        file_path=rel_path,
+        media_type="image",
+        mime_type=mime,
+        file_size=size,
+        llm_description=description or None,
+        created_by=user.id,  # type: ignore[arg-type]
+    )
+    session.add(media)
+    session.commit()
+    session.refresh(media)
+    version = version_service.mark_created(session, user, "image", media.id)
+    notifications.push_content_updated(session, course_id, "media", media.id)
+
+    counts = media_service.reference_counts(session, course_id)
+    media_dict = _media_to_dict(media, [], counts)
+    # Initial-Version (ID) mitliefern → Studio-Auto-Save übernimmt sie statt
+    # eine zweite Version anzulegen (gleiche Logik wie die anderen Elementtypen).
+    if version:
+        media_dict["version_id"] = version["id"]
+    return {"message": f"Bild „{media.title}“ erstellt.", "media": media_dict}
 
 
 @router.post("/courses/{course_id}/media/{media_id}/generate-metadata")
@@ -776,15 +1040,15 @@ async def duplicate_applet_media(
     session: Session = Depends(get_session),
     user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
 ):
-    """Applet duplizieren (neue Datei mit neuem UUID-Namen → Markdown-Referenzen
+    """Applet/Bild duplizieren (neue Datei mit neuem UUID-Namen → Markdown-Referenzen
     des Originals bleiben unangetastet).
 
     Body: {"title": str (optional, Default: „<Original-Titel> (Kopie)“)}
     """
     user, _ = user_and_course
     media = _get_media(session, course_id, media_id)
-    if media.media_type != "applet":
-        raise HTTPException(400, "Nur Applets können dupliziert werden.")
+    if media.media_type not in ("applet", "image"):
+        raise HTTPException(400, "Nur Applets und Bilder können dupliziert werden.")
     body = await request.json()
     title = (body.get("title") or "").strip() or media.title + " (Kopie)"
     if not title:
@@ -793,16 +1057,22 @@ async def duplicate_applet_media(
     path = media_service.MEDIA_DIR / media.file_path
     if not path.is_file():
         raise HTTPException(404, "Datei nicht gefunden.")
-    rel_path, mime, size = media_service.save_applet(
-        course_id, path.read_text(encoding="utf-8"),
-        media_service.applet_format_of(media.file_path),
-    )
+    if media.media_type == "image":
+        # Binär-Kopie des Bilds (neue Datei, neues UUID — Original bleibt).
+        rel_path, mime, size = media_service.save_upload(
+            course_id, "dup" + path.suffix, path.read_bytes(),
+        )
+    else:
+        rel_path, mime, size = media_service.save_applet(
+            course_id, path.read_text(encoding="utf-8"),
+            media_service.applet_format_of(media.file_path),
+        )
 
     new_media = CourseMedia(
         course_id=course_id,
         title=title,
         file_path=rel_path,
-        media_type="applet",
+        media_type=media.media_type,
         mime_type=mime,
         file_size=size,
         llm_description=media.llm_description,
@@ -811,7 +1081,8 @@ async def duplicate_applet_media(
     session.add(new_media)
     session.commit()
     session.refresh(new_media)
-    version_service.mark_created(session, user, "applet", new_media.id)
+    version_service.mark_created(session, user, media.media_type, new_media.id)
 
     counts = media_service.reference_counts(session, course_id)
-    return {"message": f"Applet '{new_media.title}' dupliziert.", "media": _media_to_dict(new_media, [], counts)}
+    label = "Bild" if media.media_type == "image" else "Applet"
+    return {"message": f"{label} '{new_media.title}' dupliziert.", "media": _media_to_dict(new_media, [], counts)}

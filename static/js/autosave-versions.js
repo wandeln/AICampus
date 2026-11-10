@@ -474,6 +474,15 @@
       touch,
       finish,
       setBaseline,
+      // Ein anderer Flow (z. B. der Image-Endpoint) hat das Medium + Version
+      // serverseitig bereits angelegt → Controller übernimmt ID + Version und
+      // legt beim nächsten Auto-Save keine (zweite) Version mehr an.
+      adopt(newId, newVersionId, baselinePayload) {
+        if (newId != null) id = newId;
+        if (newVersionId != null) versionId = newVersionId;
+        if (baselinePayload != null) setBaseline(baselinePayload);
+        refreshVersions();
+      },
       refreshVersions,
       restoreVersion,
       deleteVersion,

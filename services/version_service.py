@@ -22,11 +22,15 @@ Semantik:
   sodass immer die neueste Version = aktueller Zustand ist.
 """
 
+import base64
+import hashlib
 import json
 import logging
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -176,6 +180,103 @@ def _applet_apply(session: Session, entity: CourseMedia, snapshot: dict) -> None
     sync_media_usages(session, entity.course_id)
 
 
+# Bild-Medien (Raster, media_type="image"): der Snapshot trägt das Bild als
+# Data-URL (Feld „image“). Wie bei Applets gilt: gleicher Dateipfad →
+# Markdown-Referenzen bleiben gültig. Hinweis: der Data-URL landet in der DB
+# (ContentVersion.snapshot) — pro Version ≈ Bildgröße (KISS; bei Bedarf später
+# auf Datei-Snapshots umstellen).
+_IMAGE_DATA_URL_RE = re.compile(r"^data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$")
+_IMAGE_MIME_TO_EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+
+
+def _image_load(session: Session, entity_id: int):
+    m = session.get(CourseMedia, entity_id)
+    if not m or m.media_type != "image":
+        return None
+    return m
+
+
+def _image_apply(session: Session, entity: CourseMedia, snapshot: dict) -> None:
+    title = (snapshot.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "Titel darf nicht leer sein.")
+    # 1) Bilddatei: jede Version trägt eine eigene Datei-Kopie (image_file, s.
+    #    _capture_image_file) → deren Bytes auf den aktuellen Pfad zurückschreiben
+    #    (gleicher Pfad → Markdown-Referenzen bleiben gültig). Ohne image_file
+    #    (reine Titel-Änderung / Auto-Save) bleibt die aktuelle Datei stehen.
+    image_file = (snapshot.get("image_file") or "").strip()
+    if image_file:
+        src = (media_service.MEDIA_DIR / image_file).resolve()
+        if src.is_relative_to(media_service.MEDIA_DIR.resolve()) and src.is_file():
+            rel_path, mime, size = media_service.replace_file(entity.file_path, src.name, src.read_bytes())
+            entity.file_path = rel_path
+            entity.mime_type = mime
+            entity.file_size = size
+        else:
+            logger.warning("Bild-Restore: Version-Kopie fehlt (%s) — aktuelle Datei bleibt.", image_file)
+    # 2) Sonderfall: Data-URL im Snapshot (z. B. künftige Bild-Editierung).
+    data_url = (snapshot.get("image") or "").strip()
+    if data_url:
+        m = _IMAGE_DATA_URL_RE.fullmatch(data_url)
+        if not m:
+            raise HTTPException(400, "Das Bild (Data-URL PNG/JPEG/WebP) im Snapshot ist ungültig.")
+        raw = base64.b64decode(m.group(2))
+        ext = _IMAGE_MIME_TO_EXT[m.group(1)]
+        rel_path, mime, size = media_service.replace_file(entity.file_path, "image" + ext, raw)
+        entity.file_path = rel_path
+        entity.mime_type = mime
+        entity.file_size = size
+    entity.title = title
+    entity.llm_description = (snapshot.get("llm_description") or "").strip() or None
+    session.add(entity)
+    session.commit()
+    session.refresh(entity)
+    sync_media_usages(session, entity.course_id)
+
+
+def _capture_image_file(session: Session, v: ContentVersion, entity) -> None:
+    """Sichert die aktuelle Bilddatei pro Version (Kopie auf Disk) → Restore
+    kann das Bild des jeweiligen Zeitpunkts wiederherstellen. Bytes bleiben auf
+    Disk (nicht im JSONB) → Snapshot bleibt klein. Dedup per SHA-256: nur bei
+    geänderter Datei eine neue Kopie, sonst wird die Kopie der Vorversion
+    referenziert (reine Titel-Auto-Saves duplizieren nichts). Best-effort:
+    Fehler dürfen den Auto-Save nicht blockieren."""
+    try:
+        path = media_service.MEDIA_DIR / entity.file_path
+        if not path.is_file():
+            logger.warning("Bild-Version %s: Datei fehlt (%s).", v.id, entity.file_path)
+            return
+        raw = path.read_bytes()
+        h = hashlib.sha256(raw).hexdigest()
+        prev = session.exec(
+            select(ContentVersion)
+            .where(ContentVersion.entity_type == "image")
+            .where(ContentVersion.entity_id == entity.id)
+            .where(ContentVersion.id != v.id)
+            .order_by(ContentVersion.id.desc())
+        ).first()
+        prev_snap = (prev.snapshot or {}) if prev is not None else {}
+        if prev_snap.get("image_hash") == h and prev_snap.get("image_file"):
+            image_file = prev_snap["image_file"]  # Datei unverändert → Kopie übernehmen
+        else:
+            ext = Path(entity.file_path).suffix or ".png"
+            rel = f"versions/{entity.id}-v{v.id}{ext}"
+            dest = media_service.MEDIA_DIR / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(raw)
+            image_file = rel
+        snap = dict(v.snapshot or {})
+        snap["image_hash"] = h
+        snap["image_file"] = image_file
+        v.snapshot = snap
+        session.add(v)
+        session.commit()
+        session.refresh(v)
+    except Exception as e:  # noqa: BLE001
+        session.rollback()
+        logger.warning("Bild-Version %s: Datei-Sicherung fehlgeschlagen: %s", v.id, e)
+
+
 def _task_load(session: Session, entity_id: int):
     return session.get(Task, entity_id)
 
@@ -319,6 +420,12 @@ ADAPTERS: dict[str, _Adapter] = {
         course_id_of=lambda e: e.course_id,
         apply=_applet_apply,
     ),
+    "image": _Adapter(
+        type="image",
+        load=_image_load,
+        course_id_of=lambda e: e.course_id,
+        apply=_image_apply,
+    ),
     "task": _Adapter(
         type="task",
         load=_task_load,
@@ -390,6 +497,14 @@ def _current_snapshot(entity_type: str, entity) -> dict:
         return {
             "title": entity.title,
             "media": path.read_text(encoding="utf-8"),
+            "llm_description": entity.llm_description or "",
+        }
+    if entity_type == "image":
+        # Bild-Bytes bewusst NICHT im Snapshot (→ klein/schnell, kein 5-MB
+        # JSONB pro Version): Versions-History für Bilder = Titel/Beschreibung;
+        # die Datei liegt separat auf Disk (s. _image_apply).
+        return {
+            "title": entity.title,
             "llm_description": entity.llm_description or "",
         }
     if entity_type == "reference":
@@ -499,6 +614,8 @@ def snapshot_current(
     session.add(v)
     session.commit()
     session.refresh(v)
+    if entity_type == "image":
+        _capture_image_file(session, v, entity)
     _capture_task_files(session, v)
     _push_live_update(session, entity_type, entity)
     return _version_to_dict(v)
@@ -513,6 +630,9 @@ def mark_created(session: Session, user: User, entity_type: str, entity_id: int,
     try:
         return snapshot_current(session, user, entity_type, entity_id, name=label)
     except Exception as e:  # noqa: BLE001
+        session.rollback()  # sonst bliebe die Session abgebrochen → nächster
+                            # Commit im Aufrufer würde 500en (Initial-Version
+                            # bleibt bewusst best-effort)
         logger.warning("Initial-Version '%s' fehlgeschlagen (%s %s): %s",
                        label, entity_type, entity_id, e)
         return None
@@ -600,6 +720,8 @@ def create_version(session: Session, user: User, entity_type: str, entity_id: in
     session.add(v)
     session.commit()
     session.refresh(v)
+    if entity_type == "image":
+        _capture_image_file(session, v, entity)
     _capture_task_files(session, v)
     _push_live_update(session, entity_type, entity)
     return _version_to_dict(v)
@@ -614,6 +736,8 @@ def update_version(session: Session, user: User, version_id: int, snapshot: dict
     session.add(v)
     session.commit()
     session.refresh(v)
+    if v.entity_type == "image":
+        _capture_image_file(session, v, entity)
     _capture_task_files(session, v)
     _push_live_update(session, v.entity_type, entity)
     return _version_to_dict(v)

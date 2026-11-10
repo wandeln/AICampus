@@ -49,10 +49,10 @@
 
         <button id="media-llm-generate" type="button"
                 class="w-full bg-purple-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-purple-700 transition font-semibold">
-          🤖 Applet mit LLM generieren
+          🤖 Medium generieren
         </button>
         <p class="text-xs text-gray-400" style="margin-top: 4px">
-          Erzeugt ein interaktives Medium im Applet-Studio.
+          Erzeugt ein Medium im Media-Studio (interaktives Applet oder generiertes Bild — Format dort wählen).
         </p>
       </div>
 
@@ -115,12 +115,6 @@
         <!-- Video-Vorschau: Klick auf den Player würde mit „Datei ersetzen“ kollidieren
              → für Videos gibt es stattdessen den Button unter der Vorschau. -->
         <video id="edit-preview-video" controls preload="metadata" class="hidden w-full max-h-48 bg-black rounded-lg border border-gray-200"></video>
-        <button id="edit-crop-btn" type="button" title="Bild zuschneiden"
-                class="hidden absolute bottom-2 right-2 w-9 h-9 items-center justify-center rounded-lg
-                       bg-white/60 backdrop-blur-sm text-lg opacity-50 hover:opacity-100
-                       shadow-sm transition">
-          ✂️
-        </button>
       </div>
 
       <button id="edit-replace-file-btn" type="button"
@@ -166,37 +160,13 @@
   </div>
 </div>
 
-<!-- Crop-Modal -->
-<div id="media-crop-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-[60]">
-  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl p-6 mx-4 max-h-[92vh] flex flex-col">
-    <h2 class="text-xl font-bold text-gray-800 mb-4">Bild zuschneiden</h2>
-    <div class="flex-1 min-h-0 flex items-center justify-center bg-gray-100 rounded-lg overflow-hidden">
-      <div id="crop-stage" class="relative select-none overflow-hidden" style="touch-action: none;"></div>
-    </div>
-    <div class="flex items-center justify-between gap-2 mt-2">
-      <p id="crop-hint" class="text-xs text-gray-400">Rechteck ziehen bzw. Griffe/Innenbereich verschieben</p>
-      <p id="crop-info" class="text-xs text-gray-500"></p>
-    </div>
-    <div class="flex items-center justify-end gap-3 mt-4">
-      <button id="crop-cancel" type="button"
-              class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition">
-        Abbrechen
-      </button>
-      <button id="crop-confirm" type="button"
-              class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition font-semibold">
-        ✂️ Zuschneiden
-      </button>
-    </div>
-  </div>
-</div>
-
 <!-- Applet-Duplizieren-Modal -->
 <div id="media-duplicate-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
   <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 mx-4">
-    <h2 class="text-xl font-bold text-gray-800 mb-2">Applet duplizieren</h2>
+    <h2 class="text-xl font-bold text-gray-800 mb-2">Medium duplizieren</h2>
     <p id="duplicate-source" class="text-sm text-gray-500 mb-4"></p>
     <div>
-      <label class="block text-sm font-medium text-gray-700 mb-1">Titel des neuen Applets</label>
+      <label class="block text-sm font-medium text-gray-700 mb-1">Titel der Kopie</label>
       <input id="duplicate-media-title" type="text" maxlength="300"
              class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
     </div>
@@ -414,9 +384,9 @@
 
     const actions = document.createElement("div");
     actions.className = "flex gap-2 px-4 pb-3";
-    const dupBtn = m.media_type === "applet"
+    const dupBtn = (m.media_type === "applet" || m.media_type === "image")
       ? `<button type="button" class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 text-gray-600 hover:bg-gray-50 transition"
-              data-dup="${m.id}" title="Applet duplizieren">📋</button>`
+               data-dup="${m.id}" title="Duplizieren">📋</button>`
       : "";
     actions.innerHTML = `
       <button type="button" class="flex-1 text-xs border border-gray-300 rounded-lg px-2 py-1.5 text-gray-600 hover:bg-gray-50 transition"
@@ -476,7 +446,7 @@
     if (target.dataset.edit) {
       const m = mediaList.find(x => x.id === parseInt(target.dataset.edit));
       if (m && m.media_type === "applet") {
-        window.location.href = `/courses/${courseId}/applets/${m.id}`; // Applet-Studio
+        window.location.href = `/courses/${courseId}/applets/${m.id}`; // Media-Studio
         return;
       }
       openMediaModal(parseInt(target.dataset.edit));
@@ -496,8 +466,9 @@
   function openMediaModal(id) {
     const m = mediaList.find(x => x.id === id);
     if (!m) return;
-    if (m.media_type === "applet") {
-      window.location.href = `/courses/${courseId}/applets/${m.id}`; // Applets im Studio bearbeiten
+    // Applets UND Bilder im Media-Studio bearbeiten (nicht mehr im Popup).
+    if (m.media_type === "applet" || m.media_type === "image") {
+      window.location.href = `/courses/${courseId}/applets/${m.id}`;
       return;
     }
     editingId = id;
@@ -523,11 +494,6 @@
     document.getElementById("edit-replace-file-btn").classList.toggle("hidden", !isVideo);
     // Ersatz-Dateityp muss zum Mediumstyp passen (accept hint only; gehärtet via Change-Handler)
     editFileInput.accept = isVideo ? ".mp4,.webm" : ".png,.jpg,.jpeg,.webp,.gif";
-    // Crop-Button nur für stillbilder (GIF verliert Animation beim Crop → ausblenden)
-    const cropBtn = document.getElementById("edit-crop-btn");
-    const cropOk = ["image/png", "image/jpeg", "image/webp"].includes(m.mime_type);
-    cropBtn.classList.toggle("hidden", !cropOk);
-    cropBtn.classList.toggle("flex", cropOk);
     document.getElementById("media-edit-modal").classList.remove("hidden");
   }
 
@@ -642,7 +608,7 @@
   document.getElementById("edit-modal-save").addEventListener("click", saveMediaEdit);
   document.getElementById("edit-modal-generate").addEventListener("click", (e) => generateEditMetadata(e.currentTarget));
   document.getElementById("media-llm-generate").addEventListener("click", () => {
-    window.location.href = `/courses/${courseId}/applets/new`; // Applet-Studio (neu)
+    window.location.href = `/courses/${courseId}/applets/new`; // Media-Studio (neu; Format im Studio wählen)
   });
 
   // ─── Upload + LLM-Generierung (gemeinsam) ─────────────────────
@@ -868,199 +834,6 @@
   document.getElementById("edit-replace-file-btn").addEventListener("click", () => {
     if (editingId !== null) editFileInput.click();
   });
-
-  // ─── Crop (client-seitig per Canvas, danach Datei-Ersatz) ──────────
-
-  const cropModal = document.getElementById("media-crop-modal");
-  const cropStage = document.getElementById("crop-stage");
-  const cropInfo = document.getElementById("crop-info");
-  let cropImg = null;   // <img> in Originalauflösung
-  let cropScale = 1;    // Anzeige-px → Original-px
-  let cropSel = { x: 0, y: 0, w: 0, h: 0 };  // in Anzeige-px
-  let cropDrag = null;
-  const CROP_MAX_W = 860, CROP_MAX_H = 560, CROP_MIN = 8;
-  const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
-
-  function openCropModal() {
-    const m = mediaList.find(x => x.id === editingId);
-    if (!m) return;
-    cropImg = new Image();
-    cropImg.onload = () => {
-      // Erst anzeigen, dann im nächsten Frame die tatsächlich verfügbare Größe
-      // messen (display:none → clientWidth wäre sonst 0).
-      cropModal.classList.remove("hidden");
-      requestAnimationFrame(buildCropStage);
-    };
-    cropImg.onerror = () => showToast("Bild konnte nicht geladen werden.", "error");
-    cropImg.src = m.url + "?t=" + Date.now();
-  }
-
-  function closeCropModal() {
-    cropDrag = null;
-    cropModal.classList.add("hidden");
-    cropStage.innerHTML = "";
-    cropImg = null;
-  }
-
-  function buildCropStage() {
-    // Always „contain“: das ganze Bild muss sichtbar sein (sonst greift auf
-    // schmalen Viewports der Container-Overflow ins Bild).
-    const box = cropStage.parentElement;
-    const availW = Math.min(CROP_MAX_W, box && box.clientWidth > 0 ? box.clientWidth : window.innerWidth - 80);
-    const availH = Math.min(CROP_MAX_H, Math.max(160, window.innerHeight * 0.45));
-    cropScale = Math.min(availW / cropImg.naturalWidth, availH / cropImg.naturalHeight, 1);
-    const w = Math.round(cropImg.naturalWidth * cropScale);
-    const h = Math.round(cropImg.naturalHeight * cropScale);
-    cropStage.innerHTML = "";
-    cropStage.style.width = w + "px";
-    cropStage.style.height = h + "px";
-    cropImg.className = "block max-w-none";
-    cropImg.style.width = w + "px";
-    cropImg.style.height = h + "px";
-    cropStage.appendChild(cropImg);
-    cropSel = { x: w * 0.1, y: h * 0.1, w: w * 0.8, h: h * 0.8 };
-    renderCropSel();
-    updateCropInfo();
-  }
-
-  function renderCropSel() {
-    cropStage.querySelectorAll("[data-crop-ui]").forEach(el => el.remove());
-    const sel = document.createElement("div");
-    sel.dataset.cropUi = "1";
-    Object.assign(sel.style, {
-      position: "absolute",
-      left: cropSel.x + "px", top: cropSel.y + "px",
-      width: cropSel.w + "px", height: cropSel.h + "px",
-      border: "1px solid rgba(255,255,255,0.9)",
-      boxShadow: "0 0 0 9999px rgba(0,0,0,0.5)",
-      cursor: "move",
-    });
-    const H = 12;
-    const handles = {
-      nw: [0, 0, "nwse-resize"], n: [0.5, 0, "ns-resize"], ne: [1, 0, "nesw-resize"],
-      e: [1, 0.5, "ew-resize"], se: [1, 1, "nwse-resize"], s: [0.5, 1, "ns-resize"],
-      sw: [0, 1, "nesw-resize"], w: [0, 0.5, "ew-resize"],
-    };
-    for (const [name, [fx, fy, cursor]] of Object.entries(handles)) {
-      const hd = document.createElement("div");
-      hd.dataset.cropUi = "1";
-      hd.dataset.handle = name;
-      Object.assign(hd.style, {
-        position: "absolute", width: H + "px", height: H + "px",
-        left: `calc(${fx * 100}% - ${H / 2}px)`, top: `calc(${fy * 100}% - ${H / 2}px)`,
-        backgroundColor: "#fff", border: "1px solid #2563eb",
-        borderRadius: "2px", cursor,
-      });
-      sel.appendChild(hd);
-    }
-    cropStage.appendChild(sel);
-  }
-
-  function updateCropInfo() {
-    if (!cropImg) return;
-    const w = Math.max(1, Math.round(cropSel.w / cropScale));
-    const h = Math.max(1, Math.round(cropSel.h / cropScale));
-    cropInfo.textContent = `Ausschnitt: ${w} × ${h} px (Original: ${cropImg.naturalWidth} × ${cropImg.naturalHeight} px)`;
-  }
-
-  cropStage.addEventListener("pointerdown", (e) => {
-    if (!cropImg) return;
-    e.preventDefault();
-    const r = cropStage.getBoundingClientRect();
-    const px = e.clientX - r.left, py = e.clientY - r.top;
-    const startSel = { ...cropSel };
-    const handle = e.target.dataset && e.target.dataset.handle;
-    if (handle) {
-      cropDrag = { mode: "resize", handle, px, py, startSel };
-    } else if (px >= cropSel.x && px <= cropSel.x + cropSel.w &&
-               py >= cropSel.y && py <= cropSel.y + cropSel.h) {
-      cropDrag = { mode: "move", px, py, startSel };
-    } else {
-      cropDrag = { mode: "new", px, py, startSel };
-      cropSel = { x: px, y: py, w: 0, h: 0 };
-      renderCropSel();
-    }
-    cropStage.setPointerCapture(e.pointerId);
-  });
-
-  cropStage.addEventListener("pointermove", (e) => {
-    if (!cropDrag) return;
-    e.preventDefault();
-    const r = cropStage.getBoundingClientRect();
-    const W = cropStage.clientWidth, H = cropStage.clientHeight;
-    const px = e.clientX - r.left, py = e.clientY - r.top;
-    const s = cropDrag.startSel;
-    if (cropDrag.mode === "move") {
-      cropSel = {
-        x: clamp(s.x + px - cropDrag.px, 0, W - s.w),
-        y: clamp(s.y + py - cropDrag.py, 0, H - s.h),
-        w: s.w, h: s.h,
-      };
-    } else if (cropDrag.mode === "resize") {
-      let { x, y } = s;
-      let x2 = s.x + s.w, y2 = s.y + s.h;
-      const h = cropDrag.handle;
-      if (h.includes("e")) x2 = clamp(px, s.x + CROP_MIN, W);
-      if (h.includes("s")) y2 = clamp(py, s.y + CROP_MIN, H);
-      if (h.includes("w")) x = clamp(px, 0, x2 - CROP_MIN);
-      if (h.includes("n")) y = clamp(py, 0, y2 - CROP_MIN);
-      cropSel = { x, y, w: x2 - x, h: y2 - y };
-    } else { // new
-      cropSel = {
-        x: clamp(Math.min(cropDrag.px, px), 0, W),
-        y: clamp(Math.min(cropDrag.py, py), 0, H),
-        w: clamp(Math.abs(px - cropDrag.px), 0, W),
-        h: clamp(Math.abs(py - cropDrag.py), 0, H),
-      };
-    }
-    renderCropSel();
-    updateCropInfo();
-  });
-
-  function endCropDrag() {
-    // Kleinklick statt Ziehen (neues Rechteck zu klein) → Auswahl wiederherstellen
-    if (cropDrag && cropDrag.mode === "new" &&
-        (cropSel.w < CROP_MIN || cropSel.h < CROP_MIN) && cropDrag.startSel) {
-      cropSel = { ...cropDrag.startSel };
-      renderCropSel();
-      updateCropInfo();
-    }
-    cropDrag = null;
-  }
-  cropStage.addEventListener("pointerup", endCropDrag);
-  cropStage.addEventListener("pointercancel", endCropDrag);
-
-  function doCrop() {
-    const m = mediaList.find(x => x.id === editingId);
-    if (!m || !cropImg) return;
-    const sx = Math.max(0, Math.round(cropSel.x / cropScale));
-    const sy = Math.max(0, Math.round(cropSel.y / cropScale));
-    const sw = Math.min(cropImg.naturalWidth - sx, Math.round(cropSel.w / cropScale));
-    const sh = Math.min(cropImg.naturalHeight - sy, Math.round(cropSel.h / cropScale));
-    if (sw < 2 || sh < 2) { showToast("Ausschnitt zu klein.", "error"); return; }
-
-    const canvas = document.createElement("canvas");
-    canvas.width = sw; canvas.height = sh;
-    canvas.getContext("2d").drawImage(cropImg, sx, sy, sw, sh, 0, 0, sw, sh);
-
-    canvas.toBlob((blob) => {
-      if (!blob) { showToast("Zuschnitt konnte nicht erzeugt werden.", "error"); return; }
-      if (blob.size > MAX_SIZE) { showToast("Zuschnitt zu groß (max. 5 MB).", "error"); return; }
-      const ext = (m.url.split(".").pop() || "png").toLowerCase();
-      const file = new File([blob], `zugeschnitten-${m.id}.${ext}`, { type: m.mime_type });
-      closeCropModal();
-      if (!confirm("Aktuelle Datei durch den Zuschnitt ersetzen? Die bisherige Datei wird überschrieben.")) return;
-      uploadAndGenerate(file, m.id, editUI, false);
-    }, m.mime_type, 0.92);
-  }
-
-  document.getElementById("edit-crop-btn").addEventListener("click", (e) => {
-    e.stopPropagation();
-    openCropModal();
-  });
-  document.getElementById("crop-cancel").addEventListener("click", closeCropModal);
-  document.getElementById("crop-confirm").addEventListener("click", doCrop);
-  cropModal.addEventListener("click", (e) => { if (e.target === cropModal) closeCropModal(); });
 
   // ─── Löschen ──────────────────────────────────────────────────
 

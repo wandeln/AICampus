@@ -1,10 +1,12 @@
 {% extends "course/base.html" %}
 
 {# ──────────────────────────────────────────────────────────────
-   Applet-Studio: Applets generieren (LLM) & bearbeiten (manuell per
-   CodeMirror). Applets sind HTML (interaktiv, JS) ODER SVG (statisch
-   oder animiert, rendert als Bild). Nur PROF/Admin.
-   Als Referenzbild für die Generierung kann ein Bild-Medium aus der
+   Media-Studio: Medien generieren (LLM) & bearbeiten.
+   Formate: HTML (interaktiv, JS) / SVG (statisch oder animiert) per
+   CodeMirror + Text-LLM, ODER Bild (Raster, Text→Bild) per Image-Endpoint.
+   Im Bild-Modus ist der Code-Editor ausgeblendet; das Bild wird über
+   „💾 Bild speichern“ als Medium angelegt. Nur PROF/Admin.
+   Als Referenzbild (nur Code-Modus) kann ein Bild-Medium aus der
    Medienbibliothek gewählt oder ein Foto/Zeichnung hochgeladen werden.
 
    Neu:  GET /courses/{id}/applets/new      (media = None)
@@ -49,7 +51,7 @@
         {# Bearbeitbare Felder: das LLM generiert nur die aktivierten,
            nicht aktivierte bleiben unverändert (analog Skript/Folien/Aufgaben,
            dort ebenfalls über dem Eingabefeld) #}
-        <div class="flex flex-wrap gap-x-4 gap-y-2">
+        <div id="applet-gen-checkboxes" class="flex flex-wrap gap-x-4 gap-y-2">
           <label class="flex items-center gap-1.5 text-sm text-gray-800 cursor-pointer">
             <input type="checkbox" id="applet-gen-title" checked class="rounded text-purple-600">Titel
           </label>
@@ -69,8 +71,8 @@
                     class="w-full border border-purple-300 rounded px-3 py-1.5 text-sm"></textarea>
         </div>
 
-        {# ── Referenzbild: Medium aus der Bibliothek ODER Foto/Zeichnung ── #}
-        <div>
+        {# ── Referenzbild: Medium aus der Bibliothek ODER Foto/Zeichnung (nur Code-Modus) ── #}
+        <div id="applet-ref-controls">
           <label class="block text-sm font-medium text-gray-700 mb-1">
             Referenzbild <span class="font-normal text-gray-400">(optional)</span>
           </label>
@@ -167,6 +169,20 @@
             </div>
           </div>
         </div>
+        <div id="applet-image-size-row" class="hidden items-center gap-2">
+          <label class="text-sm font-medium text-gray-700" for="applet-image-size">Größe</label>
+          <select id="applet-image-size" class="flex-1 border border-purple-300 rounded px-3 py-1.5 text-sm bg-white">
+            <option value="1024x1024">1024 × 1024 (quadratisch)</option>
+            <option value="1024x768">1024 × 768 (Querformat)</option>
+            <option value="768x1024">768 × 1024 (Hochformat)</option>
+            <option value="768x768">768 × 768 (klein)</option>
+            <option value="512x512">512 × 512 (sehr klein)</option>
+          </select>
+        </div>
+        <button id="applet-edit" type="button"
+                class="hidden w-full bg-teal-600 text-white px-5 py-1.5 rounded-lg text-sm hover:bg-teal-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed mb-1.5">
+          🖌️ Bild editieren
+        </button>
         <button id="applet-generate" type="button" data-llm-generate-btn
                 class="w-full bg-purple-600 text-white px-5 py-1.5 rounded-lg text-sm hover:bg-purple-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed">
           ✨ {{ "Applet anpassen" if media else "Applet generieren" }}
@@ -175,7 +191,7 @@
           <span class="inline-block w-3 h-3 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></span>
           <span id="applet-llm-status-text"></span>
         </div>
-        <p class="text-xs text-gray-400">
+        <p id="applet-help" class="text-xs text-gray-400">
           {{ "Der aktuelle Code wird als Kontext übergeben. " if media }}
           Die Checkboxen wählen aus, welche Felder (Titel, Beschreibung, Code) das
           LLM ändern darf — standardmäßig alle; nicht angehakten Felder bleiben
@@ -184,7 +200,11 @@
           Chart.js, Three.js, Plotly &amp; KaTeX (lokal) stehen dem LLM im
           HTML-Format zur Verfügung. Als Referenz: ein Medium aus der Bibliothek
           oder ein Foto/Zeichnung.
-          Tipp: Strg+Enter startet die Generierung.
+        </p>
+        <p id="image-help" class="hidden text-xs text-gray-400">
+          Erzeugt per LLM ein Bild (Text→Bild) über den konfigurierten Image-Endpoint.
+          Titel und Beschreibung werden per LLM aus dem Bild generiert (beides editierbar).
+          Mit „💾 Bild speichern“ wird das Bild als neues Medium in der Bibliothek angelegt.
         </p>
       </div>
     </div>
@@ -192,23 +212,24 @@
     <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
       <div class="space-y-3">
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Titel</label>
-          <input id="applet-title" type="text" maxlength="300"
-                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
-        </div>
-
-        <div>
             <label class="block text-sm font-medium text-gray-700 mb-1" for="applet-format">Format</label>
             <select id="applet-format"
                     class="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm bg-white">
               <option value="html">HTML — interaktives Applet</option>
               <option value="svg">SVG — statisch oder animiert</option>
+              <option id="applet-format-image-opt" value="image">Bild — per LLM erzeugt (Raster)</option>
             </select>
             <p class="text-xs text-gray-400 mt-2">
               HTML: JavaScript &amp; Libraries (Chart.js, Plotly, …). SVG: Vektorgrafik,
               optional SMIL/CSS-Animationen — rendert überall als Bild.
               {% if media %}Der Wechsel benennt die Datei um und repariert alle Referenzen — der Code muss danach angepasst werden (z.&nbsp;B. per LLM: „Bitte konvertiere …“).{% else %}Das Format kann nach dem Speichern im Edit-Modus gewechselt werden.{% endif %}
             </p>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Titel</label>
+          <input id="applet-title" type="text" maxlength="300"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
         </div>
 
         <div>
@@ -247,14 +268,36 @@
       <div style="max-height: 600px">
         <iframe id="applet-preview" class="aicampus-applet" sandbox="allow-scripts"
                 title="Applet-Vorschau"></iframe>
-        <div id="applet-preview-svg" class="hidden flex items-center justify-center bg-gray-50 rounded"
+        <div id="applet-preview-svg" class="hidden flex flex-col items-center justify-center bg-gray-50 rounded"
              style="max-height: 600px">
-          <img id="applet-preview-svg-img" class="max-w-full" style="max-height: 600px" alt="SVG-Vorschau">
+          <div id="svg-img-wrap" class="hidden relative inline-block">
+            <img id="applet-preview-svg-img" class="block max-w-full" style="max-height: 560px" alt="Medien-Vorschau">
+            <div class="absolute bottom-2 right-2 flex items-center gap-1.5">
+              <button id="svg-replace-btn" type="button" title="Bild ersetzen"
+                      class="w-9 h-9 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-sm text-lg opacity-50 hover:opacity-100 shadow-sm transition">
+                📁
+              </button>
+              <button id="svg-crop-btn" type="button" title="Bild zuschneiden"
+                      class="w-9 h-9 flex items-center justify-center rounded-lg bg-white/60 backdrop-blur-sm text-lg opacity-50 hover:opacity-100 shadow-sm transition">
+                ✂️
+              </button>
+            </div>
+          </div>
+          <div id="svg-empty" class="flex flex-col items-center justify-center text-gray-400 gap-3 py-16">
+            <span class="text-6xl">🖼️</span>
+            <p class="text-sm font-medium">Noch kein Bild</p>
+            <button id="svg-upload-btn" type="button"
+                    class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+              📁 Eigenes Bild hochladen
+            </button>
+            <p class="text-xs">…oder links: „✨ Bild generieren"</p>
+          </div>
         </div>
       </div>
+      <input type="file" id="svg-file-input" accept="image/png,image/jpeg,image/webp,image/gif" class="hidden">
     </div>
 
-    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+    <div id="applet-code-card" class="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
       <h2 id="code-heading" class="font-bold text-gray-800 mb-1">📝 HTML-Code</h2>
       <p class="text-xs text-gray-400 mb-3">
         Kann auch manuell editiert werden — „⟳ Vorschau aktualisieren“ lädt den Code neu.
@@ -273,15 +316,19 @@
 
 {% block extra_scripts %}
 <script src="{{ asset('js/content-live.js') }}"></script>
+<script src="{{ asset('js/image-crop.js') }}"></script>
 <script>
 (function() {
-  const mediaId = {{ media.id if media else 'null' }};
+  let mediaId = {{ media.id if media else 'null' }};
+  let mediaType = {{ (media.media_type | tojson) if media else 'null' }};  // "applet" | "image" | null (fix je Medium)
+  let imageDataUrl = null;  // generiertes Bild (Data-URL), nur im Bild-Modus
 
   const previewFrame = document.getElementById("applet-preview");
   const titleInput = document.getElementById("applet-title");
   const descInput = document.getElementById("applet-description");
   const promptInput = document.getElementById("applet-prompt");
   const generateBtn = document.getElementById("applet-generate");
+  const editBtn = document.getElementById("applet-edit");
   const statusBox = document.getElementById("applet-llm-status");
   const statusText = document.getElementById("applet-llm-status-text");
   const genTitleCb = document.getElementById("applet-gen-title");
@@ -290,7 +337,46 @@
   const formatSelect = document.getElementById("applet-format");
   const svgPreviewBox = document.getElementById("applet-preview-svg");
   const svgImg = document.getElementById("applet-preview-svg-img");
-  let appletFormat = "html";  // aktuelles Format (html|svg)
+  const svgEmpty = document.getElementById("svg-empty");
+  const svgImgWrap = document.getElementById("svg-img-wrap");
+  const svgFileInput = document.getElementById("svg-file-input");
+  const svgUploadBtn = document.getElementById("svg-upload-btn");
+  const svgReplaceBtn = document.getElementById("svg-replace-btn");
+  const _initIsImage = {{ 'true' if media and media.media_type == "image" else 'false' }};
+  let appletFormat = _initIsImage ? "image" : "html";  // aktuelles Format (html|svg|image)
+  let imageToken = 0;  // Cache-Bust: steigt bei jeder neuen Bild-Datei (gleicher Pfad)
+
+  // Preview-URL mit Cache-Bust (2. Generierung/Upload/Crop → gleiche URL, neues Bild).
+  function bustUrl(url) { return url + (url.includes("?") ? "&" : "?") + "v=" + imageToken; }
+  function bumpImageToken() { imageToken += 1; }
+
+  // Bildgröße: erlaubte Presets des Modells (keine freien Auflösungen).
+  const IMAGE_SIZES = ["1024x1024", "1024x768", "768x1024", "768x768", "512x512"];
+  function closestImageSize(w, h) {
+    const exact = IMAGE_SIZES.find((s) => {
+      const [sw, sh] = s.split("x").map(Number);
+      return w === sw && h === sh;
+    });
+    if (exact) return exact;
+    let best = IMAGE_SIZES[0], bestD = Infinity;
+    for (const s of IMAGE_SIZES) {
+      const [sw, sh] = s.split("x").map(Number);
+      const d = Math.abs(Math.log(w / h) - Math.log(sw / sh));
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    return best;
+  }
+  function applyExistingImageSize(url) {
+    if (!url) return;
+    const img = new Image();
+    img.onload = () => {
+      const s = closestImageSize(img.naturalWidth, img.naturalHeight);
+      const sel = document.getElementById("applet-image-size");
+      if (s && sel) sel.value = s;
+    };
+    img.onerror = () => {};
+    img.src = bustUrl(url);
+  }
 
   // CodeMirror — Editor-Inhalt in den (versteckten) Textarea schreiben
   // (Modus htmlmixed/svg: xml; wird in setFormat() beim Formatwechsel gesetzt)
@@ -305,14 +391,137 @@
     matchBrackets: true,
   });
 
-  // ─── Formatwechsel (html↔svg) ────────────────────────────────
+  // „Bild editieren"-Button: nur im Bild-Modus und wenn schon ein Bild existiert.
+  function updateEditBtnVisibility() {
+    editBtn.classList.toggle("hidden", !(appletFormat === "image" && mediaId !== null));
+  }
+
+  // ─── Modus (html|svg = Code, image = Raster) ──────────────────
   function setFormat(fmt) {
     appletFormat = fmt;
     formatSelect.value = fmt;
-    codeCM.setOption("mode", fmt === "svg" ? "xml" : "htmlmixed");
-    document.getElementById("code-heading").textContent = fmt === "svg" ? "📝 SVG-Code" : "📝 HTML-Code";
-    if (fmt === "svg") clearAppletErrors();  // SVG-Preview hat keine Konsole
-    updatePreview();
+    const isImage = fmt === "image";
+    document.getElementById("applet-code-card").classList.toggle("hidden", isImage);
+    document.getElementById("applet-gen-checkboxes").classList.toggle("hidden", isImage);
+    document.getElementById("applet-ref-controls").classList.toggle("hidden", isImage);
+    document.getElementById("applet-image-size-row").classList.toggle("hidden", !isImage);
+    document.getElementById("applet-help").classList.toggle("hidden", isImage);
+    document.getElementById("image-help").classList.toggle("hidden", !isImage);
+    document.getElementById("applet-preview-refresh").classList.toggle("hidden", isImage);
+    generateBtn.textContent = isImage ? "✨ Bild generieren" : (mediaId !== null ? "✨ Applet anpassen" : "✨ Applet generieren");
+    if (isImage) {
+      updateImagePreview();
+    } else {
+      codeCM.setOption("mode", fmt === "svg" ? "xml" : "htmlmixed");
+      document.getElementById("code-heading").textContent = fmt === "svg" ? "📝 SVG-Code" : "📝 HTML-Code";
+      if (fmt === "svg") clearAppletErrors();  // SVG-Preview hat keine Konsole
+      updatePreview();
+    }
+    syncAV();  // AV-Controller an den Modus anbinden (neu: Typ-Wechsel)
+    updateEditBtnVisibility();
+  }
+
+  // Bild-Modus: generiertes Bild in der (SVG-)Vorschau als <img> zeigen
+  // (leerer Zustand: Platzhalter mit Upload-Option statt kaputtem Icon).
+  function updateImagePreview() {
+    clearAppletErrors();
+    document.getElementById("applet-error-badge").classList.add("hidden");
+    previewFrame.classList.add("hidden");
+    svgPreviewBox.classList.remove("hidden");
+    const has = !!imageDataUrl;
+    svgImgWrap.classList.toggle("hidden", !has);
+    svgEmpty.classList.toggle("hidden", has);
+    if (has) svgImg.src = bustUrl(imageDataUrl);
+  }
+
+  // Upload-/Ersetzen-Buttons während der LLM-Analyse deaktivieren + Status anzeigen.
+  function setUploadBtnsBusy(busy) {
+    [svgUploadBtn, svgReplaceBtn].forEach((b) => {
+      if (!b) return;
+      if (busy) {
+        if (!b.dataset.origText) b.dataset.origText = b.textContent;
+        b.disabled = true;
+        b.textContent = "⏳";  // nur Sanduhr → Button behält seine (quadratische) Größe
+      } else {
+        b.disabled = false;
+        if (b.dataset.origText) b.textContent = b.dataset.origText;
+      }
+    });
+  }
+
+  // Raster-Bild als Medium anlegen (neu) bzw. Datei ersetzen (vorhanden) —
+  // beide Wege mit Bild-Version. `file` = das hochzuladende Blob.
+  // generateMeta (Upload/Ersatz) = true: Titel + Beschreibung per LLM (serverseitig,
+  // wie bei KI-Bildern). Crop (generateMeta=false) belässt die Metadaten.
+  async function setImageFile(file, generateMeta = true) {
+    if (!file) return;
+    if (!file.type || !file.type.startsWith("image/")) {
+      showToast(`Bitte ein Bild — erkannter Dateityp: „${file.type || "leer"}“`, "error"); return;
+    }
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("version", "1");
+    if (generateMeta) fd.append("generate_meta", "1");
+    let url, method;
+    if (mediaId === null) {
+      method = "POST"; url = `/api/courses/${courseId}/media`;
+      const t = titleInput.value.trim();
+      if (t) fd.append("title", t);
+    } else {
+      method = "PUT"; url = `/api/courses/${courseId}/media/${mediaId}/file`;
+    }
+    setBusy(true, "Bild wird hochgeladen…");
+    if (generateMeta) setUploadBtnsBusy(true);  // Button zeigt "Bild wird analysiert …" + gesperrt
+    try {
+      const res = await fetch(url, { method, body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Upload fehlgeschlagen.");
+      const m = data.media;
+      mediaId = m.id; mediaType = "image";
+      imageDataUrl = m.url;
+      bumpImageToken();
+      titleInput.value = m.title || titleInput.value;      // (ggf. LLM-)Titel spiegeln
+      descInput.value = m.llm_description || descInput.value;
+      syncAppletTitle();
+      av.adopt(m.id, m.version_id || null, avPayload());   // baseline = aktueller Titel
+      updateEditBtnVisibility();  // jetzt existiert ein Bild → „Bild editieren" anzeigen
+      updateImagePreview();
+      showToast("Bild gespeichert.", "success");
+    } catch (e) { showToast(e.message, "error"); }
+    finally { setBusy(false); setUploadBtnsBusy(false); }
+  }
+
+  // Zuschnitt (gleiche Logik wie Medienübersicht → Bearbeiten → Zuschneiden).
+  // MIME/Extension wird aus der URL übernommen (PNG/JPEG/WebP/GIF).
+  function openImageCrop() {
+    if (typeof ImageCrop === "undefined") { showToast("Crop-Modul nicht geladen — Seite bitte neu laden (Strg+Shift+R).", "error"); return; }
+    if (!imageDataUrl) { showToast("Kein Bild zum Zuschneiden vorhanden.", "error"); return; }
+    const ext = (imageDataUrl.match(/\.(png|jpe?g|webp|gif)/i) || ["png"])[0];
+    const mime = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : `image/${ext}`;
+    ImageCrop.open({
+      url: imageDataUrl,
+      mime,
+      onError: (msg) => showToast(msg, "error"),
+      onCropped: (blob, m) => {
+        const fext = m === "image/jpeg" ? "jpg" : m === "image/webp" ? "webp" : m === "image/gif" ? "gif" : "png";
+        const file = new File([blob], `zugeschnitten-${mediaId || "bild"}.${fext}`, { type: m || mime });
+        if (mediaId !== null && !confirm("Aktuelles Bild durch den Zuschnitt ersetzen?")) return;
+        setImageFile(file, false);  // Zuschnitt: Metadaten (Titel/Beschreibung) belassen
+      },
+    });
+  }
+
+  // Upload-Trigger (leerer Zustand + Toolbar) → Dateiauswahl → setImageFile.
+  function triggerImageUpload() { svgFileInput.value = ""; svgFileInput.click(); }
+
+  // Bestehendes Medium: Typ ist fix → Code↔Bild-Option(en) deaktivieren.
+  function updateFormatSelectState() {
+    for (const o of formatSelect.options) o.disabled = false;
+    if (mediaId === null) return;
+    for (const o of formatSelect.options) {
+      if (mediaType === "applet") o.disabled = (o.value === "image");
+      else if (mediaType === "image") o.disabled = (o.value !== "image");
+    }
   }
 
   formatSelect.addEventListener("change", async () => {
@@ -321,6 +530,13 @@
     if (mediaId === null) {
       // Neu: noch nichts gespeichert — einfach wechseln.
       setFormat(fmt);
+      return;
+    }
+    // Bestehendes Medium: Code↔Bild ist kein gültiger Wechsel (anderer MediaType).
+    if (fmt === "image" || appletFormat === "image") {
+      formatSelect.value = appletFormat;
+      updateFormatSelectState();
+      showToast("Format für bestehende Medien nicht änderbar (Code ↔ Bild).", "warning");
       return;
     }
     const old = appletFormat;
@@ -350,11 +566,14 @@
   });
 
   // ─── Autosave + Versions-History (generische AV-Logik) ────────
-  const avPayload = () => ({
-    title: titleInput.value,
-    media: codeCM.getValue(),
-    llm_description: descInput.value,
-  });
+  // Ein Controller je Modus: "applet" (Code) oder "image" (Raster). Bei neuen
+  // Medien darf der Modus noch gewechselt werden → Controller neu aufbauen
+  // (syncAV). Bestehende Medien haben einen fixen Typ.
+  // Bild-Bytes landen bewusst NICHT im AV-Payload (sonst läge jede Titel-
+  // Änderung 5 MB hoch); die Datei wird separat geschrieben (s. buildAV).
+  const avPayload = () => appletFormat === "image"
+    ? { title: titleInput.value, llm_description: descInput.value }
+    : { title: titleInput.value, media: codeCM.getValue(), llm_description: descInput.value };
 
   // Titel live synchron halten: Browser-Tab (die Seite zeigt sonst
   // nirgends den Applet-Titel)
@@ -365,40 +584,79 @@
     document.title = t ? "AICampus - " + t + " — " + courseName : originalTab;
   });
 
-  const av = AV.create({
-    entityType: "applet",
-    entityId: mediaId,
-    createEntity: async (p) => {
-      const res = await fetch(`/api/courses/${courseId}/media/applet`, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: p.title.trim(),
-          llm_description: p.llm_description.trim(),
-          media: p.media,
-          format: appletFormat,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || "Fehler beim Anlegen des Applets.");
-      return data.media || data;
-    },
-    getPayload: avPayload,
-    applyPayload: (p) => {
-      titleInput.value = p.title || "";
-      descInput.value = p.llm_description || "";
-      codeCM.setValue(p.media || p.html || "");  // html: alte Dev-Snapshots
-      syncAppletTitle();
-    },
-    shouldSave: (p) => !!p.title.trim() && !!p.media.trim(),
-    onRestored: () => updatePreview(),
-    hostEl: document.getElementById("av-applet-slot"),
-  });
+  let av = null;
+  let avEntityType = null;  // Typ des aktiven AV-Controllers ("applet"|"image")
 
-  codeCM.on("change", () => av.onChange());
-  titleInput.addEventListener("input", () => av.onChange());
-  descInput.addEventListener("input", () => av.onChange());
+  function buildAV(type) {
+    return AV.create({
+      entityType: type,
+      entityId: mediaId,
+      createEntity: async (p) => {
+        if (type === "image") {
+          // Bilder legt der Image-Endpoint an (serverseitig) + adopt() übernimmt
+          // sie → dieser Pfad kommt für Bilder nicht zum Zug.
+          throw new Error("Bitte zuerst ein Bild generieren (Button ✨ Bild generieren).");
+        }
+        const res = await fetch(`/api/courses/${courseId}/media/applet`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: p.title.trim(),
+            llm_description: p.llm_description.trim(),
+            media: p.media,
+            format: appletFormat,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || "Fehler beim Anlegen des Applets.");
+        return data.media || data;
+      },
+      getPayload: avPayload,
+      applyPayload: (p) => {
+        titleInput.value = p.title || "";
+        descInput.value = p.llm_description || "";
+        if (type === "image") {
+          // Snapshot trägt keine Bild-Bytes (Datei bleibt auf Disk) → Vorschau
+          // nur setzen, wenn (Sonderfall) ein Data-URL mitschwingt.
+          if (p.image) imageDataUrl = p.image;
+          updateImagePreview();
+        }
+        else codeCM.setValue(p.media || p.html || "");  // html: alte Dev-Snapshots
+        syncAppletTitle();
+      },
+      shouldSave: (p) => !!p.title.trim() && (type === "image" ? !!imageDataUrl : !!p.media.trim()),
+      onRestored: () => { if (type === "image") { bumpImageToken(); updateImagePreview(); } else updatePreview(); },
+      onSaved: (info) => {
+        // AV kennt die neue ID intern, die Seite nicht → übernehmen, damit
+        // der Format-Lock (bestehendes Medium) nach dem ersten Save greift.
+        if (info && info.id != null) {
+          mediaId = info.id;
+          mediaType = type === "image" ? "image" : "applet";
+          updateFormatSelectState();
+        }
+      },
+      hostEl: document.getElementById("av-applet-slot"),
+    });
+  }
+
+  // Controller passend zum aktuellen Modus sicherstellen (neu bauen, wenn sich
+  // der Typ bei einem ungespeicherten Medium geändert hat).
+  function syncAV() {
+    const want = appletFormat === "image" ? "image" : "applet";
+    if (av && avEntityType === want) return;
+    if (av && av.id != null) return;  // bestehendes Medium: Typ fix
+    if (av) av.destroy();
+    av = buildAV(want);
+    avEntityType = want;
+  }
+
+  syncAV();
+
+  const avChange = () => { if (av) av.onChange(); };
+  codeCM.on("change", avChange);
+  titleInput.addEventListener("input", avChange);
+  descInput.addEventListener("input", avChange);
 
   // Auto-Size-Boilerplate (Auto-Size-Teil identisch zum serverseitigen Versand
   // in serve_media, main.py; zusätzlich Konsole-Fehler-Capture für die
@@ -473,6 +731,7 @@
   let svgObjUrl = null;
 
   function updatePreview() {
+    if (appletFormat === "image") { updateImagePreview(); return; }
     clearAppletErrors();
     const code = codeCM.getValue();
     if (appletFormat === "svg") {
@@ -503,6 +762,7 @@
 
   function setBusy(busy, msg) {
     generateBtn.disabled = busy;
+    editBtn.disabled = busy;
     statusBox.classList.toggle("hidden", !busy);
     if (msg) statusText.textContent = msg;
   }
@@ -881,10 +1141,16 @@
     try {
       const res = await fetch(`/api/courses/${courseId}/media/${mediaId}/applet`, { credentials: "same-origin" });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || "Fehler beim Laden des Applets.");
+      if (!res.ok) throw new Error(data.detail || "Fehler beim Laden des Mediums.");
       // Zuerst Code laden, damit setFormat→updatePreview die volle Preview rendert
       // (nur ein srcdoc-Write — sonst raced der leere First-Load gegen den echten).
-      codeCM.setValue(data.media);
+      codeCM.setValue(data.media || "");
+      if (data.format === "image") {
+        mediaType = "image";
+        imageDataUrl = data.url || "";  // bestehendes Bild laden (vor setFormat → Preview)
+        bumpImageToken();
+        applyExistingImageSize(imageDataUrl);  // Größen-Dropdown auf Auflösung des Bildes setzen
+      }
       setFormat(data.format || "html");
       titleInput.value = data.title;
       syncAppletTitle();
@@ -971,14 +1237,102 @@
     }
   }
 
+  // ─── Bild (Text→Bild) generieren → wird serverseitig gespeichert ─
+  // Der Server legt Datei + Medium + Version an (KI-Bytes, kein Client-Roundtrip)
+  // und liefert eine URL. Der AV-Controller übernimmt das Medium per adopt().
+  async function generateImage() {
+    const prompt = promptInput.value.trim();
+    if (!prompt) { showToast("Bitte beschreibe das Bild, das erzeugt werden soll.", "error"); return; }
+    const size = document.getElementById("applet-image-size").value;
+    setBusy(true, "Bild wird generiert und gespeichert — das kann ein paar Minuten dauern …");
+    try {
+      const genBody = { prompt: prompt, size: size };
+      if (mediaId !== null) genBody.media_id = mediaId;  // Neugenerierung → bestehendes Medium ersetzen
+      const res = await fetch(`/api/courses/${courseId}/media/image-llm`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(genBody),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Image-Fehler.");
+      const saved = data.media || {};
+      mediaId = saved.id != null ? saved.id : mediaId;
+      mediaType = "image";
+      imageDataUrl = saved.url || "";  // URL vom Server (kein Base64-Roundtrip)
+      bumpImageToken();  // Cache-Bust → 2. Generierung (gleicher Pfad) lädt neu
+      // LLM-Titel/-Beschreibung übernehmen; Fallback Titel = Prompt.
+      if (data.title) {
+        titleInput.value = data.title;
+      } else if (!titleInput.value.trim()) {
+        titleInput.value = prompt.length > 80 ? prompt.slice(0, 77) + "…" : prompt;
+      }
+      syncAppletTitle();
+      if (data.description) descInput.value = data.description;
+      updateImagePreview();
+      updateFormatSelectState();
+      // AV übernimmt das (nun bestehende) Medium + Version → kein zweites Medium,
+      // keine Bytes-Roundtrip. Danach laufen Titel/Beschreibung per Auto-Save.
+      if (av) av.adopt(mediaId, saved.version_id != null ? saved.version_id : null, avPayload());
+      updateEditBtnVisibility();  // jetzt existiert ein Bild → „Bild editieren" anzeigen
+      const secs = data.latency_ms ? (data.latency_ms / 1000).toFixed(0) + " s" : "";
+      showToast("Bild generiert und gespeichert" + (secs ? ` (${secs})` : "") + ".", "success");
+    } catch (err) {
+      showToast(err.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ─── Bild (Bild→Bild) bearbeiten → serverseitig gespeichert ───────
+  // Gleicher Weg wie generateImage, aber edit=true: das aktuelle Bild des
+  // Mediums ist die Basis, der Prompt beschreibt die gewünschte Änderung.
+  async function editImage() {
+    if (mediaId === null) { showToast("Es gibt noch kein Bild zum Bearbeiten.", "error"); return; }
+    const prompt = promptInput.value.trim();
+    if (!prompt) { showToast("Bitte beschreibe die gewünschte Änderung am Bild.", "error"); return; }
+    const size = document.getElementById("applet-image-size").value;
+    setBusy(true, "Bild wird bearbeitet — das kann ein paar Minuten dauern …");
+    try {
+      const genBody = { prompt: prompt, size: size, media_id: mediaId, edit: true };
+      const res = await fetch(`/api/courses/${courseId}/media/image-llm`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(genBody),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "Bildbearbeitung fehlgeschlagen.");
+      const saved = data.media || {};
+      mediaId = saved.id != null ? saved.id : mediaId;
+      mediaType = "image";
+      imageDataUrl = saved.url || "";
+      bumpImageToken();
+      if (data.title) titleInput.value = data.title;
+      if (data.description) descInput.value = data.description;
+      syncAppletTitle();
+      updateImagePreview();
+      updateFormatSelectState();
+      if (av) av.adopt(mediaId, saved.version_id != null ? saved.version_id : null, avPayload());
+      updateEditBtnVisibility();
+      const secs = data.latency_ms ? ` (${(data.latency_ms / 1000).toFixed(0)} s)` : "";
+      showToast("Bild bearbeitet und gespeichert" + secs + ".", "success");
+    } catch (err) {
+      showToast(err.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // ─── „Fertig“: Auto-Save-Flush + zurück zur Medienbibliothek ──
+  // (Code und Bild laufen über denselben AV-Controller → gemeinsamer Flush.)
 
   async function finishApplet() {
     const res = await av.finish();
     if (mediaId === null && res.id == null) {
-      // Neues Applet wurde nie gespeichert (z. B. Titel/Code fehlt)
-      const hasContent = codeCM.getValue().trim() || titleInput.value.trim();
-      if (!hasContent || confirm("Das Applet wurde nicht gespeichert (Titel oder Code fehlt). Verwerfen?")) {
+      // Neues Medium wurde nie gespeichert (Titel fehlt bzw. kein Bild/Code).
+      const hasContent = (appletFormat === "image" && imageDataUrl) || codeCM.getValue().trim() || titleInput.value.trim();
+      if (!hasContent || confirm("Das Medium wurde nicht gespeichert (Titel oder Inhalt fehlt). Verwerfen?")) {
         window.location.href = `/courses/${courseId}/media`;
       }
       return;
@@ -990,9 +1344,15 @@
     window.location.href = `/courses/${courseId}/media`;
   }
 
-  generateBtn.addEventListener("click", generateApplet);
+  generateBtn.addEventListener("click", () => { if (appletFormat === "image") generateImage(); else generateApplet(); });
+  editBtn.addEventListener("click", () => editImage());
   document.getElementById("applet-finish").addEventListener("click", finishApplet);
   document.getElementById("applet-preview-refresh").addEventListener("click", updatePreview);
+  // Bild: Upload (leerer Zustand + „Ersetzen") + Zuschnitt.
+  document.getElementById("svg-upload-btn").addEventListener("click", triggerImageUpload);
+  document.getElementById("svg-replace-btn").addEventListener("click", triggerImageUpload);
+  document.getElementById("svg-crop-btn").addEventListener("click", openImageCrop);
+  svgFileInput.addEventListener("change", () => { if (svgFileInput.files[0]) setImageFile(svgFileInput.files[0]); });
   loadMediaOptions();
 
   // Nach einem Formatwechsel (Reload mit ?switched=…): Konvertierungshinweis
@@ -1007,6 +1367,14 @@
   }
 
   loadApplet();
+
+  // Direct-Link ?format=… (z. B. „🖼️ Bild generieren“-Button) → Modus für neue Medien setzen.
+  const initFormat = new URLSearchParams(location.search).get("format");
+  if (mediaId === null && ["image", "svg", "html"].includes(initFormat) && initFormat !== appletFormat) {
+    setFormat(initFormat);
+  }
+  updateFormatSelectState();
+  if (initFormat) history.replaceState(null, "", location.pathname);  // Param nur einmalig wirksam
 
   // ─── Live-Update: Applet extern bearbeitet (MCP, anderer Tab) → neu laden ─
   // Eigener Auto-Save (Server-Stand = letzter gespeicherter Stand) wird
