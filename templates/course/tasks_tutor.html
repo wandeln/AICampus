@@ -39,12 +39,17 @@
     <p id="filter-active-hint" class="hidden text-xs text-gray-500 mt-3">ℹ️ Mit aktivem Filter ist die Drag-and-Drop-Reihenfolge-Anpassung deaktiviert — Filter löschen zum Umordnen.</p>
   </div>
 
-  <!-- Task List -->
-  <div id="task-list" class="space-y-4">
+  <!-- Task List (Kacheln wie Skript-Kapitel; space-y nur ab sm: mobil
+       haben die Kacheln keinen Vertikalabstand) -->
+  <div id="task-list" class="sm:space-y-4">
     {% for task in tasks %}
-    <div class="card flex items-center justify-between" id="task-row-{{ task.id }}" data-task-id="{{ task.id }}"
+    {# Kachel analog zu den Skript-Kapiteln: mobil full-bleed (-mx-4 hebt
+       das px-4 des Main-Containers auf, keine Rundung/Seitenränder),
+       ab sm: gewöhnliche Karte. #}
+    <div class="flex items-center justify-between gap-4 px-4 sm:px-6 py-4 bg-white border border-gray-200 shadow-sm -mx-4 border-x-0 border-t-0 rounded-none sm:mx-0 sm:border-t sm:border-x sm:rounded-xl overflow-clip"
+         id="task-row-{{ task.id }}" data-task-id="{{ task.id }}"
          data-title="{{ task.title | e }}" data-type="{{ task.task_type }}">
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-3 flex-1 min-w-0">
         <!-- Drag Handle -->
         <div class="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 transition select-none p-2"
              title="Ziehen zur Reihenfolge ändern">

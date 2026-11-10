@@ -45,8 +45,9 @@
     </div>
   </div>
 
-  <!-- Task List -->
-  <div id="task-list-container" class="space-y-4">
+  <!-- Task List (Kacheln wie Skript-Kapitel; space-y nur ab sm: mobil
+       haben die Kacheln keinen Vertikalabstand) -->
+  <div id="task-list-container" class="sm:space-y-4">
     <!-- Wird dynamisch per JS gefüllt -->
   </div>
 
@@ -250,15 +251,16 @@
         deadlineHtml = ` · ⏰ <span${dlCls}>Deadline ${dl}</span>`;
       }
 
+      // Kachel analog zu den Skript-Kapiteln: mobil full-bleed (-mx-4 hebt
+      // das px-4 des Main-Containers auf, keine Rundung/Seitenränder),
+      // ab sm: gewöhnliche Karte.
       html += `
-        <div class="card flex items-center justify-between">
-          <div class="flex-1">
-            <div class="flex items-center gap-3">
-              <a href="/courses/${courseId}/tasks/${task.id}"
-                 class="text-lg font-semibold text-blue-600 hover:underline">
-                ${task.title}
-              </a>
-            </div>
+        <div class="flex items-center justify-between gap-4 px-4 sm:px-6 py-4 bg-white border border-gray-200 shadow-sm -mx-4 border-x-0 border-t-0 rounded-none sm:mx-0 sm:border-t sm:border-x sm:rounded-xl overflow-clip">
+          <div class="flex-1 min-w-0">
+            <a href="/courses/${courseId}/tasks/${task.id}"
+               class="text-lg font-semibold text-blue-600 hover:underline">
+              ${task.title}
+            </a>
             <div class="text-sm text-gray-500 mt-1">
               ${task.attempts_used}${task.max_attempts != null ? '/' + task.max_attempts : ''} Versuche${deadlineHtml}&nbsp;${typeBadge}${medalBadge ? '&nbsp;&nbsp;&nbsp;&nbsp;' + medalBadge : ''}
             </div>
