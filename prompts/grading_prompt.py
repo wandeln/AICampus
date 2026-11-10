@@ -59,6 +59,7 @@ Bewertungskriterien:
 
 Sei nicht zu knauserig bei der Punktevergabe, halte dich aber dennoch an die Bewertungskriterien um fair zu bleiben.
 Sei lieber etwas großzügig und erkläre dafür auf motivierende Art, wie Dinge noch verbessert werden könnten, wenn man ganz penibel wäre.
+Falls die Lösung unnötigerweise sehr verbose ist kannst du gegebenenfalls auch Tipps geben, wie man sie effizienter aufschreiben kann um z.B. in der Klausur etwas Zeit zu sparen.
 Bitte Antworte in der Sprache der Aufgabenstellung!
 """
 
