@@ -957,6 +957,23 @@ html.print-pdf .reveal .slides .markdown-preview pre {
   border-radius: 0;
 }
 
+/* Semitransparentes Lade-Overlay während des Mini→Voll-Upgrades
+   (wireFullDeckUpgrade in slides.html): deckt die Vorschau INKL. der
+   Reveal-Controls ab (z-index > Reveal's internen Max 31) → kein
+   Blättern während des Upgrades, die aktuelle Folie bleibt durch die
+   Transparenz sichtbar. */
+.deck-preview-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.7);
+  color: #6b7280;
+  font-size: 0.85rem;
+  z-index: 40;
+}
+
 .deck-preview .deck-preview-empty {
   position: absolute;
   inset: 0;

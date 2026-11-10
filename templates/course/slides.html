@@ -10,10 +10,14 @@
 
    Kachel-Vorschau: echte eingebettete Reveal-Präsentation pro Deck
    (durchklickbar); leere Decks zeigen einen Empty-State.
-   Performance: Das Mini-Deck startet nur mit den ersten
-   MINI_PREVIEW_SLIDES Folien — das volles Deck wird erst nachgerendert,
-   sobald der Nutzer blättert (Kurs-Übersicht mit vielen Decks soll
-   schnell laden; KaTeX/Markdown-Rendern aller Folien ist der Kostenblock).
+    Performance: Das Mini-Deck startet nur mit den ersten
+    MINI_PREVIEW_SLIDES Folien — das volles Deck wird erst nachgerendert,
+    solange der Nutzer blättert (Kurs-Übersicht mit vielen Decks soll
+    schnell laden; KaTeX/Markdown-Rendern aller Folien ist der Kostenblock).
+    Während des Nachladens deckt ein semitransparenter "Lade Slides…"-
+    Overlay die Vorschau ab: kein Blättern während des Upgrades (der
+    synchrone Swap-Block kann den Nutzer nicht beim Blättern erwischen)
+    und der Swap-Flash bleibt hinter dem Overlay versteckt.
    ───────────────────────────────────────────────────────────────────── #}
 
 {% block extra_head %}
@@ -66,6 +70,8 @@
         <div class="slides" id="deck-preview-slides-{{ d.id }}"></div>
       </div>
       <div class="deck-preview-empty">Deck wird geladen…</div>
+      <!-- Lade-Overlay: Mini→Voll-Upgrade (wireFullDeckUpgrade in JS) -->
+      <div class="deck-preview-loading hidden">Lade Slides…</div>
     </div>
     <div class="p-4">
       <div class="flex items-center justify-between gap-2">
@@ -156,7 +162,11 @@
   // Kachel-Vorschau startet als Mini-Deck (erste MINI_PREVIEW_SLIDES
   // Folien); das volles Deck wird erst nachgerendert, sobald der Nutzer
   // blättert. So bleibt die Kurs-Übersicht schnell: gerendert werden
-  // pro Deck initial 3 Folien statt ~20 (KaTeX-lastig).
+  // pro Deck initial 3 Folien statt ~20 (KaTeX-lastig). Während der
+  // Rest lädt, deckt ein semitransparenter "Lade Slides…"-Overlay die
+  // Vorschau (inkl. Controls) ab → kein Blättern während des Upgrades,
+  // der sync Swap-Block kann den Nutzer nicht beim Blättern erwischen,
+  // und der Swap-Flash bleibt hinter dem Overlay versteckt.
   const MINI_PREVIEW_SLIDES = 3;
 
   // Echte (eingebettete) Reveal-Instanz auf der Kachel: durchklickbar,
@@ -224,11 +234,20 @@
     }
   }
 
-  // Volles Deck nachladen: Restfolien asynchron rendern (Mini-Deck bleibt
-  // bedienbar), dann Synchron-Swap: Mini-Instanz destroyen (Reveal 4.6
-  // räumt DOM-Änderungen auf, Section-Elemente bleiben erhalten), Sections
-  // zusammenlegen, volles Deck in derselben .reveal neu initialisieren und
-  // zur Folie des Nutzers zurückkehren.
+  // Lade-Overlay der Kachel-Vorschau (.deck-preview-loading, z. B.
+  // während des Mini→Voll-Upgrades).
+  function setDeckLoading(shell, on) {
+    const el = shell && shell.querySelector(".deck-preview-loading");
+    if (el) el.classList.toggle("hidden", !on);
+  }
+
+  // Volles Deck nachladen: Restfolien asynchron rendern (währenddessen
+  // deckt das Lade-Overlay die Vorschau ab → kein Blättern, der sync
+  // Swap kann den Nutzer nicht beim Blättern erwischen), dann
+  // Synchron-Swap: Mini-Instanz destroyen (Reveal 4.6 räumt
+  // DOM-Änderungen auf, Section-Elemente bleiben erhalten), Sections
+  // zusammenlegen, volles Deck in derselben .reveal neu initialisieren
+  // und zur Folie des Nutzers zurückkehren.
   function wireFullDeckUpgrade(shell, deckId, slides, state) {
     let upgrading = false;
     let done = false;
@@ -243,14 +262,25 @@
     const startUpgrade = async () => {
       if (upgrading || done) return;
       upgrading = true;
+      setDeckLoading(shell, true); // kein Blättern bis der Swap steht
       let destroyed = false;
       try {
         const r = state.reveal;
         // 1) Fehlende Folien bauen — abgetrennt (kein Layout nötig für
-        //    Markdown/KaTeX), damit das Mini-Deck weiter blätterbar bleibt.
+        //    Markdown/KaTeX); das Lade-Overlay blockiert das Blättern.
+        //    yieldToMain() (Macrotask) VOR der ersten Folie (der geklickte
+        //    1→2-Wechsel muss erst malen) und ZWISCHEN jeder Folie: die
+        //    Ref-Map-Awaits in renderMarkdown sind nach dem Mini-Mount
+        //    gecacht → nur Microtasks, und Microtask-Ketten laufen
+        //    blockierend durch (kein Paint dazwischen) — ohne die
+        //    Macrotask-Yields wäre der ganze Rest-Build eine Sync-Strecke,
+        //    die auch den Rest der Seite (Scrolling, andere Kacheln)
+        //    einfriert, während der Overlay wartet.
+        await yieldToMain();
         const rest = [];
         for (let h = MINI_PREVIEW_SLIDES; h < slides.length; h++) {
           rest.push(await buildSlideSection(slides[h], FOOTER, { deckId, h }));
+          await yieldToMain();
         }
         // 2) Synchroner Swap (ab hier keine weitere await bis ready).
         // Ziel = weiter von beiden: aktuelle Mini-Position und das
@@ -289,7 +319,9 @@
           }
         });
         done = true;
+        setDeckLoading(shell, false); // volles Deck steht
       } catch (e) {
+        setDeckLoading(shell, false); // Upgrade fehlgeschlagen → Mini bleibt
         upgrading = false; // Beim nächsten Blättern erneut versuchen
         requestedH = null; // Altes Ziel verwerfen (Mini-Vorschau wird neu gemountet)
         try {
@@ -356,12 +388,14 @@
         .then((r) => (r.ok ? r.json() : null));
       if (!data) {
         emptyEl.textContent = "Fehler beim Laden";
+        setDeckLoading(shell, false); // Remount während Upgrade: Overlay weg
         return;
       }
       const slides = await parseSlides(data.content || "");
       if (slides.length === 0) {
         // Empty-State bleibt sichtbar (Platzhalter war "Deck wird geladen…").
         emptyEl.textContent = "Leeres Deck";
+        setDeckLoading(shell, false);
         return;
       }
       const isMini = !full && slides.length > MINI_PREVIEW_SLIDES;
@@ -370,6 +404,7 @@
         isMini ? slides.slice(0, MINI_PREVIEW_SLIDES) : slides,
         countSlides(slides)
       );
+      setDeckLoading(shell, false); // frische Vorschau ist bedienbar
       if (isMini) wireFullDeckUpgrade(shell, d.id, slides, state);
     } finally {
       state.mounting = false;
