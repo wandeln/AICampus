@@ -727,24 +727,58 @@ window.addEventListener('message', (event) => {
       }
       if (!f.__appletSettled && f.closest("section.present")) return;
       const prevAppletH = f.style.height;
+      const inSlides = !!(f.closest(".reveal") || f.closest(".slides-canvas"));
       // Gezoomte Applets ({.zoom=X}): Clamp zoom-korrigiert, damit die
       // VISIBLE Höhe (gemeldete Höhe × zoom) im selben Bereich bleibt.
       const zoom = parseFloat(f.getAttribute('data-zoom')) || 1;
-      let h = Math.round(
-        Math.min(Math.max(d.height + 8, APPLET_MIN_H / zoom), APPLET_MAX_H / zoom)
-      );
       // Explizite Max-Höhe ({.height=X} → data-max-h, sichtbare px):
-      // darüber hinaus scrollt das Applet im Iframe intern.
-      const maxH = parseFloat(f.getAttribute('data-max-h'));
-      if (maxH > 0) {
-        const v = Math.min(h * zoom, maxH);
-        h = Math.max(1, Math.round(v / zoom));
+      // darüber hinaus scrollt das Applet im Iframe intern. Sie ersetzt
+      // dann auch den generellen Max-Clamp (der Autor will höher).
+      const maxH = parseFloat(f.getAttribute('data-max-h')) || 0;
+      // Das Applet meldet seine natürliche INHALTShöhe (viewport-unabhängig,
+      // s. injiziertes Script in main.py). In Slides ist das die stabile
+      // Zielgröße (Box-Echo würde einen Feedback-Loop machen). Außerhalb
+      // (Media-Vorschau, Skript, Tasks) hat die Box ihren Kontext-Default
+      // (420 px) und height:100%-Applets füllen ihn ohnehin — dort NIEMALS
+      // auf die (kleinere) Inhaltshöhe zusammenstauchen, nur WACHSEN, wenn
+      // der Inhalt höher ist. (Gezoomte Script-Applets: alte Regel.)
+      // Flexibles Applet in Slides OHNE {.height}: keine px-Höhe, sondern
+      // die verbleibende Body-/Spaltenhöhe füllen — die Figure trägt die
+      // Klasse .aicampus-applet-fill und slides.css streckt sie per
+      // flex:1 (:has()-gegatest). Kein Refit: die Fill-Änderung berührt
+      // nicht die (neutralisierte) Fit-Messung.
+      const fig = f.closest("figure");
+      if (inSlides && d.fillsBox && !maxH && fig) {
+        fig.classList.add("aicampus-applet-fill");
+        f.style.height = "";
+        const zwrap = f.parentElement && f.parentElement.classList.contains("aicampus-applet-zoom")
+          ? f.parentElement : null;
+        if (zwrap) zwrap.style.height = "";
+        return;
       }
-      // Höhe mit dem Auto-Fit mit skalieren (--slides-body-scale, inline pro
-      // Folie am <section> gesetzt, s. fitPxExpr): absolute px würden bei
-      // jeder Body-Skala über die Folie ragen und der Fit könnte sie nicht
-      // mehr einkalibrieren. Im Skript Fallback 1 → px unverändert.
-      f.style.height = `calc(${h}px * var(--slides-body-scale, 1))`;
+      let srcH = d.height;
+      if (!inSlides && !f.getAttribute('data-zoom')) srcH = Math.max(d.height, f.clientHeight || 0);
+      // Flexibles (height:100%) Applet IN SLIDES mit explizitem {.height}:
+      // die Box bis zur vorgegebenen (Max-)HÖHE FÜLLEN — {.height} bleibt
+      // eine Max-Höhe (content-getriebene Applets darüber scrollen intern),
+      // aber flexible Applets sollen die bereitgestellte Höhe voll
+      // ausschöpfen statt auf ihrem Inhalts-Minimum zu stehen. "Flexibel"
+      // meldet das Applet selbst (fillsBox: scrollHeight > contentH, s.
+      // injiziertes Script in main.py) — eine Box-Breiten-Vergleichs-
+      // Heuristik würde content-getriebene Applets nach dem ersten Refit
+      // fälschlich füttern.
+      if (inSlides && maxH > 0 && d.fillsBox) srcH = maxH;
+      let h = Math.round(
+        Math.min(Math.max(srcH + (inSlides ? 8 : 0), APPLET_MIN_H / zoom), (maxH > 0 ? maxH : APPLET_MAX_H) / zoom)
+      );
+      // In Slides mit dem Auto-Fit mit skalieren (--slides-body-scale,
+      // inline pro Folie am <section> gesetzt, s. fitPxExpr): absolute px
+      // würden bei jeder Body-Skala über die Folie ragen und der Fit könnte
+      // sie nicht mehr einkalibrieren. Außerhalb Skript-Fallback 1 → px
+      // unverändert (hier bleibt es ohnehin bei festen px).
+      f.style.height = inSlides
+        ? `calc(${h}px * var(--slides-body-scale, 1))`
+        : `${h}px`;
       // Gezoomte Applets stehen in einem .aicampus-applet-zoom-Wrapper, dessen
       // Höhe der sichtbaren (geskalten) Höhe folgen muss (transform ändert
       // nicht die Iframe-Layout-Box). Ebenfalls variablebasiert: würde hier

@@ -574,6 +574,46 @@ html.print-pdf .reveal.slides-logo-bottom-left .slides .pdf-page > section::befo
   padding: 0.9em 1.1em !important;
 }
 
+/* Flexibles Applet (body{height:100%}, meldet fillsBox) in Slides OHNE
+   explizite {.height}: die Figure füllt die verbleibende Höhe — direkt im
+   Folienkörper oder in einer @startcolumn-Spalte. Die Spaltenzeile
+   (CSS-Grid) wächst dafür auf den Folienraum (nur im layout-default ist
+   der Body eine feste Größe; in topleft/center ist das ein no-op), die
+   Spalte wird Flex-Säule, das Iframe füllt die Figure (die Caption
+   behält ihre Größe). Die Klasse .aicampus-applet-fill setzt der
+   Message-Handler in markdown-renderer.js zur Laufzeit (nur für
+   fillsBox-Applets ohne {.height}) → :has() hält die Regel auf sie
+   beschränkt. Der Auto-Fit misst neutralisiert (fitSlideSection:
+   body flex:0 0 auto) → die gefüllte Höhe ändert nicht die Fit-Messung
+   → kein Feedback-Loop. */
+:is(.reveal .slides, .slides-canvas) .aicampus-slide-body :is(> .aicampus-applet-fill, .aicampus-col > .aicampus-applet-fill) {
+  flex: 1 1 auto;
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+}
+:is(.reveal .slides, .slides-canvas) .aicampus-slide-body > .aicampus-cols:has(.aicampus-applet-fill) {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: stretch;
+  grid-template-rows: minmax(0, 1fr);
+}
+:is(.reveal .slides, .slides-canvas) .aicampus-slide-body .aicampus-col:has(.aicampus-applet-fill) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+:is(.reveal .slides, .slides-canvas) .aicampus-applet-fill > :is(iframe.aicampus-applet, .aicampus-applet-zoom) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+:is(.reveal .slides, .slides-canvas) .aicampus-applet-fill > .aicampus-applet-zoom {
+  height: auto !important;
+}
+:is(.reveal .slides, .slides-canvas) .aicampus-applet-fill .aicampus-applet-zoom > iframe.aicampus-applet {
+  height: 100%;
+}
+
 /* Code-Box (@box:code) in Slides: das <pre> sitzt nahtlos in der dunklen
    Box (s. main.css) — die generischen Slide-Regeln (margin/padding) dürfen
    dort nicht greifen. */
@@ -758,7 +798,9 @@ html.print-pdf .reveal .slides .markdown-preview pre {
   border-radius: 0.4em;
 }
 
-:is(.reveal .slides, .slides-canvas) .aicampus-applet:not(.aicampus-video) {
+/* Fill-Applets (.aicampus-applet-fill > *) ausgenommen: ihre Höhe kommt
+   aus der Flex-Füllung (s. oben), die 9em-Cap wäre der Deckel. */
+:is(.reveal .slides, .slides-canvas) .aicampus-applet:not(.aicampus-video):not(.aicampus-applet-fill iframe) {
   max-height: 9em !important;
 }
 
@@ -767,7 +809,7 @@ html.print-pdf .reveal .slides .markdown-preview pre {
    scale(--tz) vergrößert sie sichtbar, daher Teilung durch den Faktor
    (--tz setzt der Renderer inline). Ergebnis: sichtbare Höhe = 9em,
    identisch zum zoomlosen Default; darüber scrollt das Applet intern. */
-:is(.reveal .slides, .slides-canvas) .aicampus-applet[data-zoom]:not([data-max-h]):not(.aicampus-video) {
+:is(.reveal .slides, .slides-canvas) .aicampus-applet[data-zoom]:not([data-max-h]):not(.aicampus-video):not(.aicampus-applet-fill iframe) {
   max-height: calc(9em / var(--tz, 1)) !important;
 }
 

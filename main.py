@@ -1802,7 +1802,13 @@ _APPLET_HEIGHT_SCRIPT = (
     "    // Parent Refits triggern, die der finale Font-Swap-Reflow wieder\n"
     "    // korrigiert (sichtbare Skala-Stufen = \"oszillierendes Auto-Scale\").\n"
     '    if (!fontsDone) return;\n'
-    '    try { parent.postMessage({ source: "aicampus-applet", height: contentH(), fontsReady: true }, "*"); } catch (e) {}\n'
+    "    // fillsBox: ist das Applet FLEXIBEL (body{height:100%})? Dann ist\n"
+    "    // die normale scrollHeight durch die Viewport-Bodenhöhe aufgeweitet\n"
+    "    // (> contentH) → das Parent darf die Box bis zu einer expliziten\n"
+    "    // {.height} (Max-Höhe) voll befüllen. Content-getriebene Applets\n"
+    "    // haben scrollHeight == contentH → bleiben auf ihrer Inhaltshöhe.\n"
+    "    var ch = contentH(), fillsBox = document.body.scrollHeight > ch;\n"
+    '    try { parent.postMessage({ source: "aicampus-applet", height: ch, fillsBox: fillsBox, fontsReady: true }, "*"); } catch (e) {}\n'
     "  }\n"
     "  // Release erst, wenn (a) die eigenen Webfonts geladen UND (b) die\n"
     "  // Höhe 500 ms stabil sind (nach Load). Beides: stabil KANN auch nur\n"
