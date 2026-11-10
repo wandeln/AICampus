@@ -909,6 +909,12 @@ html.print-pdf .reveal .slides .markdown-preview pre {
 
 /* Kacheln in slides.html (Deck-Übersicht): echte Reveal-Mini-Präsentation
    (.slides-preview-shell) + Empty-State für leere Decks. */
+/* Vorschau füllt die Kachel bis an die Kante — keine eigenen Rundungen
+   (an den Seitenrand attacht wäre sonst doppelt abgerundet). */
+.deck-preview {
+  border-radius: 0;
+}
+
 .deck-preview .deck-preview-empty {
   position: absolute;
   inset: 0;

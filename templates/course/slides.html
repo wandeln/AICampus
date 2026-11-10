@@ -54,10 +54,12 @@
   {% endif %}
 </div>
 
-<!-- Kachel-Raster -->
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" id="deck-grid">
+<!-- Kachel-Raster (mobil wie Skript-Kapitel: Kacheln full-bleed ohne
+     Vertikalabstand — kein Grid, -mx-4 hebt das px-4 des Main-Containers
+     auf; ab sm: gewöhnliches Raster mit gap) -->
+<div class="sm:grid sm:grid-cols-2 lg:grid-cols-3 sm:gap-4" id="deck-grid">
   {% for d in decks %}
-  <div class="group bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden hover:shadow-md transition"
+  <div class="group bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden hover:shadow-md transition -mx-4 border-x-0 border-t-0 rounded-none sm:mx-0 sm:border-t sm:border-x sm:rounded-xl"
        data-deck-id="{{ d.id }}">
     <div class="slides-preview-shell deck-preview" data-deck-preview="{{ d.id }}">
       <div class="reveal{% if slides_theme.template %} theme-{{ slides_theme.template }}{% endif %}{% if slides_has_logo %} slides-has-logo slides-logo-{{ slides_theme.logo_position }}{% endif %}">
@@ -118,9 +120,13 @@
   {% endfor %}
 
   {% if is_tutor or is_admin %}
-  <!-- Anlegen-Kachel -->
+  <!-- Anlegen-Kachel: mobil bewusst NICHT full-bleed (die abgerundeten
+       Ecken sollen Randabstand behalten) — volle Inhaltsbreite wie
+       vorher (w-full, da ein <button> sich als Block-Child sonst nach
+       dem Inhalt misst); mt-4 ersetzt den Raster-gap. Ab sm: Raster-Item,
+       w-full = exakt Track-Breite, gap-4 übernimmt. -->
   <button onclick="createDeck()"
-          class="deck-create-btn min-h-[260px] flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-500 transition">
+          class="deck-create-btn w-full mt-4 sm:mt-0 min-h-[260px] flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-500 transition">
     <span class="text-3xl">＋</span>
     <span class="text-sm font-medium">Neues Deck anlegen</span>
   </button>
