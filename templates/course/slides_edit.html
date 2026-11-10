@@ -749,20 +749,24 @@
            // bis zum Deck-Ende keine Eingabe-Events.
            await yieldToMain();
          }
-        // KaTeX-Webfonts vor dem Fit fertig laden lassen: die Build-Phase
+        // KaTeX-Webfonts VOR dem Fit fertig laden: die Build-Phase
         // (KaTeX-Rendering) hat die Fonts angefordert — misst der Fit mit
-        // Fallback-Fonts, ist die Skala falsch und der spätere Font-Refit
-        // korrigiert sie sichtbar (Skala springt beim Laden hin und her).
-        // status "loading" = aktueller Load aktiv (im Gegensatz zu
-        // fonts.ready, das ein One-Shot ist und vor dem KaTeX-Rendering
-        // schon erfüllt sein kann). Max. 800 ms: ein verhängener Load
-        // blockiert die Vorschau nicht.
-        let fontTries = 0;
+        // Fallback-Fonts, ist die Skala falsch und jeder spätere
+        // Font-Load-Batch fitet per loadingdone neu → sichtbare
+        // Skala-Stufen beim Laden. Alle @font-face-Faces EXPLIZIT parallel
+        // laden (face.load()): der Status-Poll allein reicht nicht — das
+        // ~800-ms-Budget reicht im Netzwerk nicht, und zwischen
+        // Load-Requests ist der Status kurz "loaded" (Race). Max. 2500 ms:
+        // ein verhängener Load blockiert die Vorschau nicht.
         try {
-          while (document.fonts && document.fonts.status === "loading" && fontTries++ < 80 && seq === previewSeq) {
-            await yieldToMain();
-          }
+          // FontFaceSet ist iterabel, hat aber KEIN forEach → values() nutzen.
+          const _faces = [...document.fonts.values()];
+          await Promise.race([
+            Promise.all(_faces.map((f) => f.load().catch(() => null))),
+            new Promise((r) => setTimeout(r, 2500)),
+          ]);
         } catch (e) { /* Font-Status-Probleme dürfen den Render nicht brechen */ }
+        if (seq !== previewSeq) return; // neuer Render während Font-Wait überholt
         // Auto-Fit: NUR die Folie fiten, die nach dem Swap sichtbar wird —
         // der Rest ist Reveal-seitig ausgeblendet und wird im Hintergrund
         // nachgefitet (fitQueue unten) bzw. lazy beim ersten Ankommen

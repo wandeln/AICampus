@@ -641,6 +641,15 @@ async function aicampusDoMount() {
   // Footer am Canvas-Element (wandert nicht mit den Slide-Transitions)
   if (FOOTER_ENABLED && FOOTER_TEXT) slidesEl.setAttribute("data-footer", FOOTER_TEXT);
   if (isLive) slidesEl.innerHTML = ""; // alte Sections (Live-Remount)
+  // Deck VOR dem Section-Build verbergen: die rohen <section>-Elemente
+  // (noch ohne Reveal-Positionierung) würden sonst kurz als aufgestapelte
+  // Folien gemalt, bevor initialize() sie anordnet. visibility:hidden
+  // behält das Layout (Reveal's initialize misst weiter); der Un-Hide
+  // erfolgt erst, wenn die Applet-/Font-Lade-Phase der Startfolie gefitet
+  // ist (Block nach initialize()). KEIN ?print-pdf: der Export wird nicht
+  // blockiert.
+  const _hideUntilStable = !/print-pdf/.test(window.location.search);
+  if (_hideUntilStable) document.getElementById("reveal-root").style.visibility = "hidden";
   for (let h = 0; h < slides.length; h++) {
     const footer = FOOTER_ENABLED && FOOTER_TEXT ? FOOTER_TEXT : null;
     // Folien-Position (S-Nummern unlabeled Subfigure-Komplexe):
@@ -653,17 +662,21 @@ async function aicampusDoMount() {
   const SLIDE_W = 960;
   const SLIDE_H = Math.round(SLIDE_W / ratio);
 
-  // KaTeX-Webfonts vor dem Fit fertig laden lassen: der Build (KaTeX-
-  // Rendering) hat sie angefordert — misst der Fit mit Fallback-Fonts, ist
-  // die Skala falsch und der spätere Font-Refit korrigiert sie sichtbar
-  // (Skala springt beim Laden). status "loading" = aktueller Load aktiv
-  // (fonts.ready wäre ein One-Shot, der vor dem KaTeX-Rendering schon
-  // erfüllt sein kann). Max. 800 ms: ein verhängener Load blockiert nicht.
-  let fontTries = 0;
+  // KaTeX-Webfonts VOR dem Fit fertig laden: der Build (KaTeX-Rendering)
+  // hat sie angefordert — misst der Fit mit Fallback-Fonts, ist die Skala
+  // falsch und jeder spätere Font-Load-Batch fitet per loadingdone neu →
+  // sichtbare Skala-Stufen beim Laden ("oszillierendes Auto-Scale").
+  // Alle @font-face-Faces EXPLIZIT parallel laden (face.load()): der
+  // Status-Poll allein reicht nicht — das ~800-ms-Budget reicht im
+  // Netzwerk nicht, und zwischen Load-Requests ist der Status kurz
+  // "loaded" (Race). Max. 2500 ms: ein verhängener Load blockiert nicht.
   try {
-    while (document.fonts && document.fonts.status === "loading" && fontTries++ < 80) {
-      await new Promise((r) => setTimeout(r, 0));
-    }
+    // FontFaceSet ist iterabel, hat aber KEIN forEach → values() nutzen.
+    const _faces = [...document.fonts.values()];
+    await Promise.race([
+      Promise.all(_faces.map((f) => f.load().catch(() => null))),
+      new Promise((r) => setTimeout(r, 2500)),
+    ]);
   } catch (e) { /* Font-Status-Probleme dürfen den Mount nicht brechen */ }
 
   // Auto-Fit: Folienkörper (alles nach der Überschrift) auf die Folie
@@ -705,6 +718,14 @@ async function aicampusDoMount() {
       new Promise((r) => setTimeout(r, 6000)),
     ]);
   }
+
+  // ALLE Applets jetzt (im verdeckten Deck) laden: lazy würde sie erst auf
+  // der jeweils sichtbaren Folie starten — deren Webfont-Phase (Höhe ändert
+  // sich pro Font-Batch) wäre dann sichtbar ("oszillierendes Auto-Scale"
+  // beim Navigieren). Im Hintergrund settle sie, bevor der Nutzer hin-
+  // navigiert; der Block nach initialize() wartet zusätzlich auf die
+  // Startfolie.
+  slidesEl.querySelectorAll("iframe.aicampus-applet").forEach((f) => { f.loading = "eager"; });
 
   const reveal = new Reveal(document.getElementById("reveal-root"), {
     embedded: true, // Reveal übernimmt sonst <body> als Viewport (Full-Page-Mode);
@@ -783,6 +804,40 @@ async function aicampusDoMount() {
   // Code-LaTeX nach Reveal's Highlight-Pass
   aicampusWireCodeMath(reveal);
   await reveal.initialize();
+  // In-body-Applets der Startfolie: VOR dem ersten sichtbaren Frame laden
+  // lassen, bis ihre Höhe stabil ist, DANN neu fiten. Ohne das zeigt der
+  // erste Paint den Fit mit der Iframe-Standardhöhe, und jeder Applet-
+  // Höhendrop (eigener HTML-Load + dessen Webfonts → mehrere
+  // postMessages) triggert einen Refit → sichtbare Skala-Stufen beim
+  // Laden ("oszillierendes Auto-Scale"). Das Deck ist seit vor
+  // initialize() unsichtbar (_hideUntilStable); hier wird es erst sichtbar.
+  if (_hideUntilStable) {
+    const _root = document.getElementById("reveal-root");
+    try {
+      const _sec = slidesEl.querySelector(":scope > section.present") || slidesEl.children[0];
+      const _applets = _sec ? [..._sec.querySelectorAll("iframe.aicampus-applet")] : [];
+      const _t0 = Date.now();
+      for (const f of _applets) {
+        if (Date.now() - _t0 > 5000) break; // Applets dürfen den Mount nicht hängen lassen
+        // Warten, bis der Parent die Applet-Höhe angewendet hat
+        // (__appletSettled, gesetzt im Message-Handler von
+        // markdown-renderer.js: Applet-Font-Phase abgewartet, Höhe 1 s
+        // stabil, min. 2 s nach der ersten Message). Erst dann ist der
+        // Fit endgültig — sonst zeigt der erste sichtbare Frame den
+        // Fit ohne Applet-Höhe und die spätere Anwendung wäre eine
+        // sichtbare Skala-Stufe. Cap: 4000 ms pro Applet (defektes/
+        // fremdes Applet ohne Message darf den Mount nicht hängen lassen).
+        await new Promise((res) => {
+          const tEnd = Date.now() + 4000;
+          const iv = setInterval(() => {
+            if (f.__appletSettled || Date.now() > tEnd) { clearInterval(iv); res(); }
+          }, 100);
+        });
+      }
+      if (_sec) fitSlideSection(_sec, SLIDE_W, SLIDE_H);
+    } catch (e) { /* Applet-Problem darf den Mount nicht brechen */ }
+    _root.style.visibility = "";
+  }
   aicampusCurrentReveal = reveal;
   // Laser-Pointer (nur Tutoren): Taste L + Color-Picker-Feld am frischen
   // Chalkboard-Container verdrahten (s. aicampusLaser oben).
@@ -880,6 +935,14 @@ async function aicampusMountDeck() {
   aicampusDeckMounting = true;
   try {
     await aicampusDoMount();
+  } catch (e) {
+    // Der Mount versteckt das Deck VOR dem Section-Build; ein Fehler
+    // dazwischen dürfe keine (verdeckte) Leerseite hinterlassen.
+    const shell = document.getElementById("present-shell");
+    const root = document.getElementById("reveal-root");
+    if (root) root.style.visibility = "";
+    if (shell) shell.innerHTML = '<div class="present-message">Fehler beim Laden des Slide-Decks.</div>';
+    console.error("Slide-Deck-Mount fehlgeschlagen:", e);
   } finally {
     aicampusDeckMounting = false;
   }

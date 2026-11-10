@@ -656,9 +656,21 @@ html.print-pdf .reveal .slides .markdown-preview pre {
    (main.css: 1.25rem = konstant): mit dem Auto-Fit müssen auch die
    Abstände skalieren, und vertikal ist im Folienraum knapp — enge Ränder
    lassen den Fit auf größeren Skalen laufen. */
-:is(.reveal .slides, .slides-canvas) .markdown-preview :is(.aicampus-figure, .aicampus-code-figure, .aicampus-table-figure) {
-  margin: 0.5em auto;
-}
+ :is(.reveal .slides, .slides-canvas) .markdown-preview :is(.aicampus-figure, .aicampus-code-figure, .aicampus-table-figure) {
+   margin: 0.5em auto;
+   /* max-width:100% ist essentiell: die auto-Margins deaktivieren das
+      Flex-Stretch in .aicampus-slide-body → das Figure wird shrink-to-fit
+      gemessen. Lange Code-Zeilen (white-space:pre) treiben die
+      min-content-Breite → das Figure wuchert über die Folienkante hinaus.
+      Mit der Cap bleibt es in der Spalte, und der <pre> (overflow:auto)
+      bekommt seine Horizontal-Scrollbar. */
+   max-width: 100%;
+ }
+ html.print-pdf :is(.reveal .slides, .slides-canvas) .markdown-preview :is(.aicampus-figure, .aicampus-code-figure, .aicampus-table-figure) {
+   /* PDF-Export: Cap weg — Code muss vollständig stehen (overflow:visible,
+      s. pre-Regel oben); internes Scrollen ist im PDF nicht bedienbar. */
+   max-width: none;
+ }
 :is(.reveal .slides, .slides-canvas) .markdown-preview :is(.aicampus-figure, .aicampus-code-figure, .aicampus-table-figure) figcaption {
   margin-top: 0.5em;
 }

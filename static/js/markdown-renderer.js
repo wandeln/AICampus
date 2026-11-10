@@ -708,6 +708,24 @@ window.addEventListener('message', (event) => {
   if (!d || d.source !== 'aicampus-applet' || typeof d.height !== 'number' || !isFinite(d.height)) return;
   document.querySelectorAll('iframe.aicampus-applet').forEach((f) => {
     if (f.contentWindow === event.source) {
+      // Webfont-Phase einfrieren: Das Applet meldet HÖHEN erst, wenn seine
+      // eigenen Webfonts geladen UND die Höhe 500 ms stabil sind
+      // (serverseitig injiziertes Script) — frühere Fallback-/Reflow-Höhen
+      // kommen gar nicht an. Hier nur noch 1 s Bestätigung: dieselbe Höhe
+      // 4× in Folge (250-ms-Heartbeat); jeder neue Wert setzt zurück,
+      // so wandert eine späte Konvergenz unsichtbar durch. Cap: 6 s nach
+      // der ersten Message (höhe-animierende Applets frieren nicht ein);
+      // danach sind Änderungen sofort durch (Interaktivität). Auf der
+      // SICHTBAREN Folie blockiert das die Refits, bis SETTLEd — jede
+      // Höhenänderung wäre sonst eine sichtbare Body-Skala-Stufe.
+      // Hintergrundfolien und Skript sind unbeeinflusst (da läuft das
+      // Auto-Scale ohnehin unsichtbar).
+      if (d.fontsReady && !f.__appletSettled) {
+        const st = f.__appletStab || (f.__appletStab = { lastH: null, count: 0, t0: Date.now() });
+        if (d.height === st.lastH) st.count++; else { st.lastH = d.height; st.count = 1; }
+        if (st.count >= 4 || Date.now() - st.t0 > 6000) f.__appletSettled = true;
+      }
+      if (!f.__appletSettled && f.closest("section.present")) return;
       const prevAppletH = f.style.height;
       // Gezoomte Applets ({.zoom=X}): Clamp zoom-korrigiert, damit die
       // VISIBLE Höhe (gemeldete Höhe × zoom) im selben Bereich bleibt.
