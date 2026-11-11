@@ -7,11 +7,11 @@
 
   <!-- Kopf: Avatar + Name -->
   <div class="flex items-center gap-5 mb-6">
-    <div class="w-24 h-24 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
+    <div class="w-32 h-32 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
       {% if profile_user.avatar %}
       <img src="{{ profile_user.avatar }}" alt="Profilbild von {{ profile_user.name }}" class="w-full h-full object-cover">
       {% else %}
-      <span class="text-5xl">👤</span>
+      <span class="text-6xl">👤</span>
       {% endif %}
     </div>
     <div class="min-w-0">
@@ -19,7 +19,7 @@
       <p class="text-gray-500 mt-0.5">@{{ profile_user.username }}</p>
       <div class="mt-2">
         {% if is_own_profile %}
-        <a href="/settings" class="inline-block text-sm text-blue-600 hover:text-blue-800 transition">✏️ Steckbrief bearbeiten</a>
+        <a href="/settings" class="inline-block text-sm text-blue-600 hover:text-blue-800 transition">✏️ Profil bearbeiten</a>
         {% endif %}
         {% if current_user and not is_own_profile %}
         <button type="button" onclick="dmStartChat({{ profile_user.id }})"

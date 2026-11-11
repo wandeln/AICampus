@@ -47,7 +47,7 @@ from database.models import (
     User,
     UserCourse,
 )
-from services import notifications
+from services import media_service, notifications
 from services.auth_service import get_current_user, require_course_access
 from services.llm_service import LLMService
 from services.settings_resolver import get_effective_llm_config
@@ -115,7 +115,7 @@ def _is_staff(session: Session, user: User, course_id: int) -> bool:
 
 
 def _avatar_url(user: Optional[User]) -> Optional[str]:
-    return f"/avatars/{user.avatar.rsplit('/', 1)[-1]}" if user and user.avatar else None
+    return media_service.avatar_url(user.avatar) if user else None
 
 
 def _chapter_index_text(session: Session, course_id: int) -> str:

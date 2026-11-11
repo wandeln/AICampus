@@ -27,6 +27,9 @@ MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 AVATAR_DIR = BASE_DIR / "data" / "avatars"
 AVATAR_DIR.mkdir(parents=True, exist_ok=True)
 
+# Standard-Profilbild für Users ohne eigenes hochgeladenes Bild
+DEFAULT_AVATAR_URL = "/static/default-avatar.png"
+
 # Workspace-Aufgaben: Dateibäume der Aufgaben (public + privat in .private/)
 # data/workspaces/{task_id}/<pfad> bzw. data/workspaces/{task_id}/.private/<pfad>
 WORKSPACE_DIR = BASE_DIR / "data" / "workspaces"

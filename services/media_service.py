@@ -18,10 +18,11 @@ from pathlib import Path
 from typing import Any, BinaryIO, Optional, TypedDict
 
 from fastapi import HTTPException
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
-from config import AVATAR_DIR, MEDIA_DIR
+from config import AVATAR_DIR, DEFAULT_AVATAR_URL, MEDIA_DIR
 from database.models import (
+    AvatarHistoryEntry,
     CourseMaterial,
     CourseMedia,
     MaterialType,
@@ -388,8 +389,60 @@ def svg_to_png(data: bytes, output_width: int = 1200) -> bytes:
 # Eigenes Verzeichnis (AVATAR_DIR), da Avatare keinem Kurs zugeordnet sind
 # und nicht in die Kurs-Medien-Bibliothek (CourseMedia) gehören.
 
+def avatar_url(avatar_rel: Optional[str]) -> str:
+    """URL des Profilbilds; ohne eigenes Bild die Standard-Variante.
+
+    `avatar_rel` ist der DB-Wert (relativer Pfad `avatars/<uuid>.<ext>`).
+    """
+    return f"/avatars/{avatar_rel.rsplit('/', 1)[-1]}" if avatar_rel else DEFAULT_AVATAR_URL
+
+
+def _shrink_avatar(data: bytes, ext: str) -> tuple[bytes, str] | None:
+    """Skaliert ein zu großes Profilbild herunter, bis es ins Limit passt.
+
+    Behält das Format bei (GIF → erstes Frame als PNG). Returns (bytes, ext)
+    oder None, wenn nicht unterzubringen (≤256 px Kante und noch zu groß).
+    """
+    try:
+        from io import BytesIO
+        from PIL import Image
+    except ImportError:
+        return None
+
+    try:
+        im = Image.open(BytesIO(data))
+        im.load()
+    except Exception:
+        return None
+
+    if ext == ".gif":
+        im, fmt, quality, ext = im.convert("RGB"), "PNG", None, ".png"
+    elif ext == ".png":
+        fmt, quality = "PNG", None
+    elif ext in (".jpg", ".jpeg"):
+        im, fmt, quality = im.convert("RGB"), "JPEG", 85
+    elif ext == ".webp":
+        fmt, quality = "WEBP", 85
+    else:
+        return None
+
+    while True:
+        out = BytesIO()
+        save_kwargs = {"quality": quality} if quality else {"optimize": True}
+        im.save(out, fmt, **save_kwargs)
+        if out.tell() <= MAX_AVATAR_BYTES:
+            return out.getvalue(), ext
+        w, h = im.size
+        if min(w, h) <= 256:
+            return None
+        im = im.resize((max(1, round(w * 0.75)), max(1, round(h * 0.75))), Image.LANCZOS)
+
+
 def save_avatar(filename: str, data: bytes) -> tuple[str, str]:
     """Validiert + speichert ein Profilbild-Upload.
+
+    Zu große Bilder werden automatisch herunterskaliert; erst wenn das nicht
+    reicht, wird mit 413 geantwortet.
 
     Returns: (relativer file_path, mime_type)
     Raises:  400/413 bei ungültigem Upload.
@@ -401,7 +454,10 @@ def save_avatar(filename: str, data: bytes) -> tuple[str, str]:
     if not data:
         raise HTTPException(400, "Datei ist leer.")
     if len(data) > MAX_AVATAR_BYTES:
-        raise HTTPException(413, f"Profilbild zu groß (max. {MAX_AVATAR_BYTES // (1024 * 1024)} MB).")
+        shrunk = _shrink_avatar(data, ext)
+        if shrunk is None:
+            raise HTTPException(413, f"Profilbild zu groß (max. {MAX_AVATAR_BYTES // (1024 * 1024)} MB).")
+        data, ext = shrunk
 
     AVATAR_DIR.mkdir(parents=True, exist_ok=True)
     stored_name = f"{uuid.uuid4().hex}{ext}"
@@ -430,6 +486,50 @@ def delete_avatar_file(rel_path: str) -> None:
             p.unlink()
     except OSError:
         pass  # Datei fehlt schon oder FS-Problem — DB-Eintrag wird trotzdem gelöscht
+
+
+# ─── Avatar-Verlauf (Versions-History, Undo) ─────────────────────
+
+# Anzahl der behaltenen Versionen je User — ältere werden beim Einspeichern
+# neuer Versionen (Datei + Zeile) entfernt.
+AVATAR_HISTORY_LIMIT = 20
+
+
+def record_avatar_version(session: Session, user_id: int, file_path: str) -> None:
+    """Sichert ein Profilbild als History-Eintrag (vor Ersetzen/Entfernen).
+
+    Die Datei bleibt auf der Platte — sie gehört jetzt zum Verlauf.
+    Dedupe: dasselbe Bild wird nicht doppelt versioniert (sonst würde ein
+    Löschen des einen Eintrags die Datei des anderen mitnehmen).
+    Aufruf vor `session.commit()` — die Zeile wird mit dem folgenden
+    Commit fest. Pruned nach `AVATAR_HISTORY_LIMIT` (best effort).
+    """
+    exists = session.exec(
+        select(AvatarHistoryEntry).where(
+            AvatarHistoryEntry.user_id == user_id,
+            AvatarHistoryEntry.file_path == file_path,
+        )
+    ).first()
+    if exists:
+        return
+    session.add(AvatarHistoryEntry(user_id=user_id, file_path=file_path))
+    session.flush()
+    count = session.exec(
+        select(func.count()).where(AvatarHistoryEntry.user_id == user_id)
+    ).one()
+    excess = count - AVATAR_HISTORY_LIMIT
+    if excess > 0:
+        oldest = session.exec(
+            select(AvatarHistoryEntry)
+            .where(AvatarHistoryEntry.user_id == user_id)
+            .order_by(AvatarHistoryEntry.id)
+            .limit(excess)
+        ).all()
+        for entry in oldest:
+            rel = entry.file_path
+            session.delete(entry)
+            session.flush()
+            delete_avatar_file(rel)
 
 
 def resolve_media_path(course_id: int, filename: str) -> Path | None:

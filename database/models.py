@@ -95,6 +95,20 @@ class User(UserBase, table=True):
     feedback_given: List["Feedback"] = Relationship(back_populates="giver")
 
 
+class AvatarHistoryEntry(SQLModel, table=True):
+    """Version eines Profilbilds (Verlauf) — erlaubt, Änderungen rückgängig zu machen.
+
+    Datei liegt wie das aktuelle Profilbild unter avatars/<uuid>.<ext>.
+    """
+
+    __tablename__ = "avatar_history"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    file_path: str = Field(max_length=255)  # relativer Pfad: avatars/<uuid>.<ext>
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
 class UserCreate(UserBase):
     plain_password: str = Field(min_length=6, max_length=128)
 

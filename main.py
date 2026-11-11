@@ -569,7 +569,8 @@ def _user_ctx(user: User, role: str) -> dict[str, Any]:
         "username": user.username,
         "name": user.name,
         "role": role,
-        "avatar": f"/avatars/{user.avatar.rsplit('/', 1)[-1]}" if user.avatar else None,
+        "avatar": media_service.avatar_url(user.avatar),
+        "has_avatar": bool(user.avatar),
     }
 
 
@@ -934,7 +935,7 @@ async def user_profile_page(
             "id": user.id,
             "username": user.username,
             "name": user.name,
-            "avatar": f"/avatars/{user.avatar.rsplit('/', 1)[-1]}" if user.avatar else None,
+            "avatar": media_service.avatar_url(user.avatar),
         },
         "profile_md": user.profile or "",
         "is_own_profile": False,
@@ -2052,7 +2053,7 @@ async def members_page(
             "user_id": uc.user_id,
             "username": uc.user.username if uc.user else "unknown",
             "name": uc.user.name if uc.user else "unknown",
-            "avatar": f"/avatars/{uc.user.avatar.rsplit('/', 1)[-1]}" if uc.user and uc.user.avatar else None,
+            "avatar": media_service.avatar_url(uc.user.avatar) if uc.user else None,
             "role_in_course": uc.role_in_course.value,
             "annotation": uc.annotation,
         }
@@ -2478,7 +2479,7 @@ async def task_page(
                     "giver_name": fb.giver.name if fb.giver else "LLM",
                     "giver_id": fb.giver.id if fb.giver else None,
                     "giver_username": fb.giver.username if fb.giver else None,
-                    "giver_avatar": f"/avatars/{fb.giver.avatar.rsplit('/', 1)[-1]}" if fb.giver and fb.giver.avatar else None,
+                    "giver_avatar": media_service.avatar_url(fb.giver.avatar) if fb.giver else None,
                     "created_at": fb.created_at,
                 })
             my_submissions.append({

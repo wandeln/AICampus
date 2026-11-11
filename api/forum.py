@@ -55,7 +55,7 @@ from database.models import (
     User,
     UserCourse,
 )
-from services import notifications, reactions
+from services import media_service, notifications, reactions
 from services.auth_service import require_course_access
 from services.timeutil import campus_date, utc_iso
 
@@ -140,7 +140,7 @@ def _message_dict(
         "username": sender.username if sender else "unknown",
         "name": sender.name if sender else "unknown",
         "role": role,
-        "avatar": f"/avatars/{sender.avatar.rsplit('/', 1)[-1]}" if sender and sender.avatar else None,
+        "avatar": media_service.avatar_url(sender.avatar) if sender else None,
         "can_delete": can_delete,
         "reactions": reactions or [],
     }

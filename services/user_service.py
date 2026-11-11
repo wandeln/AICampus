@@ -22,10 +22,11 @@ import logging
 import shutil
 from datetime import datetime
 
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from config import SUBMISSION_DIR
 from database.models import (
+    AvatarHistoryEntry,
     ContentVersion,
     CourseImport,
     Feedback,
@@ -199,6 +200,16 @@ def soft_delete_user(session: Session, user: User) -> str:
         session.delete(ver)
     session.flush()
 
+    # 12b. Avatar-Verlauf (persönliche Bilddaten; Dateien nach dem Commit)
+    history_files = [
+        e.file_path
+        for e in session.exec(
+            select(AvatarHistoryEntry).where(AvatarHistoryEntry.user_id == user_id)
+        ).all()
+    ]
+    session.exec(delete(AvatarHistoryEntry).where(AvatarHistoryEntry.user_id == user_id))
+    session.flush()
+
     # 13. Den User anonymisieren (Zeile bleibt als FK-Anker, Login unmöglich)
     avatar_rel = user.avatar
     user.deleted_at = datetime.now()
@@ -214,6 +225,8 @@ def soft_delete_user(session: Session, user: User) -> str:
     # 14. Dateien (best effort, nach dem Commit)
     if avatar_rel:
         media_service.delete_avatar_file(avatar_rel)
+    for rel in history_files:
+        media_service.delete_avatar_file(rel)
     for d in snapshot_dirs:
         shutil.rmtree(d, ignore_errors=True)
     for d in staging_dirs:

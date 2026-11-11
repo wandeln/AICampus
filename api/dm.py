@@ -51,7 +51,7 @@ from database.models import (
     Notification,
     User,
 )
-from services import notifications, reactions
+from services import media_service, notifications, reactions
 from services.auth_service import get_current_user
 from services.timeutil import campus_date, utc_iso
 
@@ -136,7 +136,7 @@ def _chat_dict(
                 "id": uid,
                 "username": u.username if u else "unknown",
                 "name": u.name if u else "unknown",
-                "avatar": f"/avatars/{u.avatar.rsplit('/', 1)[-1]}" if u and u.avatar else None,
+                "avatar": media_service.avatar_url(u.avatar) if u else None,
             }
             for uid, u in ((uid, users.get(uid)) for uid in members)
         ],
@@ -144,7 +144,7 @@ def _chat_dict(
             "id": other.id,
             "username": other.username,
             "name": other.name,
-            "avatar": f"/avatars/{other.avatar.rsplit('/', 1)[-1]}" if other and other.avatar else None,
+            "avatar": media_service.avatar_url(other.avatar) if other else None,
         } if other and not is_group else None,
         "last_message": (
             {
@@ -300,7 +300,7 @@ def _message_dict(
         "user_id": msg.user_id,
         "username": sender.username if sender else "unknown",
         "name": sender.name if sender else "unknown",
-        "avatar": f"/avatars/{sender.avatar.rsplit('/', 1)[-1]}" if sender and sender.avatar else None,
+        "avatar": media_service.avatar_url(sender.avatar) if sender else None,
         "is_self": msg.user_id == viewer.id,
         "reactions": reactions_list or [],
     }
@@ -700,7 +700,7 @@ async def search_users(
             "id": u.id,
             "username": u.username,
             "name": u.name,
-            "avatar": f"/avatars/{u.avatar.rsplit('/', 1)[-1]}" if u.avatar else None,
+            "avatar": media_service.avatar_url(u.avatar),
         }
         for u in users
         if u.id != viewer.id

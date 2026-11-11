@@ -13,26 +13,70 @@
   <div class="bg-white rounded-xl shadow-md border border-gray-200 p-6 mb-6">
     <h2 class="text-lg font-semibold text-gray-700 mb-4">Profilbild</h2>
     <div class="flex items-center gap-5">
-      <div id="avatar-preview" class="w-20 h-20 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden shrink-0">
-        {% if current_user.avatar %}
+      <div id="avatar-preview" class="w-28 h-28 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden shrink-0">
         <img src="{{ current_user.avatar }}" alt="Dein Profilbild" class="w-full h-full object-cover">
-        {% else %}
-        <span class="text-3xl">👤</span>
-        {% endif %}
       </div>
       <div class="flex flex-col gap-2 items-start">
-        <label class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition cursor-pointer inline-block">
-          📷 Profilbild hochladen
-          <input type="file" id="avatar-input" accept="image/png,image/jpeg,image/webp,image/gif" class="hidden">
-        </label>
-        {% if current_user.avatar %}
+        <div class="flex flex-wrap gap-2">
+          <label class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition cursor-pointer inline-block">
+            📷 Profilbild hochladen
+            <input type="file" id="avatar-input" accept="image/png,image/jpeg,image/webp,image/gif" class="hidden">
+          </label>
+          <button type="button" id="avatar-camera-btn"
+                  class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+            📸 Foto machen
+          </button>
+        </div>
+        {% if current_user.has_avatar %}
         <button type="button" id="avatar-delete" class="text-red-500 hover:text-red-700 text-sm transition px-1">
-          ✕ Profilbild entfernen
+          ✕ Profilbild auf Default zurücksetzen
         </button>
         {% endif %}
       </div>
     </div>
-    <p class="text-xs text-gray-400 mt-3">PNG, JPG, WebP oder GIF — max. 2 MB.</p>
+    <p class="text-xs text-gray-400 mt-3">PNG, JPG, WebP oder GIF — zu große Bilder werden automatisch verkleinert.</p>
+
+    <div class="mt-4 pt-4 border-t border-gray-100">
+      <p class="text-sm font-medium text-gray-700 mb-2">🪄 Mit KI bearbeiten</p>
+      <div class="flex flex-col sm:flex-row gap-2">
+        <input type="text" id="avatar-edit-instruction"
+               placeholder="z.B. &bdquo;füge eine coole Sonnenbrille und einen roten Hut hinzu&ldquo;"
+               class="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+        <button type="button" id="avatar-edit-btn"
+                class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap">
+          🪄 Bearbeiten
+        </button>
+        <button type="button" id="avatar-campus-btn"
+                class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition whitespace-nowrap">
+          ✨ AICampus-Stil anwenden
+        </button>
+      </div>
+      <p class="text-xs text-gray-400 mt-2">
+        Ohne eigenes Profilbild wird das Standard-Bild bearbeitet — das Ergebnis wird in beiden Fällen dein Profilbild.
+        „AICampus-Stil“ setzt den Kopf im Look des Standard-Avatars um.
+      </p>
+    </div>
+
+    <div id="avatar-history" class="mt-4 pt-4 border-t border-gray-100 hidden">
+      <p class="text-sm font-medium text-gray-700 mb-2">🕘 Verlauf</p>
+      <div id="avatar-history-list" class="flex gap-3 overflow-x-auto pb-1"></div>
+    </div>
+  </div>
+
+  <!-- Kamera-Modal (📸 Foto machen) -->
+  <div id="camera-modal" class="hidden fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl shadow-2xl p-4 max-w-md w-full">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-semibold text-gray-800">📸 Profilfoto aufnehmen</h3>
+        <button type="button" id="camera-close" class="text-gray-400 hover:text-gray-600 transition" title="Schließen">✕</button>
+      </div>
+      {# scaleX(-1): Live-Vorschau gespiegelt (Selfie-Look); das aufgenommene Foto wird entsprechend im Canvas gespiegelt #}
+      <video id="camera-video" autoplay playsinline class="w-full rounded-lg bg-black" style="max-height: 320px; object-fit: contain; transform: scaleX(-1);"></video>
+      <div class="flex justify-center gap-3 mt-4">
+        <button type="button" id="camera-cancel" class="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 transition">Abbrechen</button>
+        <button type="button" id="camera-shoot" class="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition">📸 Foto machen</button>
+      </div>
+    </div>
   </div>
 
   <!-- Profil-Information -->
@@ -309,11 +353,11 @@
     // Preview auf dieser Seite
     document.getElementById('avatar-preview').innerHTML = url
       ? `<img src="${url}" alt="Dein Profilbild" class="w-full h-full object-cover">`
-      : '<span class="text-3xl">👤</span>';
+      : '<span class="text-4xl">👤</span>';
     // Navbar (Desktop + Mobile)
     document.querySelectorAll('.nav-avatar').forEach((el) => {
       el.innerHTML = url
-        ? `<img src="${url}" alt="" class="w-7 h-7 rounded-full object-cover border border-blue-300">`
+        ? `<img src="${url}" alt="" class="w-9 h-9 rounded-full object-cover border border-blue-300">`
         : '👤';
     });
     // Lösch-Button ein-/ausblenden
@@ -346,6 +390,7 @@
       if (res.ok) {
         renderAvatar(data.user.avatar);
         showToast(data.message, 'success');
+        loadAvatarHistory();
       } else {
         showToast(data.detail || 'Fehler beim Hochladen des Profilbilds.', 'error');
       }
@@ -365,6 +410,7 @@
       if (res.ok) {
         renderAvatar(data.user.avatar);
         showToast(data.message, 'success');
+        loadAvatarHistory();
       } else {
         showToast(data.detail || 'Fehler beim Entfernen des Profilbilds.', 'error');
       }
@@ -376,6 +422,171 @@
   avatarInput.addEventListener('change', uploadAvatar);
   const avatarDeleteBtn = document.getElementById('avatar-delete');
   if (avatarDeleteBtn) avatarDeleteBtn.addEventListener('click', deleteAvatar);
+
+  // ─── Profilbild: KI-Bearbeitung (Qwen Image Edit) ──────────
+  async function editAvatar(btn, { instruction, campusStyle }) {
+    btn.disabled = true;
+    const orig = btn.innerHTML;
+    btn.innerHTML = '⏳ Wird bearbeitet …';
+    try {
+      const res = await fetch('/api/auth/settings/avatar/edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ instruction: instruction || '', campus_style: !!campusStyle }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        renderAvatar(data.user.avatar);
+        showToast(data.message, 'success');
+        document.getElementById('avatar-edit-instruction').value = '';
+        loadAvatarHistory();
+      } else {
+        showToast(data.detail || 'Fehler bei der KI-Bearbeitung.', 'error');
+      }
+    } catch (err) {
+      showToast('Fehler: ' + err.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = orig;
+    }
+  }
+
+  const avatarEditBtn = document.getElementById('avatar-edit-btn');
+  if (avatarEditBtn) {
+    const doEdit = () => editAvatar(avatarEditBtn, { instruction: document.getElementById('avatar-edit-instruction').value });
+    avatarEditBtn.addEventListener('click', doEdit);
+    document.getElementById('avatar-edit-instruction').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); doEdit(); }
+    });
+  }
+  const avatarCampusBtn = document.getElementById('avatar-campus-btn');
+  if (avatarCampusBtn) avatarCampusBtn.addEventListener('click', () => editAvatar(avatarCampusBtn, { campusStyle: true }));
+
+  // ─── Profilbild: Verlauf (Undo) ─────────────────────────
+  async function loadAvatarHistory() {
+    try {
+      const res = await fetch('/api/auth/settings/avatar/history', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const data = await res.json();
+      const wrap = document.getElementById('avatar-history');
+      const list = document.getElementById('avatar-history-list');
+      if (!data.items.length) { wrap.classList.add('hidden'); return; }
+      wrap.classList.remove('hidden');
+      list.innerHTML = data.items.map((it) => `
+        <div class="flex flex-col items-center gap-1 shrink-0">
+          <img src="${it.url}" alt="Profilbild aus dem Verlauf" title="Wiederherstellen"
+               data-hid="${it.id}" data-hact="restore"
+               class="w-12 h-12 rounded-full object-cover border border-gray-200 cursor-pointer hover:ring-2 hover:ring-blue-400 transition">
+          <span class="text-[10px] text-gray-400">${new Date(it.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+          <button type="button" data-hid="${it.id}" data-hact="del" title="Endgültig entfernen"
+                  class="text-xs px-1.5 py-0.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition">✕</button>
+        </div>`).join('');
+    } catch (err) { /* Verlauf ist Nice-to-have — leise verwerfen */ }
+  }
+
+  document.getElementById('avatar-history-list').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-hid]');
+    if (!btn) return;
+    const id = btn.dataset.hid;
+    try {
+      if (btn.dataset.hact === 'del') {
+        const res = await fetch(`/api/auth/settings/avatar/history/${id}`, { method: 'DELETE', credentials: 'same-origin' });
+        const data = await res.json();
+        showToast(res.ok ? data.message : (data.detail || 'Fehler beim Entfernen.'), res.ok ? 'success' : 'error');
+        if (res.ok) loadAvatarHistory();
+      } else {
+        btn.disabled = true;
+        const res = await fetch(`/api/auth/settings/avatar/history/${id}/restore`, { method: 'POST', credentials: 'same-origin' });
+        const data = await res.json();
+        btn.disabled = false;
+        if (res.ok) {
+          renderAvatar(data.user.avatar);
+          showToast(data.message, 'success');
+          loadAvatarHistory();
+        } else {
+          showToast(data.detail || 'Fehler bei der Wiederherstellung.', 'error');
+          if (res.status === 410) loadAvatarHistory();
+        }
+      }
+    } catch (err) {
+      showToast('Fehler: ' + err.message, 'error');
+    }
+  });
+
+  loadAvatarHistory();
+
+  // ─── Profilbild: Kamera (📸 Foto machen) ───────────────────
+  let cameraStream = null;
+  const cameraModal = document.getElementById('camera-modal');
+
+  function closeCamera() {
+    cameraModal.classList.add('hidden');
+    if (cameraStream) {
+      cameraStream.getTracks().forEach((t) => t.stop());
+      cameraStream = null;
+    }
+    const video = document.getElementById('camera-video');
+    if (video) video.srcObject = null;
+  }
+
+  function openCamera() {
+    cameraModal.classList.remove('hidden');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showToast('Kamera wird vom Browser nicht unterstützt (HTTPS nötig?).', 'error');
+      closeCamera();
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 1024 }, height: { ideal: 1024 } },
+      audio: false,
+    }).then((stream) => {
+      cameraStream = stream;
+      document.getElementById('camera-video').srcObject = stream;
+    }).catch((err) => {
+      showToast('Kamera nicht verfügbar: ' + err.message, 'error');
+      closeCamera();
+    });
+  }
+
+  function shootCameraPhoto() {
+    const video = document.getElementById('camera-video');
+    if (!video || !video.videoWidth) return;
+    // quadratischer Mittel-Crop — Avatare werden rund angezeigt
+    const size = Math.min(video.videoWidth, video.videoHeight);
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    // gespiegelt speichern — wie in der Live-Vorschau
+    ctx.translate(size, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, (video.videoWidth - size) / 2, (video.videoHeight - size) / 2, size, size, 0, 0, size, size);
+    canvas.toBlob((blob) => {
+      if (!blob) { showToast('Foto konnte nicht erstellt werden.', 'error'); return; }
+      closeCamera();
+      const fd = new FormData();
+      fd.append('file', blob, 'profilfoto.jpg');
+      fetch('/api/auth/settings/avatar', { method: 'POST', credentials: 'same-origin', body: fd })
+        .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+        .then(({ ok, data }) => {
+          if (ok) {
+            renderAvatar(data.user.avatar);
+            showToast('Profilfoto wurde hochgeladen.', 'success');
+            loadAvatarHistory();
+          } else {
+            showToast(data.detail || 'Fehler beim Hochladen des Profilfotos.', 'error');
+          }
+        })
+        .catch((err) => showToast('Fehler: ' + err.message, 'error'));
+    }, 'image/jpeg', 0.9);
+  }
+
+  document.getElementById('avatar-camera-btn').addEventListener('click', openCamera);
+  document.getElementById('camera-close').addEventListener('click', closeCamera);
+  document.getElementById('camera-cancel').addEventListener('click', closeCamera);
+  document.getElementById('camera-shoot').addEventListener('click', shootCameraPhoto);
+  cameraModal.addEventListener('click', (e) => { if (e.target === cameraModal) closeCamera(); });
 
   // ─── Name ändern ────────────────────────────────────────────
   document.getElementById('name-form').addEventListener('submit', async (e) => {

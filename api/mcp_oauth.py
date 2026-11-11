@@ -37,6 +37,7 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from config import BASE_DIR
 from database.base import engine, get_session
 from database.models import Course, McpOAuthClient, McpOAuthToken, User, UserCourse
+from services import media_service
 from services import mcp_oauth_service
 from services import mcp_token_service
 from services.auth_service import decode_access_token, get_current_user
@@ -334,7 +335,7 @@ def _consent_context(
                 "username": user.username,
                 "name": user.name,
                 "role": "Admin" if is_admin else "User",
-                "avatar": None,
+                "avatar": media_service.avatar_url(user.avatar),
             }
             if user
             else None

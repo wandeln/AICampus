@@ -129,8 +129,8 @@
     <div class="container mx-auto px-4 py-1 flex items-center justify-between">
 
       <!-- Logo / Home -->
-      <a href="/" class="text-xl font-bold flex items-center gap-2 hover:opacity-90 transition mr-2 py-2">
-        <img src="{{ asset('aicampus_icon_bg_white.png') }}" alt="AICampus" class="h-8 w-8 rounded-full">
+      <a href="/" class="text-xl font-bold flex items-center gap-2 hover:opacity-90 transition mr-2 py-1">
+        <img src="{{ asset('aicampus_icon_bg_white.png') }}" alt="AICampus" class="h-9 w-9 rounded-full">
         <span class="hidden sm:inline">AICampus</span>
         <span class="sm:hidden">AICampus</span>
       </a>
@@ -223,14 +223,14 @@
         <button
           type="button"
           id="user-menu-btn"
-          class="hidden sm:flex items-center gap-2 text-sm rounded-lg px-2 py-2 hover:bg-blue-600/70 transition"
+          class="hidden sm:flex items-center gap-2 text-sm rounded-lg px-1 py-1 hover:bg-blue-600/70 transition"
           aria-haspopup="true"
           aria-expanded="false"
           onclick="toggleUserMenu()"
         >
-          <span class="nav-avatar flex items-center justify-center w-8 h-8">
+          <span class="nav-avatar flex items-center justify-center w-9 h-9">
             {% if current_user.avatar %}
-            <img src="{{ current_user.avatar }}" alt="" class="w-8 h-8 rounded-full object-cover border border-blue-300">
+            <img src="{{ current_user.avatar }}" alt="" class="w-9 h-9 rounded-full object-cover border border-blue-300">
             {% else %}
             <span>👤</span>
             {% endif %}
@@ -327,9 +327,9 @@
           title="Menü"
           onclick="toggleMobileMenu()"
         >
-          <span class="nav-avatar flex items-center justify-center w-8 h-8">
+          <span class="nav-avatar flex items-center justify-center w-9 h-9">
             {% if current_user.avatar %}
-            <img src="{{ current_user.avatar }}" alt="" class="w-8 h-8 rounded-full object-cover border border-blue-300">
+            <img src="{{ current_user.avatar }}" alt="" class="w-9 h-9 rounded-full object-cover border border-blue-300">
             {% else %}
             <span>👤</span>
             {% endif %}
