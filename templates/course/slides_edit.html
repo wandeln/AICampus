@@ -718,16 +718,20 @@
          const newCache = new Map();
          // Skala-Übernahme nur bei gleicher Logik-Größe (Format-Wechsel im
          // Theme → alle Skalen veraltet → neu fiten).
-         const sameWH = _slideFitW === W && _slideFitH === H;
-         for (let i = 0; i < slides.length; i++) {
-           if (seq !== previewSeq) return; // neuerer Render hat übernommen
-           const footer = FOOTER_ENABLED && FOOTER_TEXT ? FOOTER_TEXT : null;
-           // Inkrementeller Rebuild: unveränderte Folie (Inhalt + Position
-           // + Footer identisch) aus dem sauberen HTML-Cache statt neu
-           // parsen. Footer als Key-Suffix: er sitzt im data-footer-Attribut
-           // der Sectionen.
-           const sig = slideSignature(slides[i], i) + "\u0000" + (footer || "");
-           const hit = prevCache.get(sig);
+          const sameWH = _slideFitW === W && _slideFitH === H;
+          // Pro Top-Folie: Cache-Treffer? (Für die Skala-Übernahme unten —
+          // nur bei Treffer ist die alte Skala weiterhin gültig.)
+          const cacheHits = [];
+          for (let i = 0; i < slides.length; i++) {
+            if (seq !== previewSeq) return; // neuerer Render hat übernommen
+            const footer = FOOTER_ENABLED && FOOTER_TEXT ? FOOTER_TEXT : null;
+            // Inkrementeller Rebuild: unveränderte Folie (Inhalt + Position
+            // + Footer identisch) aus dem sauberen HTML-Cache statt neu
+            // parsen. Footer als Key-Suffix: er sitzt im data-footer-Attribut
+            // der Sectionen.
+            const sig = slideSignature(slides[i], i) + "\u0000" + (footer || "");
+            const hit = prevCache.get(sig);
+            cacheHits.push(!!hit);
            let section;
            if (hit) {
              const holder = document.createElement("div");
@@ -788,6 +792,12 @@
         // überlebende Folien behalten ihre Skala (gleicher Inhalt,
         // gleiche Größe → Messung weiterhin gültig) und brauchen kein
         // (Background-)Refit; alles andere markieren + lazy fiten.
+        // WICHTIG: die Skala-Übernahme gilt NUR für Cache-Treffer — eine
+        // REBUILD-Folie (Inhalt geändert) würde sonst die Skala der ALTEN
+        // (anderen) Inhaltshöhe erben und nie neu gefitet werden (kein
+        // fitPending, Background-Queue und Lazy-Fit schlagen nicht an) →
+        // Auto-Scale "manchmal" veraltet, bis eine asynchrone Refit-Quelle
+        // (Font-Batch/Bild-Load/Applet-Message) zufällig nachhilft.
         // Die Skala kommt vom LEBENDEN alten Deck (gleicher Index),
         // nicht vom Cache (der hält Pre-Fit-Snapshots).
         const oldTops = previewSlidesEl.children;
@@ -802,7 +812,8 @@
             const leaf = leaves[v];
             if (leaf === targetSection) { fitSlideSection(leaf, W, H); continue; }
             const oldLeaf = oldLeaves ? oldLeaves[v] : null;
-            const scale = sameWH && oldLeaf ? oldLeaf.style.getPropertyValue("--slides-body-scale") : "";
+            const scale = sameWH && cacheHits[ti] && oldLeaf
+              ? oldLeaf.style.getPropertyValue("--slides-body-scale") : "";
             if (scale) leaf.style.setProperty("--slides-body-scale", scale);
             else leaf.dataset.fitPending = "1";
           }
