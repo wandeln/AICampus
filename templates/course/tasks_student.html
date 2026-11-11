@@ -19,9 +19,11 @@
                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
       </div>
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Aufgabentyp</label>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Filter</label>
         <select id="type-filter" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
           <option value="">Alle</option>
+          <option value="open">Noch bearbeitbar</option>
+          <option value="processed">Bearbeitet</option>
           <option value="text">Textaufgaben</option>
           <option value="mc">Multiple-Choice-Aufgaben</option>
           <option value="upload">Upload-Aufgaben</option>
@@ -111,8 +113,16 @@
 {% block extra_scripts %}
 <script src="{{ asset('js/content-live.js') }}"></script>
 <script>
+  // ─── Filter Helpers ─────────────────────────────────────────
+  const STATUS_FILTERS = ['open', 'processed'];
+  function currentFilters() {
+    const v = document.getElementById('type-filter').value;
+    const status = STATUS_FILTERS.includes(v) ? v : '';
+    return { text: document.getElementById('filter-input').value, type: status ? '' : v, status };
+  }
+
   // ─── Load Data ──────────────────────────────────────────────
-  async function loadData(filterText = '', typeFilter = '') {
+  async function loadData(filterText = '', typeFilter = '', status = '') {
     const loading = document.getElementById('loading-state');
     const taskContainer = document.getElementById('task-list-container');
 
@@ -122,6 +132,7 @@
     try {
       const params = new URLSearchParams({ filter_text: filterText });
       if (typeFilter) params.set('type_filter', typeFilter);
+      if (status) params.set('status', status);
 
       const res = await fetch('/api/student/courses/' + courseId + '/my-points?' + params, {
         credentials: 'same-origin',
@@ -315,17 +326,21 @@
 
   document.getElementById('filter-input').addEventListener('input', (e) => {
     clearTimeout(filterTimeout);
-    filterTimeout = setTimeout(() => loadData(e.target.value, document.getElementById('type-filter').value), 300);
+    filterTimeout = setTimeout(() => {
+      const f = currentFilters();
+      loadData(f.text, f.type, f.status);
+    }, 300);
   });
 
-  document.getElementById('type-filter').addEventListener('change', (e) => {
-    loadData(document.getElementById('filter-input').value, e.target.value);
+  document.getElementById('type-filter').addEventListener('change', () => {
+    const f = currentFilters();
+    loadData(f.text, f.type, f.status);
   });
 
   document.getElementById('clear-filter-btn').addEventListener('click', () => {
     document.getElementById('filter-input').value = '';
     document.getElementById('type-filter').value = '';
-    loadData('', '');
+    loadData();
   });
 
   // ─── Report Modal ───────────────────────────────────────────
@@ -359,8 +374,7 @@
 
   // Generate report button
   document.getElementById('generate-report-btn').addEventListener('click', async () => {
-    const filterText = document.getElementById('filter-input').value;
-    const typeFilter = document.getElementById('type-filter').value;
+    const { text: filterText, type: typeFilter, status } = currentFilters();
 
     // Show modal with loading state
     reportLoading.classList.remove('hidden');
@@ -371,6 +385,7 @@
     try {
       const params = new URLSearchParams({ filter_text: filterText });
       if (typeFilter) params.set('type_filter', typeFilter);
+      if (status) params.set('status', status);
 
       const res = await fetch('/api/student/courses/' + courseId + '/generate-report?' + params, {
         method: 'POST',
@@ -468,7 +483,8 @@
   // Mit aktuellem Filter re-rendern (kein Page-Reload).
   aicampusWatchContent(courseId, (data) => {
     if (data.entity_type !== "task") return;
-    loadData(document.getElementById('filter-input').value, document.getElementById('type-filter').value);
+    const f = currentFilters();
+    loadData(f.text, f.type, f.status);
   });
 </script>
 {% endblock %}

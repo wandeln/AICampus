@@ -40,7 +40,7 @@ from services.compute_client import (
 )
 from services.grading_service import GradingService
 from services.import_service import spawn_job
-from services.timeutil import deadline_iso, parse_deadline, utc_iso
+from services.timeutil import deadline_expired, deadline_iso, parse_deadline, utc_iso
 from services.mc_service import McValidationError, grade_mc, mc_report_summary, parse_mc_data
 from services.llm_service import LLMService
 from services.media_service import all_media_for_course
@@ -1021,6 +1021,31 @@ async def get_my_submissions(
     }
 
 
+def _filter_status(tasks: list[Task], session: Session, user_id: int, status: str) -> list[Task]:
+    """Aufgaben nach Bearbeitungsstatus filtern.
+
+    'open': noch bearbeitbar (Restversuche vorhanden UND Deadline nicht abgelaufen).
+    'processed': mindestens eine eigene Einreichung vorhanden.
+    """
+    result = []
+    for t in tasks:
+        used = session.exec(
+            select(Submission)
+            .where(Submission.task_id == t.id)
+            .where(Submission.student_id == user_id)
+        ).all()
+        if status == "processed":
+            if used:
+                result.append(t)
+            continue
+        if deadline_expired(t.deadline):
+            continue
+        if t.max_attempts is not None and len(used) >= t.max_attempts:
+            continue
+        result.append(t)
+    return result
+
+
 @router.get("/courses/{course_id}/my-points")
 async def get_my_points(
     course_id: int,
@@ -1045,6 +1070,7 @@ async def get_my_points(
     # Filter aus Query-Parametern
     filter_text = request.query_params.get("filter_text", "").strip()
     type_filter = request.query_params.get("type_filter", "").strip()
+    status_filter = request.query_params.get("status", "").strip()
 
     tasks = session.exec(
         select(Task)
@@ -1057,6 +1083,8 @@ async def get_my_points(
         tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
     if type_filter:
         tasks = [t for t in tasks if t.task_type.value == type_filter]
+    if status_filter in ("open", "processed"):
+        tasks = _filter_status(tasks, session, user.id, status_filter)
 
     task_list = []
     total_points = 0.0
@@ -1565,6 +1593,7 @@ async def generate_student_report(
     # Filter aus Query-Parametern (identisch zu Tutor-Overview)
     filter_text = request.query_params.get("filter_text", "").strip()
     type_filter = request.query_params.get("type_filter", "").strip()
+    status_filter = request.query_params.get("status", "").strip()
 
     # Alle sichtbaren Aufgaben des Kurses
     tasks = list(session.exec(
@@ -1578,6 +1607,8 @@ async def generate_student_report(
         tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
     if type_filter:
         tasks = [t for t in tasks if t.task_type.value == type_filter]
+    if status_filter in ("open", "processed"):
+        tasks = _filter_status(tasks, session, user.id, status_filter)
 
     if not tasks:
         raise HTTPException(400, "Keine Aufgaben gefunden. Passe den Filter an.")
