@@ -558,9 +558,7 @@
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d');
-    // gespiegelt speichern — wie in der Live-Vorschau
-    ctx.translate(size, 0);
-    ctx.scale(-1, 1);
+    // entspiegelt speichern (nur die Live-Vorschau ist gespiegelt)
     ctx.drawImage(video, (video.videoWidth - size) / 2, (video.videoHeight - size) / 2, size, size, 0, 0, size, size);
     canvas.toBlob((blob) => {
       if (!blob) { showToast('Foto konnte nicht erstellt werden.', 'error'); return; }
