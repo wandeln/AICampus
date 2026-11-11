@@ -517,6 +517,71 @@ def feedback_performance(days: int, course_id: Optional[int] = None) -> dict[str
     }
 
 
+def hint_usage(days: int, course_id: Optional[int] = None) -> dict[str, Any]:
+    """Sokratische Hints im Fenster: KPIs, tägliche Serie, Top-Aufgaben.
+
+    Fehler = llm_response mit dem Präfix aus api/student.request_hint
+    ("Fehler beim Generieren des Hinweises: …").
+    course_id: nur Aufgaben dieses Kurses.
+    """
+    since = _since(days)
+    course_filter = " AND t.course_id = :course_id" if course_id is not None else ""
+    params: dict[str, Any] = {"since": since}
+    if course_id is not None:
+        params["course_id"] = course_id
+    with Session(engine) as session:
+        row = session.execute(
+            text(
+                "SELECT COUNT(*), COUNT(DISTINCT he.student_id), COUNT(DISTINCT he.task_id), "
+                "COALESCE(SUM(CASE WHEN he.llm_response LIKE 'Fehler beim Generieren%' "
+                "THEN 1 ELSE 0 END), 0) "
+                "FROM hint_exchanges he "
+                "JOIN tasks t ON t.id = he.task_id "
+                "WHERE he.created_at >= :since" + course_filter
+            ),
+            params,
+        ).first()
+        daily = session.execute(
+            text(
+                "SELECT date(he.created_at) AS d, COUNT(*) AS n "
+                "FROM hint_exchanges he "
+                "JOIN tasks t ON t.id = he.task_id "
+                "WHERE he.created_at >= :since" + course_filter + " GROUP BY d"
+            ),
+            params,
+        ).all()
+        top = session.execute(
+            text(
+                "SELECT t.title, COUNT(*) AS n, COUNT(DISTINCT he.student_id) AS students "
+                "FROM hint_exchanges he "
+                "JOIN tasks t ON t.id = he.task_id "
+                "WHERE he.created_at >= :since" + course_filter + " "
+                "GROUP BY t.title ORDER BY n DESC LIMIT 10"
+            ),
+            params,
+        ).all()
+
+    # Tägliche Serie mit 0er auffüllen (wie daily_active_users)
+    counts = {str(r[0]): r[1] for r in daily}
+    out_daily = []
+    today = datetime.now().date()
+    for i in range(days - 1, -1, -1):
+        d = today - timedelta(days=i)
+        out_daily.append({"date": d.isoformat(), "count": counts.get(d.isoformat(), 0)})
+
+    return {
+        "days": days,
+        "hints": row[0] if row else 0,
+        "students": row[1] if row else 0,
+        "tasks": row[2] if row else 0,
+        "errors": int(row[3] or 0) if row else 0,
+        "daily": out_daily,
+        "top_tasks": [
+            {"title": r[0], "count": r[1], "students": r[2]} for r in top
+        ],
+    }
+
+
 def record_mcp_event(
     user_id: int,
     course_id: Optional[int],

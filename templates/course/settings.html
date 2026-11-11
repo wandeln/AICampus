@@ -201,6 +201,42 @@
       </div>
     </div>
 
+    <!-- Sokratische Hints -->
+    <div class="card p-4 mt-4">
+      <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h3 class="font-semibold text-gray-800">Sokratische Hints</h3>
+        <span class="text-xs text-gray-400">LLM-Hinweise bei der Aufgabenbearbeitung (nur dieser Kurs)</span>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div id="ca-hint-kpi-hints" class="text-xl font-bold text-gray-900">–</div>
+          <div class="text-xs text-gray-500 mt-1">Anfragen (Fenster)</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div id="ca-hint-kpi-students" class="text-xl font-bold text-gray-900">–</div>
+          <div class="text-xs text-gray-500 mt-1">Aktive Studierende</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div id="ca-hint-kpi-tasks" class="text-xl font-bold text-gray-900">–</div>
+          <div class="text-xs text-gray-500 mt-1">Aufgaben mit Hints</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div id="ca-hint-kpi-errors" class="text-xl font-bold text-gray-900">–</div>
+          <div class="text-xs text-gray-500 mt-1">Fehler</div>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div>
+          <h4 class="text-sm font-medium text-gray-600 mb-2">Hints pro Tag</h4>
+          <div class="h-56 relative"><canvas id="ca-hint-daily-chart"></canvas></div>
+        </div>
+        <div>
+          <h4 class="text-sm font-medium text-gray-600 mb-2">Top-Aufgaben</h4>
+          <div id="ca-hint-top-tasks" class="overflow-x-auto"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Handschrift → LaTeX -->
     <div class="card p-4 mt-4">
       <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -408,6 +444,13 @@
   let caFbDailyChart = null;
   let caFbAttemptsChart = null;
   let caFbScatterChart = null;
+  let caHintDailyChart = null;
+
+  function caEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
 
   // Fehlerbalken (Whiskers) für Chart.js — nutzt dataset.errorBars = [±Werte]
   const caErrorBarPlugin = {
@@ -616,6 +659,50 @@
         },
       },
     });
+
+    // Sokratische Hints
+    const hint = data.hints || {};
+    document.getElementById('ca-hint-kpi-hints').textContent = hint.hints ?? 0;
+    document.getElementById('ca-hint-kpi-students').textContent = hint.students ?? 0;
+    document.getElementById('ca-hint-kpi-tasks').textContent = hint.tasks ?? 0;
+    document.getElementById('ca-hint-kpi-errors').textContent = hint.errors ?? 0;
+    const hintDailyCanvas = document.getElementById('ca-hint-daily-chart');
+    if (caHintDailyChart) caHintDailyChart.destroy();
+    caHintDailyChart = new Chart(hintDailyCanvas, {
+      type: 'bar',
+      data: {
+        labels: (hint.daily || []).map(d => d.date.slice(5).replace('-', '.')),
+        datasets: [{
+          label: 'Hints',
+          data: (hint.daily || []).map(d => d.count),
+          backgroundColor: 'rgba(245, 158, 11, 0.55)',
+          hoverBackgroundColor: 'rgba(245, 158, 11, 0.8)',
+          borderRadius: 2,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, ticks: { stepSize: 1 } },
+          x: { grid: { display: false } },
+        },
+      },
+    });
+    const hintTopEl = document.getElementById('ca-hint-top-tasks');
+    if (!hint.top_tasks || !hint.top_tasks.length) {
+      hintTopEl.innerHTML = '<div class="text-center py-4 text-gray-400 text-xs">Keine Hints im gewählten Zeitraum.</div>';
+    } else {
+      const hintTotal = hint.top_tasks.reduce((s, r) => s + r.count, 0);
+      hintTopEl.innerHTML = `<table class="w-full border-collapse">
+        <tr class="bg-gray-100">${['Aufgabe', 'Hints', 'Studenten'].map(h => `<th class="text-left py-2 px-3 text-sm font-semibold">${h}</th>`).join('')}</tr>
+        ${hint.top_tasks.map(r => `<tr class="hover:bg-gray-50 border-t">
+          <td class="py-2 px-3 text-sm font-medium">${caEsc(r.title)}</td>
+          <td class="py-2 px-3 text-sm text-center">${r.count} <span class="text-gray-400 text-xs">(${hintTotal ? Math.round(r.count / hintTotal * 100) : 0}%)</span></td>
+          <td class="py-2 px-3 text-sm text-center">${r.students}</td>
+        </tr>`).join('')}
+      </table>`;
+    }
 
     // Handschrift → LaTeX
     const hw = data.handwriting || {};

@@ -83,6 +83,15 @@ async def feedback(
     return analytics.feedback_performance(days)
 
 
+@router.get("/hints")
+async def hint_usage(
+    days: int = Query(30, ge=1, le=365),
+    user: User = Depends(require_global_admin()),
+):
+    """Sokratische Hints: KPIs, tägliche Serie, Top-Aufgaben."""
+    return analytics.hint_usage(days)
+
+
 @router.get("/mcp")
 async def mcp_usage(
     days: int = Query(30, ge=1, le=365),
@@ -154,5 +163,6 @@ async def course_overview(
         "active_last7": analytics.count_active_users(7, course_id=course_id),
         "total_views": analytics.count_views(days, course_id=course_id),
         "feedback": analytics.feedback_performance(days, course_id=course_id),
+        "hints": analytics.hint_usage(days, course_id=course_id),
         "handwriting": analytics.handwriting_usage(days, course_id=course_id),
     }
