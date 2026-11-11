@@ -122,6 +122,23 @@
   width: 100%;
 }
 
+/* Reveal's Defaultregel für Fragments (reveal.css: .reveal .fragment {
+   transition: all .2s ease }) animiert damit auch die geerbte Fontsize:
+   ändert sich --slides-body-scale, läuft die Fragment-Fontsize 200 ms
+   über. fitSlideSection misst body.scrollHeight aber SYNCHRON (gleicher
+   JS-Task) → liest die Höhe mit der ALTEN Fontsize (gemessen: 365 px
+   statt 640 px bei Skala 1) → wählt zu große Skala → Überlauf, und zwar
+   nur auf Folien MIT Fragments. Auf die eigentlichen Animationseffekte
+   (Sichtbar-/Unsichtbar-Schalter + grow/shrink/zoom/fade-Classes)
+   wirken nur opacity, visibility und transform → Transition genau auf
+   diese Eigenschaften begrenzen. .custom bleibt Reveal's Kontrakt überlassen
+   (eigene Transitionen vom Autor). */
+:is(.reveal .slides, .slides-canvas) .fragment:not(.custom) {
+  transition-property: opacity, visibility, transform;
+  transition-duration: .2s;
+  transition-timing-function: ease;
+}
+
 /* ─── Auto-Fit (fitSlideSection in slides.js) ──────────────────────────
    Der Folienkörper (alles NACH der ersten Überschrift; renderSlideInto
    hüllt ihn in .aicampus-slide-body) wird per --slides-body-scale (Default
