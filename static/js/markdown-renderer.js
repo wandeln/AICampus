@@ -54,8 +54,10 @@
  *                                                            Quellenverzeichnisses — Einträge der auto-Quellen-Folie
  *                                                            der Slide-Decks (trägt id + data-refkey als
  *                                                            Zitations-Ziel); ❓ wenn der Key unbekannt ist
- * Aufgaben-Box:       @task:{id}                  → Aufgaben-Box (Student: Punkte/Medaille analog
- *                                                            Aufgabenübersicht, PROF/TUTOR: kompakt; ❓ wenn unbekannt)
+  * Aufgaben-Box:       @task:{id}                  → Aufgaben-Box (Student: Punkte/Medaille analog
+  *                                                            Aufgabenübersicht, PROF/TUTOR: kompakt; nicht freigeschaltet →
+  *                                                            gleiche Karte mit 👁 + ausgegraut, Hover „Inhalt noch nicht
+  *                                                            freigegeben“; ❓ wenn unbekannt)
  * Hinweis-Boxen:      @startbox:{typ}[Caption] {#box:label} … @endbox
  *                                                            → farbig markierte Box (merksatz/hinweis/bemerkung/
  *                                                            warnung/beispiel; unbekannte Typen = neutrale Box);
@@ -455,6 +457,44 @@ function xrefLockedText(kind, h) {
     return 'Kap.';
   }
   return kind === 'fig' ? 'Abb.' : kind === 'eq' ? 'Gl.' : kind === 'code' ? 'Code' : kind === 'tab' ? 'Tab.' : 'Abs.';
+}
+
+// @task:{id}-Karte (Student): Layout analog zur Aufgabenübersicht (Punkte,
+// Medaille, Versuche, Deadline). locked = Aufgabe existiert, ist aber für
+// diese Rolle NICHT freigeschaltet (script-refmap hiddenTasks): geschlossenes
+// Auge + ausgegrauter Titel, kein Link, Hover „Inhalt noch nicht freigegeben“.
+function _taskCardHtml(t, taskCid, locked) {
+  const pct = t.maxPoints > 0 ? t.myPoints / t.maxPoints : 0;
+  let pointColor = 'text-gray-400';
+  if (pct >= 0.8) pointColor = 'text-green-600';
+  else if (pct >= 0.5) pointColor = 'text-yellow-600';
+  else if (t.myPoints > 0) pointColor = 'text-orange-600';
+  let medalBadge = '';
+  if (pct >= 1.0) medalBadge = '<span class="badge-tier badge-platinum">💎</span>';
+  else if (pct >= 0.9) medalBadge = '<span class="badge-tier badge-gold">🥇</span>';
+  else if (pct >= 0.8) medalBadge = '<span class="badge-tier badge-silver">🥈</span>';
+  else if (pct >= 0.7) medalBadge = '<span class="badge-tier badge-bronze">🥉</span>';
+  let deadlineHtml = '';
+  if (t.deadline) {
+    const dl = new Date(t.deadline).toLocaleDateString('de-DE');
+    deadlineHtml = ` · ⏰ Deadline ${dl}`;
+  }
+  const typeBadge = { text: '📄 Text', workspace: '💻 Workspace', mc: '🎯 Multiple Choice' }[t.taskType] || '📄 Text';
+  const typeBadgeClass = { text: 'bg-gray-100 text-gray-600', workspace: 'bg-indigo-100 text-indigo-700', mc: 'bg-emerald-100 text-emerald-700' }[t.taskType] || 'bg-gray-100 text-gray-600';
+  const titleHtml = locked
+    ? `<span class="aicampus-taskbox-title-locked text-base font-semibold">${XREF_LOCKED_EYE}${escapeHtml(t.title)}</span>`
+    : `<a href="/courses/${taskCid}/tasks/${t.id}" class="aicampus-xref text-base font-semibold">${escapeHtml(t.title)}</a>`;
+  return `<div class="aicampus-taskbox${locked ? ' aicampus-taskbox-locked' : ''}"${locked ? ' title="Inhalt noch nicht freigegeben"' : ''}>` +
+    `<span class="aicampus-taskbox-icon" aria-hidden="true">📝</span>` +
+    `<div class="flex-1 min-w-0">` +
+    titleHtml +
+    `<div class="text-sm text-gray-500 mt-1">` +
+    `${t.attemptsUsed}${t.maxAttempts != null ? '/' + t.maxAttempts : ''} Versuche${deadlineHtml}&nbsp;<span class="px-2 py-0.5 rounded text-xs font-medium ${typeBadgeClass}">${typeBadge}</span>${medalBadge ? '&nbsp;&nbsp;&nbsp;&nbsp;' + medalBadge : ''}` +
+    `</div></div>` +
+    `<div class="text-right flex-shrink-0">` +
+    `<div class="text-lg font-bold ${pointColor}">${t.myPoints}/${t.maxPoints}</div>` +
+    `<div class="text-xs text-gray-400">Punkte</div>` +
+    `</div></div>`;
 }
 
 // Box-Events für das Paaren/Nesten (Schritt 1d): gültiges @startbox:{typ}
@@ -2566,14 +2606,16 @@ async function renderMarkdown(text, targetElement, options = {}) {
   //     Daten via refmap.tasks: Student (mode "reading") → nur freigeschaltete
   //     Aufgaben inkl. eigener Punkte/Medaille (analog Aufgabenübersicht);
   //     PROF/TUTOR/Admin (mode "edit") → alle Aufgaben, kompakte Box mit Link.
+  //     Nicht freigeschaltete Aufgaben (refmap.hiddenTasks, nur Student):
+  //     dieselbe Karte, aber geschlossen (Auge + ausgegrauter Titel, kein
+  //     Link, Hover „Inhalt noch nicht freigegeben“) — statt ❓.
   const refTasks = (refMap && refMap.tasks) || {};
+  const hiddenRefTasks = (refMap && refMap.hiddenTasks) || {};
   const taskCid = (refMap && refMap.courseId) || '';
   taskRefs.forEach((id, idx) => {
     const t = refTasks[id];
     let boxHtml;
-    if (!t) {
-      boxHtml = `<span class="aicampus-xref-broken" title="Aufgabe unbekannt — existiert nicht (mehr) oder ist nicht freigeschaltet">❓ Aufgabe ${escapeHtml(id)}</span>`;
-    } else if (refMap && refMap.mode === 'edit') {
+    if (t && refMap && refMap.mode === 'edit') {
       // PROF/TUTOR/Admin: kompakte Box mit Link zur Aufgabenseite
       boxHtml =
         `<div class="aicampus-taskbox">` +
@@ -2582,37 +2624,14 @@ async function renderMarkdown(text, targetElement, options = {}) {
         `<a href="/courses/${taskCid}/tasks/${t.id}" class="aicampus-xref font-semibold">${escapeHtml(t.title)}</a>` +
         `<div class="text-sm text-gray-500 mt-0.5">${t.maxPoints} Punkte · ${( { text: '📄 Text-Aufgabe', workspace: '💻 Workspace-Aufgabe', mc: '🎯 Multiple-Choice' } ) [t.taskType] || '📄 Text-Aufgabe'}</div>` +
         `</div></div>`;
+    } else if (t) {
+      // Student: freigeschaltete Aufgabe (Karte s. _taskCardHtml)
+      boxHtml = _taskCardHtml(t, taskCid, false);
+    } else if (hiddenRefTasks[id] !== undefined) {
+      // Student: Aufgabe existiert, ist aber noch nicht freigeschaltet
+      boxHtml = _taskCardHtml(hiddenRefTasks[id], taskCid, true);
     } else {
-      // Student: Karte analog zur Aufgabenübersicht (Punkte, Medaille, Versuche, Deadline)
-      const pct = t.maxPoints > 0 ? t.myPoints / t.maxPoints : 0;
-      let pointColor = 'text-gray-400';
-      if (pct >= 0.8) pointColor = 'text-green-600';
-      else if (pct >= 0.5) pointColor = 'text-yellow-600';
-      else if (t.myPoints > 0) pointColor = 'text-orange-600';
-      let medalBadge = '';
-      if (pct >= 1.0) medalBadge = '<span class="badge-tier badge-platinum">💎</span>';
-      else if (pct >= 0.9) medalBadge = '<span class="badge-tier badge-gold">🥇</span>';
-      else if (pct >= 0.8) medalBadge = '<span class="badge-tier badge-silver">🥈</span>';
-      else if (pct >= 0.7) medalBadge = '<span class="badge-tier badge-bronze">🥉</span>';
-      let deadlineHtml = '';
-      if (t.deadline) {
-        const dl = new Date(t.deadline).toLocaleDateString('de-DE');
-        deadlineHtml = ` · ⏰ Deadline ${dl}`;
-      }
-      const typeBadge = { text: '📄 Text', workspace: '💻 Workspace', mc: '🎯 Multiple Choice' }[t.taskType] || '📄 Text';
-      const typeBadgeClass = { text: 'bg-gray-100 text-gray-600', workspace: 'bg-indigo-100 text-indigo-700', mc: 'bg-emerald-100 text-emerald-700' }[t.taskType] || 'bg-gray-100 text-gray-600';
-      boxHtml =
-        `<div class="aicampus-taskbox">` +
-        `<span class="aicampus-taskbox-icon" aria-hidden="true">📝</span>` +
-        `<div class="flex-1 min-w-0">` +
-        `<a href="/courses/${taskCid}/tasks/${t.id}" class="aicampus-xref text-base font-semibold">${escapeHtml(t.title)}</a>` +
-        `<div class="text-sm text-gray-500 mt-1">` +
-        `${t.attemptsUsed}${t.maxAttempts != null ? '/' + t.maxAttempts : ''} Versuche${deadlineHtml}&nbsp;<span class="px-2 py-0.5 rounded text-xs font-medium ${typeBadgeClass}">${typeBadge}</span>${medalBadge ? '&nbsp;&nbsp;&nbsp;&nbsp;' + medalBadge : ''}` +
-        `</div></div>` +
-        `<div class="text-right flex-shrink-0">` +
-        `<div class="text-lg font-bold ${pointColor}">${t.myPoints}/${t.maxPoints}</div>` +
-        `<div class="text-xs text-gray-400">Punkte</div>` +
-        `</div></div>`;
+      boxHtml = `<span class="aicampus-xref-broken" title="Aufgabe unbekannt — existiert nicht (mehr) oder ist nicht freigeschaltet">❓ Aufgabe ${escapeHtml(id)}</span>`;
     }
     // $ in der Ersatz-String escapen (String.replace-Backrefs), wie bei Figuren/Latex
     html = html.replace(`%%TASKREF_${idx}%%`, boxHtml.replace(/\$/g, '$$$$$$$$'));

@@ -675,10 +675,15 @@ async def script_refmap(
         tables:   [{num, caption, label, sectionId}]  # Tabellenverzeichnis fürs TOC
                   # ({#tab:label} in der Zeile direkt unter der Pipe-Tabelle)
         tasks:    {id: {id, title, taskType, maxPoints, myPoints, attemptsUsed, maxAttempts, deadline}}
-                  # für @task:{id}-Referenzen. Student: nur freigeschaltete Aufgaben +
-                  # eigene Punkte (analog Aufgabenübersicht); PROF/TUTOR/Admin: alle.
+                   # für @task:{id}-Referenzen. Student: nur freigeschaltete Aufgaben +
+                   # eigene Punkte (analog Aufgabenübersicht); PROF/TUTOR/Admin: alle.
+        hiddenTasks: {id: {wie tasks-Value}}  # nur für Studierende (sonst leer):
+                   # existierende, aber NICHT freigeschaltete Aufgaben. Das Frontend
+                   # rendert @task:{id}-Referenzen darauf als dieselbe Karte, aber
+                   # geschlossen: geschlossenes Auge + ausgegrauter Titel (kein Link),
+                   # Hover „Inhalt noch nicht freigegeben“ — statt als ❓-Fehler.
         references: {key: {key, num, authors, year, title, venue, detail, url, entry}}
-                  # für @cite:{key} / @citet:{key} / @citep:{key}. num = kursweite
+                   # für @cite:{key} / @citet:{key} / @citep:{key}. num = kursweite
                    # stabile Zitations-Nummer (display_order-Reihenfolge) — alle Rollen.
         hiddenLabels: {"<kind>:<label>": {chapter?, type?}}  # nur für Studierende (sonst
                    # leer): Labels, die existieren aber in NICHT freigeschalteten
@@ -750,11 +755,16 @@ async def script_refmap(
     }
 
     # Aufgaben für @task:{id}-Referenzen (Datenquelle der Aufgaben-Box).
+    # Student: freigeschaltete → tasks_map, nicht freigeschaltete →
+    # hidden_tasks (gleiches Format; Frontend rendert sie als geschlossene
+    # Karte: Auge + ausgegraut, „Inhalt noch nicht freigegeben“).
     tasks_map: dict[str, dict] = {}
-    tq = select(Task).where(Task.course_id == course_id)
-    if not is_tutor:
-        tq = tq.where(Task.is_visible == True)  # noqa: E712
-    for task in session.exec(tq.order_by(Task.display_order.asc())).all():  # type: ignore[attr-defined]
+    hidden_tasks: dict[str, dict] = {}
+    for task in session.exec(
+        select(Task)
+        .where(Task.course_id == course_id)
+        .order_by(Task.display_order.asc())  # type: ignore[attr-defined]
+    ).all():
         my_points = 0.0
         attempts_used = 0
         if not is_tutor and task.id is not None:
@@ -778,7 +788,7 @@ async def script_refmap(
                     else:
                         llm_points = max(llm_points, fb.points_earned)
                 my_points = human_points if override_exists else llm_points
-        tasks_map[str(task.id)] = {
+        entry = {
             "id": task.id,
             "title": task.title,
             "taskType": task.task_type.value,
@@ -788,6 +798,10 @@ async def script_refmap(
             "maxAttempts": task.max_attempts,
             "deadline": task.deadline,
         }
+        if is_tutor or task.is_visible:
+            tasks_map[str(task.id)] = entry
+        else:
+            hidden_tasks[str(task.id)] = entry
 
     # Quellen für @cite:/@citet:/@citep: (alle Rollen; Nummer = display_order)
     references: dict[str, dict] = {}
@@ -829,6 +843,7 @@ async def script_refmap(
         "codes": codes,
         "tables": tables,
         "tasks": tasks_map,
+        "hiddenTasks": hidden_tasks,
         "references": references,
     }
 

@@ -617,6 +617,19 @@
   margin-left: 0.2em;
 }
 
+/* @task:-Karte im Lock-Zustand (nicht freigeschaltet): Augen-Icon VOR dem
+   (ausgegrauten, nicht klickbaren) Titel; Abstand von links nach rechts. */
+.aicampus-taskbox-locked .aicampus-taskbox-title-locked {
+  color: #9ca3af;
+  display: inline-flex;
+  align-items: center;
+}
+
+.aicampus-taskbox-locked .aicampus-xref-locked-eye {
+  margin-left: 0;
+  margin-right: 0.4em;
+}
+
 /* Aufgaben-Boxen: @task:{id}-Referenzen in Skript & Aufgabenstellung */
 .aicampus-taskbox {
   display: flex;
