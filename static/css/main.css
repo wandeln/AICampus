@@ -601,6 +601,22 @@
   color: #dc2626;
 }
 
+/* Querverweis auf ein Label, das in einem NICHT freigeschalteten Kapitel
+   liegt (Studierende): kein Link, Präfix + geschlossenes Auge (inline-SVG
+   aus markdown-renderer.js), Hover-Title „Inhalt noch nicht freigegeben“. */
+.aicampus-xref-locked {
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.aicampus-xref-locked-eye {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  vertical-align: -0.12em;
+  margin-left: 0.2em;
+}
+
 /* Aufgaben-Boxen: @task:{id}-Referenzen in Skript & Aufgabenstellung */
 .aicampus-taskbox {
   display: flex;

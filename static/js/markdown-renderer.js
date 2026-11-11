@@ -31,7 +31,9 @@
   * Querverweise:       @fig:label / @eq:label / @tab:label / @sec:label
   *                                                            → klickbares "Abb. N" / "Abb. N a)" (Subfigure-Inner) /
   *                                                            "Gl. N" / "Tab. N" / "Abs. N.M"
-  *                                                            (In-Page- oder Kapitel-übergreifender Link, ❓ wenn unbekannt);
+   *                                                            (In-Page- oder Kapitel-übergreifender Link; Label aus
+   *                                                            nicht freigeschaltetem Kapitel → „Kap./Abb./… + 👁“ ohne
+   *                                                            Link, Hover „Inhalt noch nicht freigegeben“; ❓ wenn unbekannt);
   *                                                            auch in Figuren-Captions (Alt-Text) erlaubt (renderCaptionRef)
  *                    @kap:label = Legacy-Alias für @sec:label. Kapitel-Label = {#sec:label}
  *                    als EIGENE ZEILE (erste nicht-leere Zeile) am Kapitelanfang → "Kap. N"
@@ -433,9 +435,27 @@ const CALLOUT_TYPES = {
   lemma: { icon: '🧩', title: 'Lemma' },
   proposition: { icon: '📃', title: 'Proposition' },
   korollar: { icon: '🌟', title: 'Korollar' },
-  beweis: { icon: '🧮', title: 'Beweis' },
-  frage: { icon: '❔', title: 'Frage' },
+   beweis: { icon: '🧮', title: 'Beweis' },
+   frage: { icon: '❔', title: 'Frage' },
 };
+
+// Geschlossenes Auge (wie sqEyeIcon in script.html): Lock-Marker für
+// Querverweise auf Labels, die existieren aber in einem Kapitel liegen, das
+// für die aktuelle Rolle noch nicht freigeschaltet ist (script-refmap
+// hiddenLabels) — „Kap. 👁“/„Abb. 👁“, ohne Link, title beim Hovern.
+const XREF_LOCKED_EYE = '<svg xmlns="http://www.w3.org/2000/svg" class="aicampus-xref-locked-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
+
+// Lock-Text für hiddenLabels (s. XREF_LOCKED_EYE): Box-Typ-Titel (CALLOUT_
+// TYPES), Kapitel-Label → „Kap.“, sonst der Kind-Präfix-Text.
+function xrefLockedText(kind, h) {
+  if (kind === 'box') {
+    return h && h.type && CALLOUT_TYPES[h.type] ? CALLOUT_TYPES[h.type].title : 'Box';
+  }
+  if (kind === 'sec' && h && h.chapter) {
+    return 'Kap.';
+  }
+  return kind === 'fig' ? 'Abb.' : kind === 'eq' ? 'Gl.' : kind === 'code' ? 'Code' : kind === 'tab' ? 'Tab.' : 'Abs.';
+}
 
 // Box-Events für das Paaren/Nesten (Schritt 1d): gültiges @startbox:{typ}
 // (Typ direkt nach dem Doppelpunkt) ÖFFNET, @endbox SCHLIESST (nur am
@@ -2196,7 +2216,15 @@ async function renderMarkdown(text, targetElement, options = {}) {
         ? `<a href="${href}" class="aicampus-xref"${tipAttr}>${kindText} ${num}${subSuffix}</a>`
         : `<span class="aicampus-xref"${tipAttr}>${kindText} ${num}${subSuffix}</span>`;
     } else {
-      refHtml = `<span class="aicampus-xref-broken" title="Label unbekannt — zugehöriges Objekt fehlt">❓ ${kindRaw}:${label}</span>`;
+      // Label existiert, liegt aber in einem für diese Rolle NICHT
+      // freigeschalteten Kapitel (hiddenLabels): kein ❓-Fehler, sondern
+      // Lock-Marker ohne Link („Kap./Abb./… + geschlossenes Auge“,
+      // Hover: „Inhalt noch nicht freigegeben“).
+      const hl = (refMap && refMap.hiddenLabels) || {};
+      const h = hl[kind + ':' + label];
+      refHtml = h !== undefined
+        ? `<span class="aicampus-xref-locked" title="Inhalt noch nicht freigegeben">${xrefLockedText(kind, h)} ${XREF_LOCKED_EYE}</span>`
+        : `<span class="aicampus-xref-broken" title="Label unbekannt — zugehöriges Objekt fehlt">❓ ${kindRaw}:${label}</span>`;
     }
     return refHtml;
   };
@@ -2466,10 +2494,12 @@ async function renderMarkdown(text, targetElement, options = {}) {
   //                  NICHT in der Refmap (z. B. ungespeichert im Editor) →
   //                  lokale S-Fallback-Nummer, Link auf die aktuelle Folie
   //                  (In-Page-Anker ginge nicht: Reveal liest sie als
-  //                  Folien-Übergang — daher auch 1. deaktiviert),
-  //               5) unbekannt → ❓
-  //     @box:-Referenzen zeigen den Box-Typ-Titel an (z. B. „Satz N“ —
-  //     CALLOUT_TYPES; Typ-Quelle: Skript-Ref-Map → Slide-Ref-Map → lokal).
+   //                  Folien-Übergang — daher auch 1. deaktiviert),
+   //               5) nicht freigeschaltet (hiddenLabels) → Lock-Marker ohne
+   //                  Link („Kap./Abb./… + 👁“, Hover „Inhalt noch nicht
+   //                  freigegeben“), sonst unbekannt → ❓
+   //     @box:-Referenzen zeigen den Box-Typ-Titel an (z. B. „Satz N“ —
+   //     CALLOUT_TYPES; Typ-Quelle: Skript-Ref-Map → Slide-Ref-Map → lokal).
   xrefs.forEach((x, idx) => {
     const kind = x.kind === 'kap' ? 'sec' : x.kind;
     if (kind === 'bibentry') {
@@ -3375,12 +3405,18 @@ function renderCaptionRef(text, ctx) {
 // Xref als TEXT (ohne Link) gegen die globale Ref-Map auflösen — für
 // TOC-zeilen, wo der Caption-Text selbst in einem <a> steht und ein Xref-
 // Link eine verschachtelte <a> wäre. Zeigt exakt denselben Text wie
-// resolveXrefHtml (Gl. N / Abb. N a) / Kap. N / Box-Typ N / ❓), nur ohne
-// Ankertag. labels = script-refmap.labels (kind-prefixiert, s. dort).
-function xrefTextHtml(kindRaw, label, labels) {
+// resolveXrefHtml (Gl. N / Abb. N a) / Kap. N / Box-Typ N / Lock-Marker /
+// ❓), nur ohne Ankertag. labels = script-refmap.labels (kind-prefixiert,
+// s. dort); hiddenLabels = script-refmap.hiddenLabels (s. dort) → Lock-
+// Marker statt ❓ bei nicht freigeschalteten Kapiteln.
+function xrefTextHtml(kindRaw, label, labels, hiddenLabels) {
   const kind = kindRaw === 'kap' ? 'sec' : kindRaw;
   const g = (labels || {})[kind + ':' + label];
   if (!g || g.kind !== kind) {
+    const h = (hiddenLabels || {})[kind + ':' + label];
+    if (h !== undefined) {
+      return `<span class="aicampus-xref-locked" title="Inhalt noch nicht freigegeben">${escapeHtml(xrefLockedText(kind, h))} ${XREF_LOCKED_EYE}</span>`;
+    }
     return `<span class="aicampus-xref-broken" title="Label unbekannt — zugehöriges Objekt fehlt">❓ ${escapeHtml(kindRaw + ':' + label)}</span>`;
   }
   let text;

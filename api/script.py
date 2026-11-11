@@ -679,7 +679,13 @@ async def script_refmap(
                   # eigene Punkte (analog Aufgabenübersicht); PROF/TUTOR/Admin: alle.
         references: {key: {key, num, authors, year, title, venue, detail, url, entry}}
                   # für @cite:{key} / @citet:{key} / @citep:{key}. num = kursweite
-                  # stabile Zitations-Nummer (display_order-Reihenfolge) — alle Rollen.
+                   # stabile Zitations-Nummer (display_order-Reihenfolge) — alle Rollen.
+        hiddenLabels: {"<kind>:<label>": {chapter?, type?}}  # nur für Studierende (sonst
+                   # leer): Labels, die existieren aber in NICHT freigeschalteten
+                   # Kapiteln liegen (ohne Nummerierung — die „veröffentlichte“
+                   # Zählung bleibt unangetastet). Das Frontend rendert @kind:label-
+                   # Referenzen darauf als „Kap./Abb./… + geschlossenes Auge“
+                   # (Hover: „Inhalt noch nicht freigegeben“) statt als ❓-Fehler.
     """
     _check_member(user, session, course_id)
     # Live-berechneter abgeleiteter Wert → niemals cachen (Browser/Proxy)
@@ -719,6 +725,29 @@ async def script_refmap(
             "maxTab": c["maxTab"],
             "sections": c["sections"],
         }
+
+    # Labels in NICHT freigeschalteten Kapiteln (nur Studierende): Key-Liste
+    # plus Anzeige-Attribute (Kapitel-Flag, Box-Typ) — KEINE Nummerierung
+    # (würde die „veröffentlichte“ Zählung verfälschen). Querverweise darauf
+    # rendert das Frontend als „Kap./Abb./… + geschlossenes Auge“ statt ❓.
+    hidden_labels: dict[str, dict[str, object]] = {}
+    if not is_tutor:
+        hidden_counters = {"fig": 0, "eq": 0, "code": 0, "box": 0, "tab": 0}
+        hidden_sections = session.exec(
+            select(ScriptSection)
+            .where(ScriptSection.course_id == course_id)
+            .where(ScriptSection.is_visible == False)  # noqa: E712
+            .order_by(ScriptSection.display_order.asc())  # type: ignore[attr-defined]
+        ).all()
+        for hs in hidden_sections:
+            _process_refmap_chapter(hs, 0, hidden_counters, hidden_labels)
+    hidden = {
+        k: {
+            **({"chapter": True} if e.get("chapter") else {}),
+            **({"type": e["type"]} if e.get("type") else {}),
+        }
+        for k, e in hidden_labels.items()
+    }
 
     # Aufgaben für @task:{id}-Referenzen (Datenquelle der Aufgaben-Box).
     tasks_map: dict[str, dict] = {}
@@ -795,6 +824,7 @@ async def script_refmap(
         "chapterOrder": [str(s.id) for s in sections],
         "chapters": chapters,
         "labels": labels,
+        "hiddenLabels": hidden,
         "figures": figures,
         "codes": codes,
         "tables": tables,

@@ -991,11 +991,11 @@
     // (die Kapitel-Seite registriert ihre eigenen Zitate selbst). Xrefs
     // (@eq:…/@fig:…) als TEXT ohne Link (die Zeile ist selbst ein <a> —
     // verschachtelte Anker sind ungültig): xrefTextHtml zeigt dieselbe
-    // Anzeige wie im Dokument (Gl. N / Abb. N / Kap. N / ❓).
+    // Anzeige wie im Dokument (Gl. N / Abb. N / Kap. N / Lock-Marker / ❓).
     const capCtx = {
       refMap, citedRefs: null,
       hrefFor: (label) => '#ref-' + label,
-      xrefFor: (kind, label) => xrefTextHtml(kind, label, refMap.labels),
+      xrefFor: (kind, label) => xrefTextHtml(kind, label, refMap.labels, refMap.hiddenLabels),
     };
     // Link mit Math/Zitationen/Xrefs im Titel: Präfix (Nummer) als Text,
     // Titel via renderCaptionRef (LaTeX $…$ → gerenderte Formel + @cite/… →
