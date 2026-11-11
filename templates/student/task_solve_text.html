@@ -50,17 +50,27 @@
 
             <!-- Photo mode -->
             <div id="latex-photo-mode">
-              <div class="border-2 border-dashed border-indigo-300 rounded-lg p-4 text-center bg-indigo-50/50">
+              <div id="latex-drop-wrapper" class="border-2 border-dashed border-indigo-300 rounded-lg p-4 text-center bg-indigo-50/50">
                 <div id="latex-drop-zone" class="cursor-pointer" onclick="document.getElementById('latex-file-input').click()">
                   <div class="text-2xl mb-1">📸</div>
-                  <p class="text-xs text-indigo-600 font-medium">Klicke oder ziehe ein Foto herein</p>
-                  <p class="text-xs text-gray-500">PNG, JPEG, WebP — max. 20 MB</p>
+                  <p class="text-xs text-indigo-600 font-medium">Klicke oder ziehe Foto(s) herein</p>
+                  <p class="text-xs text-gray-500">PNG, JPEG, WebP — max. 20 MB je Foto</p>
                 </div>
-                <input type="file" id="latex-file-input" accept="image/png,image/jpeg,image/webp" class="hidden" />
+                <input type="file" id="latex-file-input" accept="image/png,image/jpeg,image/webp" multiple class="hidden" />
                 <input type="file" id="latex-camera-input" accept="image/*" capture="environment" class="hidden" />
                 <button id="latex-camera-btn" type="button" class="mt-3 w-full flex items-center justify-center gap-2 text-xs bg-indigo-600 text-white py-2 rounded-lg hover:bg-indigo-700 transition">
                   <span>📷</span><span>Foto mit Kamera machen</span>
                 </button>
+              </div>
+              <div id="latex-queue" class="hidden mt-3">
+                <p class="text-xs font-medium text-indigo-700 mb-2">Einfügereihenfolge – zum Umsortieren am Griff ziehen:</p>
+                <div id="latex-queue-list" class="space-y-1.5"></div>
+                <div class="flex items-center gap-2 mt-3">
+                  <button id="latex-queue-convert-btn" type="button" class="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-lg hover:bg-indigo-700 transition">▶ Alle konvertieren</button>
+                  <button id="latex-queue-add-btn" type="button" class="text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1.5">＋ Weitere Fotos</button>
+                  <button id="latex-queue-abort-btn" type="button" class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5">Abbrechen</button>
+                </div>
+                <div id="latex-queue-status" class="text-xs mt-2"></div>
               </div>
             </div>
 
@@ -165,6 +175,11 @@
         </div>
 {% endblock %}
 
+{% block extra_scripts %}
+  {{ super() }}
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js"></script>
+{% endblock %}
+
 {% block solve_scripts %}
   // ─── Reset auf Vorlage ─────────────────────────────────────
   const TEXT_TEMPLATE = {{ (task.text_template or '') | tojson }};
@@ -250,6 +265,7 @@
       latexCanvasProgress.classList.add("hidden");
       latexCanvasOverlay.classList.add("hidden");
       latexCanvasStatus.innerHTML = "";
+      syncPhotoModeUI();
       activateToggle(togglePhoto, true);
       activateToggle(toggleDraw, false);
     }
@@ -540,6 +556,13 @@
       latexProgress.classList.add("hidden");
       fileInput.value = "";
       statusEl.innerHTML = "";
+      queueProcessing = false;
+      queueCancelled = true;
+      queue = [];
+      if (queueEl) queueEl.classList.add("hidden");
+      if (queueListEl) queueListEl.innerHTML = "";
+      if (queueStatusEl) queueStatusEl.innerHTML = "";
+      if (dropWrapper) dropWrapper.classList.remove("hidden");
       isErasing = false;
       if (eraserBtn) {
         eraserBtn.classList.remove("bg-indigo-600", "text-white");
@@ -582,14 +605,13 @@
       dropZone.addEventListener("drop", (e) => {
         e.preventDefault();
         dropZone.parentElement.classList.remove("border-indigo-500", "bg-indigo-100");
-        const files = e.dataTransfer.files;
-        if (files.length > 0) handleFile(files[0]);
+        handleFiles(e.dataTransfer.files);
       });
     }
 
     // File input change
     fileInput.addEventListener("change", () => {
-      if (fileInput.files.length > 0) handleFile(fileInput.files[0]);
+      handleFiles(fileInput.files);
     });
 
     function switchToPhotoMode() {
@@ -639,6 +661,225 @@
       reader.readAsDataURL(file);
     }
 
+    const queueEl = document.getElementById("latex-queue");
+    const queueListEl = document.getElementById("latex-queue-list");
+    const queueConvertBtn = document.getElementById("latex-queue-convert-btn");
+    const queueAddBtn = document.getElementById("latex-queue-add-btn");
+    const queueAbortBtn = document.getElementById("latex-queue-abort-btn");
+    const queueStatusEl = document.getElementById("latex-queue-status");
+    const dropWrapper = document.getElementById("latex-drop-wrapper");
+    let queue = [];
+    let queueProcessing = false;
+    let queueCancelled = false;
+    let queueSortable = null;
+
+    function esc(s) {
+      const d = document.createElement("div");
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function readAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
+        r.readAsDataURL(file);
+      });
+    }
+
+    async function handleFiles(fileList) {
+      const valid = [];
+      const rejected = [];
+      for (const file of Array.from(fileList || [])) {
+        if (!imageMime(file)) { rejected.push(file.name + " (Format)"); continue; }
+        if (file.size > MAX_IMAGE_BYTES) { rejected.push(file.name + " (zu groß)"); continue; }
+        valid.push(file);
+      }
+      if (rejected.length) showToast("Nicht uebernommen: " + rejected.join(", "), "error");
+      if (valid.length === 0) return;
+      if (queueProcessing) return;
+
+      const queueActive = queue.length > 0;
+      if (valid.length === 1 && !queueActive) { handleFile(valid[0]); return; }
+
+      queueCancelled = false;
+      const newItems = valid.map((file) => ({ name: file.name, size: file.size, mime: imageMime(file), file, dataUrl: null, status: "reading", detail: "" }));
+      queue.push(...newItems);
+      renderQueue();
+      syncPhotoModeUI();
+      for (const item of newItems) {
+        if (queueCancelled) break;
+        await readQueueItem(item);
+      }
+      // Value erst NACH dem Einlesen leeren: einige Browser (v. a. iOS)
+      // geben die gewaehlten Dateien nach einem Input-Reset nicht mehr frei.
+      fileInput.value = "";
+      const unreadCount = newItems.filter((q) => !q.dataUrl).length;
+      if (unreadCount) showToast(unreadCount + " Foto(s) konnten nicht eingelesen werden – Details in der Liste.", "error");
+      if (queue.length === 0) { syncPhotoModeUI(); return; }
+      renderQueue();
+    }
+
+    function syncPhotoModeUI() {
+      if (!queueEl || !dropWrapper) return;
+      const has = queue.length > 0;
+      dropWrapper.classList.toggle("hidden", has);
+      queueEl.classList.toggle("hidden", !has);
+    }
+
+    function queueItemStatus(item) {
+      if (item.status === "reading") return '<span class="text-indigo-600"><span class="animate-spin inline-block">⏳</span> Wird eingelesen…' + (item.detail ? " " + item.detail : "") + "</span>";
+      if (item.status === "working") return '<span class="text-indigo-600"><span class="animate-spin inline-block">⏳</span> LLM erkennt Formel… ' + item.detail + "</span>";
+      if (item.status === "done") return '<span class="text-green-600">✅ eingefügt (' + item.detail + " ms)</span>";
+      if (item.status === "error") return '<span class="text-red-600">❌ ' + esc(item.detail) + "</span>";
+      return '<span class="text-gray-400">bereit</span>';
+    }
+
+    function renderQueue() {
+      queueListEl.innerHTML = "";
+      queue.forEach((item, i) => {
+        const row = document.createElement("div");
+        row.dataset.idx = i;
+        row.className = "flex items-center gap-2 p-1.5 border rounded-lg select-none " +
+          (item.status === "working" ? "border-indigo-400 bg-indigo-50" : "border-gray-200 bg-white");
+        row.innerHTML =
+          '<div class="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 transition select-none p-1 -m-1" title="Ziehen zur Reihenfolge ändern">' +
+            '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">' +
+            '<circle cx="9" cy="5" r="1.5"></circle><circle cx="15" cy="5" r="1.5"></circle>' +
+            '<circle cx="9" cy="12" r="1.5"></circle><circle cx="15" cy="12" r="1.5"></circle>' +
+            '<circle cx="9" cy="19" r="1.5"></circle><circle cx="15" cy="19" r="1.5"></circle></svg>' +
+          "</div>" +
+          '<span class="text-xs font-mono text-gray-500 w-5 text-center flex-shrink-0">' + (i + 1) + "</span>" +
+          (item.dataUrl
+            ? '<img src="' + item.dataUrl + '" alt="" draggable="false" class="h-10 w-10 object-cover rounded border border-gray-200 flex-shrink-0">'
+            : '<div class="h-10 w-10 flex items-center justify-center rounded border border-gray-200 bg-gray-50 flex-shrink-0 text-gray-400">📄</div>') +
+          '<div class="flex-1 min-w-0">' +
+            '<p class="text-xs text-gray-700 truncate">' + esc(item.name) + " (" + (item.size / 1024 / 1024).toFixed(1) + " MB)</p>" +
+            '<p class="queue-status text-xs">' + queueItemStatus(item) + "</p>" +
+          "</div>" +
+          (queueProcessing ? "" :
+            '<button type="button" class="queue-remove text-gray-400 hover:text-red-500 text-sm px-1 flex-shrink-0" title="Entfernen">✕</button>');
+        if (!queueProcessing) {
+          row.querySelector(".queue-remove").addEventListener("click", () => {
+            queue.splice(i, 1);
+            queueStatusEl.innerHTML = "";
+            if (queue.length === 0) { syncPhotoModeUI(); return; }
+            renderQueue();
+          });
+        }
+        queueListEl.appendChild(row);
+      });
+      const convertible = queue.filter((q) => q.dataUrl).length;
+      queueConvertBtn.textContent = "▶ Alle konvertieren (" + convertible + ")";
+      queueConvertBtn.disabled = convertible === 0;
+      queueConvertBtn.classList.toggle("opacity-50", convertible === 0);
+      queueAddBtn.classList.toggle("hidden", queueProcessing);
+      ensureQueueSortable();
+      if (queueSortable) queueSortable.option("disabled", queueProcessing);
+    }
+
+    // Erstes Lesen kurz verzögert: Android-Chrome braucht nach schneller
+    // Multi-Auswahl noch einen Moment, bis die Dateien lesbar sind.
+    async function readQueueItem(item) {
+      item.status = "reading";
+      renderQueue();
+      try {
+        item.dataUrl = await readAsDataUrl(item.file);
+        item.status = "pending";
+      } catch (err) {
+        console.error("latex-upload: FileReader-Fehler", item.name, err && err.name, err);
+        item.status = "error";
+        item.detail = "Einlesen fehlgeschlagen (" + ((err && err.name) || "Unbekannter Fehler") + ") – entfernen und das Foto erneut auswählen";
+      }
+      renderQueue();
+    }
+
+    function ensureQueueSortable() {
+      if (queueSortable || !window.Sortable) return;
+      queueSortable = Sortable.create(queueListEl, {
+        handle: ".cursor-grab",
+        animation: 150,
+        ghostClass: "bg-blue-50",
+        chosenClass: "shadow-lg",
+        dragClass: "shadow-xl",
+        onEnd: () => {
+          const order = Array.from(queueListEl.children).map((c) => parseInt(c.dataset.idx, 10));
+          queue = order.map((idx) => queue[idx]);
+          renderQueue();
+        },
+      });
+    }
+
+    queueConvertBtn.addEventListener("click", () => {
+      if (queueProcessing || queue.length === 0) return;
+      queueProcessing = true;
+      queueCancelled = false;
+      queueConvertBtn.classList.add("hidden");
+      queueAddBtn.classList.add("hidden");
+      queueAbortBtn.classList.add("hidden");
+      renderQueue();
+      processQueue();
+    });
+
+    queueAddBtn.addEventListener("click", () => {
+      if (queueProcessing) return;
+      fileInput.click();
+    });
+
+    queueAbortBtn.addEventListener("click", () => {
+      if (queueProcessing) return;
+      queue = [];
+      queueStatusEl.innerHTML = "";
+      syncPhotoModeUI();
+    });
+
+    async function processQueue() {
+      let ok = 0, failed = 0;
+      for (let i = 0; i < queue.length; i++) {
+        if (queueCancelled) return;
+        const item = queue[i];
+        if (!item.dataUrl) { failed++; renderQueue(); continue; }
+        item.status = "working";
+        item.detail = "0s";
+        renderQueue();
+        const t0 = Date.now();
+        const tick = setInterval(() => {
+          item.detail = Math.floor((Date.now() - t0) / 1000) + "s";
+          const st = queueListEl.querySelector('[data-idx="' + i + '"] .queue-status');
+          if (st) st.innerHTML = queueItemStatus(item);
+        }, 1000);
+        try {
+          const data = await postLatexFromImage(item.dataUrl.split(",")[1], item.mime);
+          if (data.latex && data.latex.trim()) {
+            item.status = "done";
+            item.detail = data.latency_ms || 0;
+            insertLatexIntoSolution(data.latex, true, "LaTeX (" + (i + 1) + "/" + queue.length + ") eingefügt");
+            ok++;
+          } else {
+            item.status = "error";
+            item.detail = "Keine Formel erkannt";
+            failed++;
+          }
+        } catch (err) {
+          item.status = "error";
+          item.detail = err.message || "Konvertierung fehlgeschlagen";
+          failed++;
+        }
+        clearInterval(tick);
+        renderQueue();
+        if (!queueCancelled) {
+          queueStatusEl.innerHTML = '<span class="text-indigo-600">Konvertiere ' + (i + 1) + " von " + queue.length + "…</span>";
+        }
+      }
+      if (queueCancelled) return;
+      queueStatusEl.innerHTML = failed === 0
+        ? '<span class="text-green-600">✅ Alle ' + ok + " Fotos konvertiert</span>"
+        : '<span class="text-amber-600">⚠️ ' + ok + " von " + (ok + failed) + " konvertiert, " + failed + " fehlgeschlagen</span>";
+      renderQueue();
+      setTimeout(() => closeUpload(), 2500);
+    }
+
     function convertToLatex(dataUrl, mimeType) {
       // Hide status text, show progress bar
       statusEl.innerHTML = "";
@@ -656,7 +897,25 @@
       // Strip data: prefix for the API
       const base64Data = dataUrl.split(",")[1];
 
-      fetch("/api/student/latex-from-image", {
+      postLatexFromImage(base64Data, mimeType)
+        .then((data) => {
+          clearInterval(timerInterval);
+          latexProgressBar.style.width = "100%";
+
+          latexProgress.classList.add("hidden");
+          insertLatexIntoSolution(data.latex);
+          statusEl.innerHTML = '<span class="text-green-600">✅ Formel eingefügt (' + (data.latency_ms || 0) + 'ms)</span>';
+        })
+        .catch((err) => {
+          clearInterval(timerInterval);
+          latexProgress.classList.add("hidden");
+
+          statusEl.innerHTML = '<span class="text-red-600">❌ ' + err.message + '</span>';
+        });
+    }
+
+    function postLatexFromImage(base64Data, mimeType) {
+      return fetch("/api/student/latex-from-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
@@ -667,8 +926,7 @@
           task_id: {{ task.id }},
           source: "photo"
         }),
-      })
-      .then(async (res) => {
+      }).then(async (res) => {
         let data;
         try {
           data = await res.json();
@@ -679,20 +937,6 @@
           throw new Error(data.detail || "Konvertierung fehlgeschlagen");
         }
         return data;
-      })
-      .then((data) => {
-        clearInterval(timerInterval);
-        latexProgressBar.style.width = "100%";
-
-        latexProgress.classList.add("hidden");
-        insertLatexIntoSolution(data.latex);
-        statusEl.innerHTML = '<span class="text-green-600">✅ Formel eingefügt (' + (data.latency_ms || 0) + 'ms)</span>';
-      })
-      .catch((err) => {
-        clearInterval(timerInterval);
-        latexProgress.classList.add("hidden");
-
-        statusEl.innerHTML = '<span class="text-red-600">❌ ' + err.message + '</span>';
       });
     }
 
@@ -763,7 +1007,7 @@
       });
     }
 
-    function insertLatexIntoSolution(latex) {
+    function insertLatexIntoSolution(latex, keepOpen, toastMsg) {
       if (!latex.trim()) return;
 
       {% if task.task_type == 'text' %}
@@ -799,8 +1043,8 @@
         return;
       }
 
-      showToast("LaTeX in Loesung eingefuegt!", "success");
-      closeUpload();
+      showToast(toastMsg || "LaTeX in Loesung eingefuegt!", "success");
+      if (!keepOpen) closeUpload();
       {% endif %}
     }
   })();
