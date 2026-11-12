@@ -227,6 +227,34 @@ document.querySelector("#reveal-root .slides-pen-btn")?.addEventListener("click"
   if (aicampusLaser) aicampusLaser.handlePenButton();
 });
 
+// Doppelklick-Schutz für die unteren Controls (Stift-, 2x2- und
+// Navigations-Buttons): manche Stifte/Trackpads produzieren Doppelklicks →
+// Toggles würden an/aus an/aus (Netto-Nichts) oder die Folie doppelt
+// springen. Zweiter Klick aufs GLEICHE Control innerhalb des Fensters wird
+// verschluckt. Das Fenster ist länger als ein echter Doppelklick, weil der
+// 2. Klick-EVENT oft erst NACH der (synchronen) Übergangs-Initialisierung
+// des 1. Klicks verarbeitet wird — gemessene verarbeitete Lücken:
+// ~440–700 ms. Delegation + Capture auf #reveal-root: läuft vor ALLEN
+// Ziel-Listenern (eigene + Reveal's Controls) und überlebt Live-Remounts
+// (das .controls-Element wird dabei neu angelegt).
+(function () {
+  const root = document.getElementById("reveal-root");
+  if (!root) return;
+  const lastT = new WeakMap();
+  const WINDOW_MS = 750;
+  root.addEventListener("click", (e) => {
+    const el = e.target.closest(".slides-pen-btn, .slides-overview-btn, .controls button");
+    if (!el) return;
+    const now = Date.now();
+    if (now - (lastT.get(el) || 0) < WINDOW_MS) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    } else {
+      lastT.set(el, now);
+    }
+  }, true);
+})();
+
 // ─── Laser-Pointer (nur Tutoren): konsistentes Modus-Framework Laser + Stift
 // Zustände (Laser-Flag + C-Zustand = Palette-Visibility):
 //   OFF   – nichts aktiv (Color-Picker verborgen)
