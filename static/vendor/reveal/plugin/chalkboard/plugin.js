@@ -1532,9 +1532,9 @@ const initChalkboard = function ( Reveal ) {
 	// zuvor gezeichneten Strokes wieder. Strokes werden durch
 	// „strokeend"-Events (beim Mouse-/Touch-up) abgegrenzt, sodass ein
 	// Strg+Z genau den letzten Stroke bzw. die letzte Radierer-Sitzung
-	// entfernt.
+	// entfernt. readOnly (Laser-Modus) blockiert NUR die Zeichen-Eingaben;
+	// Undo bearbeitet nur die Event-Historie + Replay → auch im Laser-Modus.
 	function undo() {
-		if ( readOnly ) return;
 		var slideData = getSlideData( undefined, mode );
 		var events = slideData.events;
 		if ( !events.length ) return;
@@ -1582,7 +1582,6 @@ const initChalkboard = function ( Reveal ) {
 	}
 
 	function redo() {
-		if ( readOnly ) return;
 		var stack = redoStack[ redoKey() ];
 		if ( !stack || !stack.length ) return;
 		var removed = stack.pop();
@@ -2039,19 +2038,19 @@ const initChalkboard = function ( Reveal ) {
 	}
 
 	function clear() {
-		if ( !readOnly ) {
-			clearSlide();
-			// broadcast
-			var message = new CustomEvent( messageType );
-			message.content = {
-				sender: 'chalkboard-plugin',
-				type: 'clear',
-				timestamp: Date.now() - slideStart,
-				mode,
-				board
-			};
-			document.dispatchEvent( message );
-		}
+		// readOnly (Laser-Modus) blockiert NUR die Zeichen-Eingaben; DEL
+		// recordet ein rückgängig machbares "clear"-Event (Strg+Z).
+		clearSlide();
+		// broadcast
+		var message = new CustomEvent( messageType );
+		message.content = {
+			sender: 'chalkboard-plugin',
+			type: 'clear',
+			timestamp: Date.now() - slideStart,
+			mode,
+			board
+		};
+		document.dispatchEvent( message );
 	};
 
 	function colorIndex( idx ) {

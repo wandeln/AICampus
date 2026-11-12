@@ -258,7 +258,7 @@ document.querySelector("#reveal-root .slides-fullscreen-btn")?.addEventListener(
   const lastT = new WeakMap();
   const WINDOW_MS = 750;
   root.addEventListener("click", (e) => {
-    const el = e.target.closest(".slides-pen-btn, .slides-overview-btn, .slides-fullscreen-btn, .controls button");
+    const el = e.target.closest(".slides-pen-btn, .slides-overview-btn, .slides-fullscreen-btn, .controls button, .cb-actions button");
     if (!el) return;
     const now = Date.now();
     if (now - (lastT.get(el) || 0) < WINDOW_MS) {
@@ -641,6 +641,48 @@ const aicampusLaser = HAS_NOTES ? (function () {
           handleL();
         });
         ul.insertBefore(li, ul.firstChild); // ganz oben im Color-Picker
+      }
+      // Action-Leiste UNTER den Farbfeldern: Undo (Strg+Z), Redo (Strg+Y),
+      // Mülleimer (Entf) — gestapelt, wirkt auf das aktuelle Board (das
+      // Plugin's mode: Tafel sichtbar → Tafel, sonst Folie). Wie die Laser-
+      // Zeile: click UND touchstart (der Container preventDefaultet
+      // touchstart → click würde unterbleiben), lastTouchGuard gegen
+      // Doppel-Auslösung.
+      const pal = c.querySelector(".palette");
+      if (pal && !pal.querySelector(".cb-actions")) {
+        const acts = document.createElement("div");
+        acts.className = "cb-actions";
+        const run = (a) => {
+          if (a === "undo") RevealChalkboard.undo();
+          else if (a === "redo") RevealChalkboard.redo();
+          else RevealChalkboard.clear();
+        };
+        [
+          ["undo", "Zug zurücknehmen (Strg+Z)",
+            '<svg viewBox="0 0 16 16" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 3.5 2.5 6.5l3 3"></path><path d="M2.5 6.5H9a3.5 3.5 0 0 1 0 7H5"></path></svg>'],
+          ["redo", "Zug wiederholen (Strg+Y)",
+            '<svg viewBox="0 0 16 16" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.5 3.5l3 3-3 3"></path><path d="M13.5 6.5H7a3.5 3.5 0 0 0 0 7h4"></path></svg>'],
+          ["clear", "Alle Zeichnungen löschen (Entf)",
+            '<svg viewBox="0 0 16 16" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h11"></path><path d="M5.5 4.5v-2h5v2"></path><path d="M4 4.5l.8 9h6.4l.8-9"></path></svg>'],
+        ].forEach(([a, title, svg]) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.setAttribute("data-cb-action", a);
+          b.title = title;
+          b.setAttribute("aria-label", title);
+          b.innerHTML = svg;
+          let lastTouch = 0;
+          b.addEventListener("click", () => {
+            if (Date.now() - lastTouch < 700) return;
+            run(a);
+          });
+          b.addEventListener("touchstart", () => {
+            lastTouch = Date.now();
+            run(a);
+          });
+          acts.appendChild(b);
+        });
+        pal.appendChild(acts);
       }
       // Farbfeld/Radier anklicken/antippen, während der Laser aktiv ist →
       // erst in den Stift-Modus zurück, dann die gewählte Farbe setzen

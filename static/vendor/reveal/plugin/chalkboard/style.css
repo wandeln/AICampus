@@ -7,11 +7,13 @@ div.palette, div.boardhandle {
   top: 50%;
   transform: translateY(-50%);
   font-size: 24px;
-  border-radius: 10px;
-  border-top:    4px solid #222; 
-  border-right:  4px solid #222; 
-  border-bottom: 4px solid #222;
-  background: black;
+   border-radius: 10px;
+   /* AICAMPUS PATCH: Rahmen black (statt #222) → liegt unsichtbar am
+      schwarzen Innenbereich an (Palette + Board-Handle). */
+   border-top:    4px solid black;
+   border-right:  4px solid black;
+   border-bottom: 4px solid black;
+   background: black;
   transition: transform 0.3s;
 }
 

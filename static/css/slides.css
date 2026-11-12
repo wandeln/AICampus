@@ -1144,9 +1144,45 @@ body.present-mode .present-shell .reveal {
    aber sicher unter den Overlays. (position: relative + z-index: auto
    allein reicht nicht, das wäre dieselbe Vergleichsebene wie die
    Overlays.) */
-body.present-mode .present-toolbar {
-  position: relative;
-  z-index: 20;
+ body.present-mode .present-toolbar {
+   position: relative;
+   z-index: 20;
+}
+
+/* Palette-Action-Leiste (unter den Farbfeldern, gestapelt): Undo (Strg+Z),
+   Redo (Strg+Y), Mülleimer (Entf). Die Buttons werden von slides_present.html
+   pro Mount in die .palette des Chalkboard-Plugins gehängt (s. bind()) und
+   erben Sichtbarkeit/pointer-events vom Container (Picker an → bedienbar). */
+/* Flex-Spalte: Buttons (width: fit-content) mittig. Die Palette hat
+   padding-left 4px (Bar 0..48, Content 4..48) → padding-right 4px
+   ausgleichen, damit die Symbole exakt auf der Balkenmitte (24px)
+   sitzen, wie die Farbfelder (23,2px). */
+.palette .cb-actions {
+   display: flex;
+   flex-direction: column;
+   align-items: center;
+   padding-right: 4px;
+   border-top: 2px solid #555;
+}
+.palette .cb-actions button {
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   width: fit-content;
+   margin: 8px 0;
+   padding: 0;
+   background: none;
+   border: none;
+   color: #ccc;
+   cursor: pointer;
+   -webkit-tap-highlight-color: transparent;
+}
+.palette .cb-actions button:hover {
+   color: #fff;
+}
+.palette .cb-actions button:focus-visible {
+   outline: 2px solid #2563eb;
+   outline-offset: 1px;
 }
 
 /* Shortcuts-Panel: erscheint in der Reveal-Overview (Esc) oben rechts
