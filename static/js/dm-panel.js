@@ -296,10 +296,10 @@
     $("dm-chat-avatar").innerHTML = chat.is_group
       ? '<span class="w-9 h-9 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center">👥</span>'
       : dmAvatarHtml(chat.other, "w-9 h-9 rounded-full");
-    const hasMenu = !!(chat.is_group || chat.can_manage);
+    // Menü nur bei Gruppen: 1:1s sind weder umbenenn- noch verlassbar.
+    const hasMenu = !!chat.is_group;
     $("dm-chat-menu-btn").classList.toggle("hidden", !hasMenu);
     if (hasMenu) {
-      $("dm-menu-members").classList.toggle("hidden", !chat.is_group);
       $("dm-menu-rename").classList.toggle("hidden", !chat.can_manage);
     }
   }
@@ -629,7 +629,7 @@
   window.dmRemoveMember = async (userId) => {
     if (state.activeChatId == null) return;
     try {
-      // res.deleted = der CHAT wurde gelöscht (weniger als 2 Mitglieder),
+      // res.deleted = der CHAT wurde gelöscht (keine Mitglieder mehr),
       // nicht "Mitglied entfernt" — immer frische Daten vom Server holen,
       // sonst rendert die Liste aus dem alten state.chats weiter.
       await api(`/api/dm/chats/${state.activeChatId}/members/${userId}`, { method: "DELETE" });

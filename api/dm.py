@@ -120,7 +120,7 @@ def _chat_dict(
     last_msg: Optional[DmMessage],
     unread_count: int,
 ) -> dict[str, Any]:
-    is_group = len(members) > 2
+    is_group = chat.name is not None
     other_id = next((uid for uid in members if uid != viewer.id), None)
     other = users.get(other_id) if other_id else None
     last_sender = users.get(last_msg.user_id) if last_msg else None
@@ -461,9 +461,11 @@ async def rename_chat(
     session: Session = Depends(get_session),
     viewer: User = Depends(get_current_user),
 ):
-    """Chat umbenennen (nur der Ersteller)."""
+    """Chat umbenennen (nur der Ersteller, nur Gruppen)."""
     chat = _get_chat_or_404(session, chat_id)
     _require_membership(session, chat, viewer)
+    if chat.name is None:
+        raise HTTPException(400, "1:1-Chats können nicht umbenannt werden.")
     if chat.created_by != viewer.id:
         raise HTTPException(403, "Nur der Ersteller kann den Chat umbenennen.")
 
@@ -522,13 +524,15 @@ async def remove_chat_member(
 ):
     """Mitglied entfernen (nur Ersteller); sich selbst = Chat verlassen.
 
-    Verlässt der Ersteller eine Gruppe, an der noch jemand hängen bleibt,
-    wandert die Ersteller-Rolle auf das älteste verbleibende Mitglied über.
-    Sinkt die Mitgliederzahl auf unter 2, wird der Chat gelöscht
-    (Nachrichten und Read-States mit).
+    1:1-Chats (ohne Namen) sind unverlassbar. Verlässt der Ersteller eine
+    Gruppe, an der noch jemand hängen bleibt, wandert die Ersteller-Rolle
+    auf das älteste verbleibende Mitglied über. Sinkt die Mitgliederzahl
+    auf 0, wird der Chat gelöscht (Nachrichten und Read-States mit).
     """
     chat = _get_chat_or_404(session, chat_id)
     _require_membership(session, chat, viewer)
+    if chat.name is None:
+        raise HTTPException(400, "1:1-Chats können nicht verlassen werden.")
 
     if user_id != viewer.id and chat.created_by != viewer.id:
         raise HTTPException(403, "Nur der Ersteller kann Mitglieder entfernen.")
@@ -543,7 +547,7 @@ async def remove_chat_member(
     session.delete(row)
 
     remaining = [uid for uid in notifications.chat_member_ids(session, chat.id) if uid != user_id]
-    if len(remaining) < 2:
+    if not remaining:
         _delete_chat(session, chat)
     elif chat.created_by == user_id:
         # Ersteller-Rolle auf das älteste verbleibende Mitglied übertragen
@@ -555,7 +559,7 @@ async def remove_chat_member(
         if earliest:
             chat.created_by = earliest.user_id  # type: ignore[arg-type]
     session.commit()
-    return {"ok": True, "deleted": len(remaining) < 2}
+    return {"ok": True, "deleted": not remaining}
 
 
 # ─── Nachrichten (pro Chat) ────────────────────────────────────────
