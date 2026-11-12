@@ -91,14 +91,25 @@ body.aicampus-laser * {
     {# Overview-Button (unten links, spiegelbildlich zu Reveal's < > Controls
        unten rechts). Als Kind von .reveal und AUSSERHALB von .slides →
        Reveal's Klick-Navigation greift nicht (s. CSS). #}
-    <button type="button" class="slides-overview-btn" title="Folien-Übersicht (Overview, Taste O) umschalten" aria-label="Folien-Übersicht umschalten">
-      <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
-        <rect x="1" y="1" width="6" height="6" rx="1.2"></rect>
-        <rect x="9" y="1" width="6" height="6" rx="1.2"></rect>
-        <rect x="1" y="9" width="6" height="6" rx="1.2"></rect>
-        <rect x="9" y="9" width="6" height="6" rx="1.2"></rect>
-      </svg>
-    </button>
+     {# Stift-Button (oben, nur Tutoren/Profs): LASER↔OFF-Toggle bzw.
+        C-Übergang (OFF↔PEN) über das Laser/Stift-Framework (s.
+        aicampusLaser — das Plugin's eigene C ist nach Live-Remounts
+        defekt). #}
+     {% if is_tutor %}
+     <button type="button" class="slides-pen-btn" title="Stift (Taste C) umschalten" aria-label="Stiftmodus umschalten">
+       <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
+         <path d="M11.33 2a1.89 1.89 0 1 1 2.67 2.67L5 13.67 1.33 14.67l1-3.67L11.33 2z"></path>
+       </svg>
+     </button>
+     {% endif %}
+     <button type="button" class="slides-overview-btn" title="Folien-Übersicht (Overview, Taste O) umschalten" aria-label="Folien-Übersicht umschalten">
+       <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
+         <rect x="1" y="1" width="6" height="6" rx="1.2"></rect>
+         <rect x="9" y="1" width="6" height="6" rx="1.2"></rect>
+         <rect x="1" y="9" width="6" height="6" rx="1.2"></rect>
+         <rect x="9" y="9" width="6" height="6" rx="1.2"></rect>
+       </svg>
+     </button>
   </div>
   {# Shortcuts-Panel: erscheint in der Reveal-Overview (Esc) oben rechts
      unterhalb der dunklen Toolbar (Toggling + Aktionen: s. JS unten). #}
@@ -206,6 +217,16 @@ document.querySelector("#reveal-root .slides-overview-btn")?.addEventListener("c
   if (aicampusCurrentReveal) aicampusCurrentReveal.toggleOverview();
 });
 
+// Stift-Button (oben, nur Tutoren/Profs): LASER → aus (+ Leiste aus),
+// nächster Klick → LASER wieder an; sonst der C-Übergang (OFF→PEN,
+// PEN→OFF). Direkt aus dem Framework, weil das Plugin's eigene C-Toggle
+// nach Live-Remounts defekt ist.
+document.querySelector("#reveal-root .slides-pen-btn")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  e.currentTarget.blur();
+  if (aicampusLaser) aicampusLaser.handlePenButton();
+});
+
 // ─── Laser-Pointer (nur Tutoren): konsistentes Modus-Framework Laser + Stift
 // Zustände (Laser-Flag + C-Zustand = Palette-Visibility):
 //   OFF   – nichts aktiv (Color-Picker verborgen)
@@ -213,8 +234,9 @@ document.querySelector("#reveal-root .slides-overview-btn")?.addEventListener("c
 //   LASER – Laser-Punkt + Spur + Color-Picker, kein Zeichnen
 // Übergänge (C und L werden komplett von hier gesteuert):
 //   L (Taste oder Laser-Feld):  OFF→LASER, PEN→LASER, LASER→OFF
-//   C (Taste):                  OFF→PEN, PEN→OFF; LASER→PEN (schwarz);
-//                               Whiteboard (W) geöffnet → W schließt
+//   C (Taste):                  OFF→PEN, PEN→OFF; LASER→PEN (letzte Farbe,
+//                               sonst erste); Whiteboard (W) geöffnet → W
+//                               schließt
 //   Farbfeld/Radier:            LASER→PEN (mit der gewählten Farbe); PEN: Plugin
 //   X/Y (Farbwechsel):          LASER→PEN (der Farbwechsel greift weiterhin)
 // Der Color-Picker ist in PEN und LASER sichtbar; das Laser-Feld wird wie die
@@ -241,8 +263,9 @@ const aicampusLaser = HAS_NOTES ? (function () {
   let strokeId = null;      // PointerId des aktiven Strokes (2. Finger/Hand/Stift wird ignoriert)
   let strokeLastT = 0;      // letztes Event des Stroke-Pointers (Stale-Schutz)
   let pts = [];             // Punkte der aktuellen Spur
-  let strokeEndT = 0;       // Stroke-Ende (Fade-Auslauf)
+  let strokeEndT = 0;      // Stroke-Ende (Fade-Auslauf)
   let prevActive = [];      // zuvor markiertes Farbfeld/Radier
+  let penBtnWasLaser = false; // Stift-Button war zuletzt LASER-Aus (s. handlePenButton)
   let trailRaf = 0;
   let notesPickerWasOn = false; // Folien-Picker-Zustand vor W (zurück bei W aus)
 
@@ -466,6 +489,7 @@ const aicampusLaser = HAS_NOTES ? (function () {
   // L: OFF→LASER (Color-Picker zuerst), PEN→LASER, LASER→OFF (Laser + Picker).
   // Auf beiden Boards identisch.
   function handleL() {
+    penBtnWasLaser = false; // Laser per Taste geändert → Button-Merker ungültig
     if (mode() === "LASER") {
       setActive(false);
       if (curBoard() === 0) hidePicker(); // auf der Tafel bleibt der Picker an
@@ -476,14 +500,22 @@ const aicampusLaser = HAS_NOTES ? (function () {
       setActive(true);
     }
   }
-  // C: OFF→PEN, PEN→OFF, LASER→PEN (erste Farbe: schwarz bzw. auf der
-  // Tafel weiß). Auf der Tafel lässt sich der Picker NICHT ausschalten
-  // (Maus-Modus macht dort keinen Sinn) – C ist dort ein No-Op. Das Board
-  // selbst rührt C nicht an (das macht W).
+  // C: OFF→PEN, PEN→OFF, LASER→PEN (zuletzt gewählte Farbe wird
+  // wiederverwendet, nur wenn nie eine gewählt war: erste Farbe —
+  // schwarz bzw. auf der Tafel weiß). Auf der Tafel lässt sich der
+  // Picker NICHT ausschalten (Maus-Modus macht dort keinen Sinn) – C ist
+  // dort ein No-Op. Das Board selbst rührt C nicht an (das macht W).
   function handleC() {
+    penBtnWasLaser = false; // Pen/Laser per Taste geändert → Button-Merker ungültig
     if (mode() === "LASER") {
       setActive(false);
-      RevealChalkboard.colorIndex(0);
+      // setActive(false) hat die zuletzt aktive Farbmarkierung zurückgesetzt
+      // (prevActive) → nur falls nichts markiert ist, die erste Farbe.
+      const pal = canvases[curBoard()]?.querySelector(".palette");
+      const marked = pal?.querySelector("li.cb-active");
+      if (!marked || marked.hasAttribute("data-laser")) {
+        RevealChalkboard.colorIndex(0);
+      }
     } else if (mode() === "PEN" && curBoard() === 0) {
       hidePicker();
     } else if (mode() === "OFF") {
@@ -598,7 +630,29 @@ const aicampusLaser = HAS_NOTES ? (function () {
     }
   }
 
-  return { bind };
+  // Stift-BUTTON (unten links):
+  //   LASER → LASER aus + Leiste aus (= exakt L), merkt "war Laser"
+  //   OFF   → "war Laser"? LASER wieder an (+ Leiste) : C-Übergang (→PEN)
+  //   PEN   → C-Übergang (→OFF)
+  // Die Übergänge laufen über die bestehenden handleL/handleC (Pointer-
+  // Events, readOnly, Markierungen bleiben konsistent). Der Merker überlebt
+  // Button-Zyklen (LASER↔OFF bleibt der Button-Laser-Toggle) und wird
+  // nur bei C-/L-Nutzung gelöscht (beide Funktionen setzen ihn false).
+  function handlePenButton() {
+    const m = mode();
+    if (m === "LASER") {
+      handleL();
+      penBtnWasLaser = true; // NACH handleL: dessen Reset überleben
+    } else if (m === "OFF" && penBtnWasLaser) {
+      penBtnWasLaser = false;
+      showPicker();
+      setActive(true);
+    } else {
+      handleC();
+    }
+  }
+
+  return { bind, handleC, handlePenButton };
 })() : null;
 
 // Deck (neu) mounten: Inhalt laden → Sections → neue Reveal-Instanz.

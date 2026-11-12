@@ -214,37 +214,51 @@
    Schlicht wie die Arrows: transparent, schwarzes Gitter-Glyph,
    dezent sichtbar, bei Hover voll. display:none im PDF (wie
    Reveal's eigene Controls). */
-.reveal .slides-overview-btn {
-  position: absolute;
-  bottom: 12px;
-  left: 12px;
-  z-index: 11; /* wie .controls */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: #000;
-  cursor: pointer;
-  opacity: 0.55;
-  transition: opacity 0.2s ease, background-color 0.2s ease;
-  -webkit-tap-highlight-color: transparent;
-}
-.reveal .slides-overview-btn:hover {
-  opacity: 1;
-  background: rgba(0, 0, 0, 0.06);
-}
-.reveal .slides-overview-btn:focus-visible {
-  outline: 2px solid #2563eb;
-  outline-offset: 1px;
-}
-html.print-pdf .reveal .slides-overview-btn {
-  display: none;
-}
+ .reveal :is(.slides-overview-btn, .slides-pen-btn) {
+   position: absolute;
+   left: 12px;
+   z-index: 11; /* wie .controls */
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   width: 44px;
+   height: 44px;
+   padding: 0;
+   border: 0;
+   border-radius: 50%;
+   background: transparent;
+   color: #000;
+   cursor: pointer;
+   opacity: 0.55;
+   transition: opacity 0.2s ease, background-color 0.2s ease;
+   -webkit-tap-highlight-color: transparent;
+ }
+ .reveal .slides-overview-btn { bottom: 12px; }
+ .reveal .slides-pen-btn {
+   bottom: 62px; /* 12 + 44 (Button) + 6 (Abstand) */
+   /* PEN-Modus: der notescanvas (inline z-index 24) deckt z-11 ab und
+      fängt den Klick zum Ausschalten → über beide Overlays (wie der
+      Laser-Punkt, z-40). Zeichnen in der Button-Ecke ist der Trade-off. */
+   z-index: 40;
+ }
+ /* PEN-Modus: wie der Stift-Button — die Navigationspfeile (rechts unten)
+    und die 2x2-Kachel (links unten) müssen über den Chalkboard-Overlays
+    (inline z-index 24/26) bleiben, um im Zeichnungsmodus bedienbar zu
+    sein (beide saßen auf z-11). */
+ .reveal :is(.controls, .slides-overview-btn) {
+   z-index: 40;
+ }
+ .reveal :is(.slides-overview-btn, .slides-pen-btn):hover {
+   opacity: 1;
+   background: rgba(0, 0, 0, 0.06);
+ }
+ .reveal :is(.slides-overview-btn, .slides-pen-btn):focus-visible {
+   outline: 2px solid #2563eb;
+   outline-offset: 1px;
+ }
+ html.print-pdf .reveal :is(.slides-overview-btn, .slides-pen-btn) {
+   display: none;
+ }
 
 /* ─── Fußzeile & Logo ─────────────────────────────────────────── */
 
