@@ -102,15 +102,22 @@ body.aicampus-laser * {
        </svg>
      </button>
      {% endif %}
-     <button type="button" class="slides-overview-btn" title="Folien-Übersicht (Overview, Taste O) umschalten" aria-label="Folien-Übersicht umschalten">
-       <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
-         <rect x="1" y="1" width="6" height="6" rx="1.2"></rect>
-         <rect x="9" y="1" width="6" height="6" rx="1.2"></rect>
-         <rect x="1" y="9" width="6" height="6" rx="1.2"></rect>
-         <rect x="9" y="9" width="6" height="6" rx="1.2"></rect>
-       </svg>
-     </button>
-  </div>
+      <button type="button" class="slides-overview-btn" title="Folien-Übersicht (Overview, Taste O) umschalten" aria-label="Folien-Übersicht umschalten">
+        <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
+          <rect x="1" y="1" width="6" height="6" rx="1.2"></rect>
+          <rect x="9" y="1" width="6" height="6" rx="1.2"></rect>
+          <rect x="1" y="9" width="6" height="6" rx="1.2"></rect>
+          <rect x="9" y="9" width="6" height="6" rx="1.2"></rect>
+        </svg>
+      </button>
+      {# Fullscreen-Button (oben rechts, analog Overview): dieselbe
+         Dokument-Fullscreen-Funktion wie Taste F / Toolbar-Button. #}
+      <button type="button" class="slides-fullscreen-btn" title="Vollbild (oder F) umschalten" aria-label="Vollbild umschalten">
+        <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
+          <path d="M2 2h5v2H4V7H2z M9 2h5v5h-2V4H9z M2 9h2v3H7V14H2z M12 9H14v5h-5v-2h3z"></path>
+        </svg>
+      </button>
+   </div>
   {# Shortcuts-Panel: erscheint in der Reveal-Overview (Esc) oben rechts
      unterhalb der dunklen Toolbar (Toggling + Aktionen: s. JS unten). #}
   <div class="present-shortcuts" id="present-shortcuts">
@@ -227,23 +234,31 @@ document.querySelector("#reveal-root .slides-pen-btn")?.addEventListener("click"
   if (aicampusLaser) aicampusLaser.handlePenButton();
 });
 
-// Doppelklick-Schutz für die unteren Controls (Stift-, 2x2- und
-// Navigations-Buttons): manche Stifte/Trackpads produzieren Doppelklicks →
-// Toggles würden an/aus an/aus (Netto-Nichts) oder die Folie doppelt
-// springen. Zweiter Klick aufs GLEICHE Control innerhalb des Fensters wird
-// verschluckt. Das Fenster ist länger als ein echter Doppelklick, weil der
-// 2. Klick-EVENT oft erst NACH der (synchronen) Übergangs-Initialisierung
-// des 1. Klicks verarbeitet wird — gemessene verarbeitete Lücken:
-// ~440–700 ms. Delegation + Capture auf #reveal-root: läuft vor ALLEN
-// Ziel-Listenern (eigene + Reveal's Controls) und überlebt Live-Remounts
-// (das .controls-Element wird dabei neu angelegt).
+// Fullscreen-Button (oben rechts): dieselbe Dokument-Fullscreen-Funktion
+// wie Taste F bzw. der Toolbar-Button.
+document.querySelector("#reveal-root .slides-fullscreen-btn")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  e.currentTarget.blur();
+  togglePageFullscreen();
+});
+
+// Doppelklick-Schutz für die Corner-/Nav-Controls (Stift-, 2x2-,
+// Fullscreen- und Navigations-Buttons): manche Stifte/Trackpads produzieren
+// Doppelklicks → Toggles würden an/aus an/aus (Netto-Nichts) oder die Folie
+// doppelt springen. Zweiter Klick aufs GLEICHE Control innerhalb des
+// Fensters wird verschluckt. Das Fenster ist länger als ein echter
+// Doppelklick, weil der 2. Klick-EVENT oft erst NACH der (synchronen)
+// Übergangs-Initialisierung des 1. Klicks verarbeitet wird — gemessene
+// verarbeitete Lücken: ~440–700 ms. Delegation + Capture auf #reveal-root:
+// läuft vor ALLEN Ziel-Listenern (eigene + Reveal's Controls) und überlebt
+// Live-Remounts (das .controls-Element wird dabei neu angelegt).
 (function () {
   const root = document.getElementById("reveal-root");
   if (!root) return;
   const lastT = new WeakMap();
   const WINDOW_MS = 750;
   root.addEventListener("click", (e) => {
-    const el = e.target.closest(".slides-pen-btn, .slides-overview-btn, .controls button");
+    const el = e.target.closest(".slides-pen-btn, .slides-overview-btn, .slides-fullscreen-btn, .controls button");
     if (!el) return;
     const now = Date.now();
     if (now - (lastT.get(el) || 0) < WINDOW_MS) {

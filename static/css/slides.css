@@ -214,7 +214,7 @@
    Schlicht wie die Arrows: transparent, schwarzes Gitter-Glyph,
    dezent sichtbar, bei Hover voll. display:none im PDF (wie
    Reveal's eigene Controls). */
- .reveal :is(.slides-overview-btn, .slides-pen-btn) {
+ .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn) {
    position: absolute;
    left: 12px;
    z-index: 11; /* wie .controls */
@@ -234,6 +234,11 @@
    -webkit-tap-highlight-color: transparent;
  }
  .reveal .slides-overview-btn { bottom: 12px; }
+ .reveal .slides-fullscreen-btn {
+   left: auto;
+   top: 12px;
+   right: 12px;
+ }
  .reveal .slides-pen-btn {
    bottom: 62px; /* 12 + 44 (Button) + 6 (Abstand) */
    /* PEN-Modus: der notescanvas (inline z-index 24) deckt z-11 ab und
@@ -241,22 +246,22 @@
       Laser-Punkt, z-40). Zeichnen in der Button-Ecke ist der Trade-off. */
    z-index: 40;
  }
- /* PEN-Modus: wie der Stift-Button — die Navigationspfeile (rechts unten)
-    und die 2x2-Kachel (links unten) müssen über den Chalkboard-Overlays
-    (inline z-index 24/26) bleiben, um im Zeichnungsmodus bedienbar zu
-    sein (beide saßen auf z-11). */
- .reveal :is(.controls, .slides-overview-btn) {
+ /* PEN-Modus: wie der Stift-Button — die Navigationspfeile (rechts unten),
+    die 2x2-Kachel (links unten) und der Fullscreen-Button (rechts oben)
+    müssen über den Chalkboard-Overlays (inline z-index 24/26) bleiben, um
+    im Zeichnungsmodus bedienbar zu sein (saßen auf z-11). */
+ .reveal :is(.controls, .slides-overview-btn, .slides-fullscreen-btn) {
    z-index: 40;
  }
- .reveal :is(.slides-overview-btn, .slides-pen-btn):hover {
+ .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn):hover {
    opacity: 1;
    background: rgba(0, 0, 0, 0.06);
  }
- .reveal :is(.slides-overview-btn, .slides-pen-btn):focus-visible {
+ .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn):focus-visible {
    outline: 2px solid #2563eb;
    outline-offset: 1px;
  }
- html.print-pdf .reveal :is(.slides-overview-btn, .slides-pen-btn) {
+ html.print-pdf .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn) {
    display: none;
  }
 
