@@ -1261,11 +1261,16 @@ body.present-mode .present-shortcuts kbd {
 }
 
 /* Folien-Nummer (slideNumber: true) — themenkonform statt Reveal-Default
-   (Default: 12px weiß auf rgba(0,0,0,.4)). */
+   (Default: 12px weiß auf rgba(0,0,0,.4)). Fixe px (kein em): em bezog
+   sich auf die Body-Fontsize (16 px → 0.34em ≈ 5 px, kaum lesbar); in der
+   Präsentation sitzt das Element am .reveal-Root (Letterbox-Region, nicht
+   mit .slides skaliert) → px bleibt über die Letterbox-Skala hinweg
+   konstant. Im Print trifft die Regel die .slide-number-pdf (15 px ≈
+   Reveal-Default 12 px, s. Rand-Kommentar in slides_present.html). */
 .reveal .slide-number {
   right: 8px;
   bottom: 8px;
-  font-size: 0.34em;
+  font-size: 15px;
   color: var(--slides-text, #1f2937);
   background: transparent;
   opacity: 0.55;

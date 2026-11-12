@@ -865,6 +865,11 @@ function wireBgZoom(reveal) {
   });
 }
 
+// Node-Typen von Reveal's IMPLIZITEM Auto-Animate-Text-Matching
+// (h1–h6, p, li, pre — Key: nodeName + ":::" + innerText). Medien
+// (img, video, iframe) werden per src gematcht und haben kein innerText.
+const AUTOANIMATE_TEXT_NODES = /^(H[1-6]|P|LI|PRE)$/;
+
 /**
  * Reveal-Config `autoAnimateMatcher`: Auto-Animate-Paare filtern und
  * gezoomte Applets (data-zoom) überspringen — sonst würde AutoAnimate den
@@ -872,15 +877,28 @@ function wireBgZoom(reveal) {
  * Elemente werden von Reveal als nicht passende behandelt (ein-/ausfaden),
  * ihr transform-Zoom bleibt unangetastet.
  *
+ * Zusätzlich: IMPLIZITE Text-Paare mit leerem innerText verwerfen.
+ * innerText ist leer für unentdeckte Fragments (visibility:hidden) und
+ * display:none-Inhalt (aside.notes) — solche Elemente teilen sich den
+ * degenerierten Key (z. B. "LI:::") und paaren sich per Index mit den
+ * leeren Elementen der Nachbarfolie → Translate- + Fontsize-Morph
+ * ("driftende Einblendung") ohne jeglichen Autor-Intent. Explizite
+ * Paare (data-id) bleiben unberührt; Medien-Paare (src-Key) ebenfalls.
+ *
  * Wichtig: `this` ist die AutoAnimate-Instanz (Reveal ruft den Matcher per
  * matcher.call(this, fromSlide, toSlide) auf) → getAutoAnimatePairs steht
  * hier als Instanz-Methode zur Verfügung.
  */
 function aicampusAutoAnimateMatcher(fromSlide, toSlide) {
   const pairs = this.getAutoAnimatePairs(fromSlide, toSlide);
-  return pairs.filter(
-    (pair) => !pair.from.hasAttribute("data-zoom") && !pair.to.hasAttribute("data-zoom")
-  );
+  return pairs.filter((pair) => {
+    if (pair.from.hasAttribute("data-zoom") || pair.to.hasAttribute("data-zoom")) return false;
+    if (pair.from.hasAttribute("data-id") || pair.to.hasAttribute("data-id")) return true;
+    if (AUTOANIMATE_TEXT_NODES.test(pair.from.nodeName) || AUTOANIMATE_TEXT_NODES.test(pair.to.nodeName)) {
+      return (pair.from.innerText || "").trim() !== "" && (pair.to.innerText || "").trim() !== "";
+    }
+    return true;
+  });
 }
 
 /**

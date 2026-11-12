@@ -788,6 +788,14 @@ window.addEventListener('message', (event) => {
       if (!f.__appletSettled && f.closest("section.present")) return;
       const prevAppletH = f.style.height;
       const inSlides = !!(f.closest(".reveal") || f.closest(".slides-canvas"));
+      // In Slides ist die Höhe nach dem ersten Setzen (ab SETTLED, d. h.
+      // nach der Webfont-Phase) GESPERRT: Interaktiver Inhalt im Applet
+      // (z. B. ein Parameterschalter) ändert die Inhaltshöhe, aber das
+      // Iframe darf sich nicht neu skalieren — jede Höhenänderung würde
+      // eine erneute Auto-Skalierung (Refit) der ganzen Folie triggern.
+      // Das Applet scrollt stattdessen intern (s. injiziertes Script).
+      // Neues Iframe (Remount, andere URL) → neue Instanz → neue Höhe.
+      if (inSlides && f.__appletHLocked) return;
       // Gezoomte Applets ({.zoom=X}): Clamp zoom-korrigiert, damit die
       // VISIBLE Höhe (gemeldete Höhe × zoom) im selben Bereich bleibt.
       const zoom = parseFloat(f.getAttribute('data-zoom')) || 1;
@@ -814,6 +822,7 @@ window.addEventListener('message', (event) => {
         const zwrap = f.parentElement && f.parentElement.classList.contains("aicampus-applet-zoom")
           ? f.parentElement : null;
         if (zwrap) zwrap.style.height = "";
+        if (f.__appletSettled) f.__appletHLocked = true;
         return;
       }
       let srcH = d.height;
@@ -848,6 +857,7 @@ window.addEventListener('message', (event) => {
         ? f.parentElement
         : null;
       if (wrap) wrap.style.height = `calc(${Math.round(h * zoom)}px * var(--slides-body-scale, 1))`;
+      if (inSlides && f.__appletSettled) f.__appletHLocked = true;
       // Auto-Fit (slides.js, nur auf Folien-Seiten): die Applet-Höhe ändert
       // die Folien-Inhaltshöhe → die Folie neu fiten. Nur wenn sich die
       // Iframe-Höhe tatsächlich geändert hat — eine identische Message
@@ -3123,12 +3133,35 @@ function _applyFragmentMarkers(container) {
 // Fragment-Elemente + Top-Level-Elemente der .markdown-preview-Blöcke in
 // Dokumentreihenfolge sammeln (die Gate-Logik in _assignFragmentSteps
 // braucht die Top-Level-Elemente).
+//
+// Zwei Erweitern des Streams:
+// - .aicampus-slide-body (renderSlideInto hüllt alles nach der Überschrift
+//   darin) wird durch ihre KINDER ersetzt — sonst stünde jedes "nachfolgende
+//   Element" in einem einzigen Wrapper, den ein Gate nie verschlingen kann
+//   (er enthält [data-frag]).
+// - UL/OL steuern ihre LI-Elemente in den Stream bei: Ein Gate auf einem
+//   Bullet ({#Fragment}) verschlingt die Folge-Bullets der Liste.
 function _collectFragmentEls(container, fragEls) {
   const topLevel = [];
   container.querySelectorAll('.markdown-preview').forEach((mp) => {
-    Array.from(mp.children).forEach((c) => topLevel.push(c));
+    Array.from(mp.children).forEach((c) => {
+      if (c.classList && c.classList.contains('aicampus-slide-body')) {
+        Array.from(c.children).forEach((k) => topLevel.push(k));
+      } else {
+        topLevel.push(c);
+      }
+    });
   });
-  const allEls = [...new Set([...fragEls, ...topLevel])];
+  const stream = [];
+  topLevel.forEach((el) => {
+    stream.push(el);
+    if (el.tagName === 'UL' || el.tagName === 'OL') {
+      Array.from(el.children).forEach((li) => {
+        if (li.tagName === 'LI') stream.push(li);
+      });
+    }
+  });
+  const allEls = [...new Set([...fragEls, ...stream])];
   allEls.sort((a, b) => {
     const pos = a.compareDocumentPosition(b);
     if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
@@ -3221,10 +3254,12 @@ function aicampusResortFragments(container) {
   _assignFragmentSteps(_visualKatexRunSort(_collectFragmentEls(container, fragEls)));
 }
 
-// Fragment-Typ aus der Markersyntax: {#Fragment} (Groß, ohne ID) = Gate,
-// {#fragment:id}/{#Fragment:id} = ID-Gruppe, {#fragment} = normal.
+// Fragment-Typ aus der Markersyntax: {#Fragment} / {#Fragment:id} (Groß) =
+// Gate (alle nachfolgenden Inhalte werden mit dem Gate eingeblendet; die
+// ID erlaubt es weiteren Elementen {#fragment:id}, denselben Schritt zu
+// teilen), {#fragment:id} = ID-Gruppe, {#fragment} = normal.
 function _fragType(fchar, id) {
-  if (fchar === 'F' && !id) return 'reveal';
+  if (fchar === 'F') return 'reveal';
   return id ? 'group' : 'normal';
 }
 

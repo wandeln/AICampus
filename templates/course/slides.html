@@ -171,9 +171,7 @@
 
   // Echte (eingebettete) Reveal-Instanz auf der Kachel: durchklickbar,
   // keine globalen Tastatur-Bindings (mehrere Instanzen pro Seite).
-  // totalSlides = FLACH gezählte Folien (inkl. Stack-Unterfolien), damit
-  // Zähler und Reveal's eigene getTotalSlides() übereinstimmen.
-  async function initPreviewReveal(shell, totalSlides) {
+  async function initPreviewReveal(shell) {
     let reveal = null;
     reveal = new Reveal(shell.querySelector(".reveal"), {
       embedded: true,
@@ -183,10 +181,13 @@
       progress: false,
       center: false,
       transition: "none",
-      // Zähler "n/gesamt" (flach, inkl. Stack-Unterfolien) — zeigt die echte
-      // Deck-Größe, auch im Mini-Zustand (sonst "1/3"). Guard für den Fall,
-      // dass Reveal die Funktion während des Konstruktors aufruft.
-      slideNumber: () => ((reveal && reveal.getSlidePastCount()) || 0) + 1 + "/" + totalSlides,
+      // Nur die aktuelle Folienzahl (konsistent mit Present/Editor-Preview,
+      // die per slideNumber: true ebenfalls nur "X" zeigen).
+      // MÜSSE ein ARRAY zurückgeben: Reveal 4 liest value[0]/value[1]/value[2]
+      // (formatSlideNumber) — ein String wie "10" würde value[0] = "1"
+      // liefern (nur die erste Ziffer sichtbar). Guard für den Fall, dass
+      // Reveal die Funktion während des Konstruktors aufruft.
+      slideNumber: () => [((reveal && reveal.getSlidePastCount()) || 0) + 1],
       hash: false,
       history: false,
       width: TILE_W,
@@ -208,7 +209,7 @@
     return reveal;
   }
 
-  async function mountPreviewDeck(shell, deckId, slidesToShow, totalSlides) {
+  async function mountPreviewDeck(shell, deckId, slidesToShow) {
     const slidesEl = shell.querySelector(".slides");
     slidesEl.innerHTML = "";
     if (FOOTER) slidesEl.setAttribute("data-footer", FOOTER);
@@ -228,7 +229,7 @@
     shell.classList.add("has-slides");
     fitSlides(slidesEl, TILE_W, TILE_H);
     try {
-      return await initPreviewReveal(shell, totalSlides);
+      return await initPreviewReveal(shell);
     } finally {
       revealEl.style.visibility = "";
     }
@@ -302,7 +303,7 @@
         // Auto-Fit: die neu gebauten Restfolien (Mini-Folien sind bereits
         // gefitet, gleicher W/H) — vor dem ersten Render der neuen Instanz.
         fitSlides(slidesEl, TILE_W, TILE_H);
-        const fullReveal = await initPreviewReveal(shell, countSlides(slides));
+        const fullReveal = await initPreviewReveal(shell);
         state.reveal = fullReveal;
         // slide() clampt; v ist unverändert (gleiche erste Slides).
         fullReveal.slide(posH, posV);
@@ -329,7 +330,7 @@
           // sonst leben zwei Instanzen auf demselben Element.
           if (!destroyed) { try { state.reveal.destroy(); } catch (e2) {} }
           shell.querySelector(".reveal").style.visibility = "";
-          state.reveal = await mountPreviewDeck(shell, deckId, slides.slice(0, MINI_PREVIEW_SLIDES), countSlides(slides));
+          state.reveal = await mountPreviewDeck(shell, deckId, slides.slice(0, MINI_PREVIEW_SLIDES));
         } catch (e2) { /* Vorschau bleibt leer */ }
       }
     };
@@ -401,8 +402,7 @@
       const isMini = !full && slides.length > MINI_PREVIEW_SLIDES;
       state.reveal = await mountPreviewDeck(
         shell, d.id,
-        isMini ? slides.slice(0, MINI_PREVIEW_SLIDES) : slides,
-        countSlides(slides)
+        isMini ? slides.slice(0, MINI_PREVIEW_SLIDES) : slides
       );
       setDeckLoading(shell, false); // frische Vorschau ist bedienbar
       if (isMini) wireFullDeckUpgrade(shell, d.id, slides, state);
