@@ -496,6 +496,13 @@ def _discard_submission(session: Session, submission: Submission) -> None:
         select(WorkspaceRun).where(WorkspaceRun.submission_id == submission.id)
     ).all():
         run.submission_id = None
+    # Handschrift-Protokoll-Zeilen lösen (FK, sonst schlägt das Löschen
+    # fehl und die Einreichung bleibt als PENDING-Versuch hängen)
+    session.exec(
+        update(HandwritingConversion)
+        .where(HandwritingConversion.submission_id == submission.id)
+        .values(submission_id=None)
+    )
     if submission.workspace_snapshot:
         # Snapshot (data/submissions/{id}/) von der Platte räumen
         shutil.rmtree(SUBMISSION_DIR / str(submission.id), ignore_errors=True)
