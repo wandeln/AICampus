@@ -142,6 +142,21 @@
   // Volldaten für die clientseitige Filterung (wird in loadOverview gesetzt)
   let overviewData = null;
 
+  // Ø-Zeilen: 'mean' (Mittelwert) oder 'median' — Klick auf die Label-Zelle
+  // (linke Spalte) schaltet um. Der Median zählt nur Einreichungen.
+  let avgMode = 'mean';
+
+  function median(arr) {
+    if (!arr.length) return null;
+    const s = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+  }
+
+  function mean(arr) {
+    return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  }
+
   // ─── Load Overview Data ─────────────────────────────────────
   // Immer Volldaten (alle Studenten x alle Aufgaben); die Filter laufen
   // clientseitig (applyOverviewFilter) — kein neuer Request pro Eingabe.
@@ -204,7 +219,8 @@
     // Body
     const maxTotal = data.tasks.reduce((sum, t) => sum + t.max_points, 0);
 
-    let bodyHtml = '';
+    // Ø-Zeilen ganz oben (Werte werden in updateAvgRows gefüllt)
+    let bodyHtml = buildAvgRows(data);
     data.students.forEach(student => {
       bodyHtml += '<tr class="hover:bg-gray-50 transition" data-student-id="' + student.id + '" data-annotation="' + escapeHtml(student.annotation || '') + '">';
       bodyHtml += '<td class="py-2 px-4 font-medium text-gray-900 border-b sticky left-0 bg-white z-10 min-w-[180px]">' + student.name + '</td>';
@@ -254,6 +270,164 @@
     });
 
     tbody.innerHTML = bodyHtml;
+  }
+
+  // ─── Kennzahl-Zeilen (Ø/Md Punkte, Anteil, Zeit + Teilnahme) ──
+  // Vier Zeilen am Anfang der Tabelle: pro Aufgabe Ø/Md erzielte Punkte,
+  // Ø/Md erreichter Anteil, Ø/Md Bearbeitungszeit sowie die Teilnahmequote.
+  // Ø/Md-Zeilen zählen nur Einreichungen; Klick auf die Label-Zelle schaltet
+  // Mittelwert/Median um. Die Werte werden in updateAvgRows berechnet und bei
+  // Filter-/Spaltenänderung aktualisiert. Die Zeilen haben kein
+  // data-student-id (bleiben beim Sortieren fix oben) und ihre Task-Zellen
+  // tragen data-task-idx, damit sie mit den Spalten ausgeblendet werden.
+  function buildAvgRows(data) {
+    const rowClass = 'bg-amber-50 font-semibold';
+    const labelBase = 'py-2 px-4 text-sm text-gray-700 border-b sticky left-0 bg-amber-50 z-10 min-w-[180px]';
+    const labelCell = labelBase + ' cursor-pointer select-none hover:bg-amber-100';
+    const labelTitle = 'Klicken: Mittelwert / Median umschalten';
+    const emptyCell = 'py-2 px-4 border-b';
+    const taskCell = 'py-2 px-3 text-center border-b font-mono text-sm text-gray-700';
+    const sumCellCls = 'py-2 px-4 text-center font-mono text-sm border-b bg-blue-100';
+
+    const taskCols = () => {
+      let h = '';
+      data.tasks.forEach((task, i) => {
+        h += '<td data-task-idx="' + i + '" class="' + taskCell + '"></td>';
+      });
+      return h;
+    };
+
+    let html = '';
+    // Zeile 1: Ø Punkte (Summe-Spalte = Ø Gesamtpunkte, nur Einreichungen)
+    html += '<tr class="' + rowClass + '" data-avg-row="points">';
+    html += '<td data-avg-label="points" title="' + labelTitle + '" class="' + labelCell + '">Ø Punkte</td>';
+    html += '<td class="' + emptyCell + '"></td><td class="' + emptyCell + '"></td>';
+    html += taskCols();
+    html += '<td data-avg-sum class="' + sumCellCls + '"></td>';
+    html += '<td class="' + sumCellCls + ' text-gray-400">—</td></tr>';
+    // Zeile 2: Ø Anteil (Anteil-Spalte = Ø Gesamtanteil, nur Einreichungen)
+    html += '<tr class="' + rowClass + '" data-avg-row="pct">';
+    html += '<td data-avg-label="pct" title="' + labelTitle + '" class="' + labelCell + '">Ø Anteil</td>';
+    html += '<td class="' + emptyCell + '"></td><td class="' + emptyCell + '"></td>';
+    html += taskCols();
+    html += '<td class="' + sumCellCls + ' text-gray-400">—</td>';
+    html += '<td data-avg-pct class="' + sumCellCls + '"></td></tr>';
+    // Zeile 3: Ø Bearbeitungszeit (Summe-Spalte = Ø Gesamtzeit, nur Einreichungen)
+    html += '<tr class="' + rowClass + '" data-avg-row="time">';
+    html += '<td data-avg-label="time" title="' + labelTitle + '" class="' + labelCell + '">Ø Zeit</td>';
+    html += '<td class="' + emptyCell + '"></td><td class="' + emptyCell + '"></td>';
+    html += taskCols();
+    html += '<td data-avg-time-sum class="' + sumCellCls + '"></td>';
+    html += '<td class="' + sumCellCls + ' text-gray-400">—</td></tr>';
+    // Zeile 4: Teilnahmequote (% der sichtbaren Studenten mit Einreichung).
+    // Gesamtquote steht in der Anteil-Spalte (rechtste), da es ein %-Wert ist.
+    html += '<tr class="' + rowClass + '" data-avg-row="part">';
+    html += '<td class="' + labelBase + '" title="Anteil der sichtbaren Studierenden mit mindestens einer Einreichung">Teilnahme</td>';
+    html += '<td class="' + emptyCell + '"></td><td class="' + emptyCell + '"></td>';
+    html += taskCols();
+    html += '<td class="' + sumCellCls + ' text-gray-400">—</td>';
+    html += '<td data-avg-part-sum class="' + sumCellCls + '"></td></tr>';
+    return html;
+  }
+
+  // Kompakte Zeit-Anzeige: 45s · 12m 34s · 1h 24m
+  function formatDuration(sec) {
+    sec = Math.max(0, Math.round(sec));
+    if (sec < 60) return sec + 's';
+    if (sec < 3600) return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+    return Math.floor(sec / 3600) + 'h ' + Math.floor((sec % 3600) / 60) + 'm';
+  }
+
+  // Ø/Md-Werte über die aktuell sichtbaren Studierenden (Filter-Status wird
+  // geerbt: ausblendende Filter betreffen die Zeilen mit). avgMode = 'mean'
+  // oder 'median'; beide Modi zählen in den Ø/Md-Zeilen nur Einreichungen.
+  // Die Teilnahme-Zeile ist davon unabhängig (immer % mit Einreichung).
+  function updateAvgRows() {
+    if (!overviewData) return;
+    const visibleTasks = currentVisibleTasks();
+    const sids = Array.from(document.querySelectorAll('#table-body tr[data-student-id]:not(.hidden)'))
+      .map(r => r.dataset.studentId);
+    const count = sids.length;
+    const isMedian = avgMode === 'median';
+    const agg = arr => (isMedian ? median : mean)(arr);
+
+    const pointsRow = document.querySelector('#table-body tr[data-avg-row="points"]');
+    const pctRow = document.querySelector('#table-body tr[data-avg-row="pct"]');
+    const timeRow = document.querySelector('#table-body tr[data-avg-row="time"]');
+    const partRow = document.querySelector('#table-body tr[data-avg-row="part"]');
+    if (!pointsRow || !pctRow || !timeRow || !partRow) return;
+
+    const getPts = (sid, taskId) => (overviewData.scores[sid] || {})[taskId] || 0;
+    const getSub = (sid, taskId) => !!overviewData.has_submitted?.[sid]?.[taskId];
+    const getTime = (sid, taskId) => (overviewData.solve_time?.[sid] || {})[taskId] || 0;
+    const fmtPts = v => v === null ? '—' : v.toFixed(1);
+    const fmtPct = v => v === null ? '—' : v.toFixed(1) + '%';
+    const fmtTime = v => v === null ? '—' : formatDuration(v);
+    const taskCell = (row, i, text) => {
+      const c = row.querySelector('td[data-task-idx="' + i + '"]');
+      if (c) c.textContent = text;
+    };
+
+    // Pro Aufgabe: Punkte, Anteil, Zeit (Ø/Md nur über Einreichungen) + Teilnahme
+    visibleTasks.forEach(i => {
+      const task = overviewData.tasks[i];
+      const submitted = sids.filter(sid => getSub(sid, task.id));
+
+      taskCell(pointsRow, i, fmtPts(agg(submitted.map(sid => getPts(sid, task.id)))));
+      taskCell(pctRow, i, task.max_points > 0
+        ? fmtPct(agg(submitted.map(sid => (getPts(sid, task.id) / task.max_points) * 100)))
+        : '—');
+      taskCell(timeRow, i, fmtTime(agg(submitted.map(sid => getTime(sid, task.id)))));
+      taskCell(partRow, i, count > 0 ? fmtPct(submitted.length / count * 100) : '—');
+    });
+
+    // Gesamt pro Student über die sichtbaren Aufgaben (für Summen-/Anteil)
+    const totals = sids.map(sid => {
+      let t = 0, any = false;
+      visibleTasks.forEach(i => {
+        const task = overviewData.tasks[i];
+        t += getPts(sid, task.id);
+        if (getSub(sid, task.id)) any = true;
+      });
+      return { total: t, any };
+    });
+    const withSub = totals.filter(x => x.any);
+    const maxTotal = [...visibleTasks].reduce((sum, i) => sum + overviewData.tasks[i].max_points, 0);
+
+    // Summe-Spalte (Gesamtpunkte) + Anteil-Spalte (Gesamtanteil), nur Einreichungen
+    const sumCell = pointsRow.querySelector('[data-avg-sum]');
+    if (sumCell) sumCell.textContent = fmtPts(agg(withSub.map(x => x.total)));
+    const pctCell = pctRow.querySelector('[data-avg-pct]');
+    if (pctCell) pctCell.textContent = maxTotal > 0
+      ? fmtPct(agg(withSub.map(x => (x.total / maxTotal) * 100))) : '—';
+
+    // Summe-Spalte (Zeit): Gesamtzeit pro Student, nur Studenten mit mind. 1 Einreichung
+    const timeTotals = [];
+    sids.forEach(sid => {
+      let t = 0, any = false;
+      visibleTasks.forEach(i => {
+        const task = overviewData.tasks[i];
+        if (getSub(sid, task.id)) { t += getTime(sid, task.id); any = true; }
+      });
+      if (any) timeTotals.push(t);
+    });
+    const timeSumCell = timeRow.querySelector('[data-avg-time-sum]');
+    if (timeSumCell) timeSumCell.textContent = fmtTime(agg(timeTotals));
+
+    // Teilnahme-Spalte Summe: % Studenten mit mind. 1 Einreichung (sichtbare Aufgaben)
+    const partSumCell = partRow.querySelector('[data-avg-part-sum]');
+    if (partSumCell) partSumCell.textContent = count > 0 ? fmtPct(withSub.length / count * 100) : '—';
+  }
+
+  // Ø/Md umschalten (Klick auf die linke Label-Zelle) + Werte + Label neu
+  function toggleAvgMode() {
+    avgMode = avgMode === 'mean' ? 'median' : 'mean';
+    const names = { points: 'Punkte', pct: 'Anteil', time: 'Zeit' };
+    const prefix = avgMode === 'mean' ? 'Ø ' : 'Md ';
+    document.querySelectorAll('#table-body td[data-avg-label]').forEach(td => {
+      td.textContent = prefix + names[td.dataset.avgLabel];
+    });
+    updateAvgRows();
   }
 
   // ─── Render Summary Stats ───────────────────────────────────
@@ -362,6 +536,7 @@
     renderStats(count, sumTotals, maxPts, minPts === Infinity ? 0 : minPts, passed, filterActive);
     document.getElementById('filter-no-tasks').classList.toggle('hidden', !(filterActive && visibleTasks.size === 0));
     document.getElementById('filter-no-results').classList.toggle('hidden', !(filterActive && count === 0));
+    updateAvgRows();
 
     // 3. Bei aktiver Sortierung nach Filteränderung neu sortieren
     //    (Summen haben sich ggf. geändert) — nur Zeilen umsortieren.
@@ -473,6 +648,12 @@
   document.getElementById('table-header').addEventListener('click', (e) => {
     const th = e.target.closest('th[data-sort]');
     if (th) toggleSort(th.dataset.sort);
+  });
+
+  // Ø/Md umschalten: Klick auf die linke Label-Zelle der Ø-Zeilen
+  document.getElementById('table-body').addEventListener('click', (e) => {
+    const td = e.target.closest('td[data-avg-label]');
+    if (td) toggleAvgMode();
   });
 
   // Review-Links: aktuelle Filter + Sortierung als Query-Parameter

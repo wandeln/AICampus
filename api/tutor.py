@@ -1161,12 +1161,14 @@ def _overview_data(
     has_override = {}  # { student_id: { task_id: bool } }
     has_submitted = {}  # { student_id: { task_id: bool } }
     has_feedback = {}  # { student_id: { task_id: bool } } — letzte Einreichung bereits bewertet
+    solve_time = {}  # { student_id: { task_id: seconds } } — Summe über alle Versuche
 
     for m in memberships:
         scores[m.user_id] = {}
         has_override[m.user_id] = {}
         has_submitted[m.user_id] = {}
         has_feedback[m.user_id] = {}
+        solve_time[m.user_id] = {}
         for task in tasks:
             subs = session.exec(
                 select(Submission)
@@ -1178,6 +1180,7 @@ def _overview_data(
             human_points = 0.0
             llm_points = 0.0
             override_exists = False
+            solve_time[m.user_id][task.id] = float(sum(s.solve_time_seconds or 0.0 for s in subs))
             if subs:
                 latest_sub = subs[0]  # newest
                 has_submitted[m.user_id][task.id] = True
@@ -1194,7 +1197,7 @@ def _overview_data(
             has_override[m.user_id][task.id] = override_exists
 
     max_total = sum(t.max_points for t in tasks)
-    return tasks, memberships, scores, has_override, has_submitted, has_feedback, max_total
+    return tasks, memberships, scores, has_override, has_submitted, has_feedback, max_total, solve_time
 
 
 @router.get("/courses/{course_id}/overview")
@@ -1212,7 +1215,7 @@ async def get_course_overview(
     type_filter = request.query_params.get("type_filter", "").strip()
     annotation_filter = request.query_params.get("annotation_filter", "").strip()
 
-    tasks, memberships, scores, has_override, has_submitted, has_feedback, max_total = _overview_data(
+    tasks, memberships, scores, has_override, has_submitted, has_feedback, max_total, solve_time = _overview_data(
         session, course_id, filter_text, type_filter, annotation_filter
     )
 
@@ -1244,6 +1247,7 @@ async def get_course_overview(
         "has_override": has_override,
         "has_submitted": has_submitted,
         "has_feedback": has_feedback,
+        "solve_time": solve_time,
         "max_total": max_total,
     }
 
@@ -1286,7 +1290,7 @@ async def get_course_live_stats(
     type_filter = request.query_params.get("type_filter", "").strip()
     annotation_filter = request.query_params.get("annotation_filter", "").strip()
 
-    tasks, memberships, scores, _has_override, has_submitted, _has_feedback, max_total = _overview_data(
+    tasks, memberships, scores, _has_override, has_submitted, _has_feedback, max_total, _solve_time = _overview_data(
         session, course_id, filter_text, type_filter, annotation_filter
     )
 
@@ -1375,7 +1379,7 @@ async def get_course_live_mc_stats(
     except McValidationError as e:
         raise HTTPException(400, str(e))
 
-    _tasks, memberships, _scores, _has_override, _has_submitted, _has_feedback, _max_total = _overview_data(
+    _tasks, memberships, _scores, _has_override, _has_submitted, _has_feedback, _max_total, _solve_time = _overview_data(
         session, course_id, filter_text, type_filter, annotation_filter
     )
 
