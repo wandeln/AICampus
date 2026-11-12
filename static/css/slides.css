@@ -214,7 +214,7 @@
    Schlicht wie die Arrows: transparent, schwarzes Gitter-Glyph,
    dezent sichtbar, bei Hover voll. display:none im PDF (wie
    Reveal's eigene Controls). */
- .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn) {
+ .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn, .slides-speaker-btn) {
    position: absolute;
    left: 12px;
    z-index: 11; /* wie .controls */
@@ -239,6 +239,14 @@
    top: 12px;
    right: 12px;
  }
+ .reveal .slides-speaker-btn {
+    left: auto;
+    top: 62px; /* 12 + 44 (Fullscreen) + 6 (Abstand) */
+    right: 12px;
+    /* Default: versteckt — nur sichtbar, wenn ?speaker=1 war und der
+       Popup-Blocker das Auto-Open verhindert hat (JS setzt display). */
+    display: none;
+  }
  .reveal .slides-pen-btn {
    bottom: 62px; /* 12 + 44 (Button) + 6 (Abstand) */
    /* PEN-Modus: der notescanvas (inline z-index 24) deckt z-11 ab und
@@ -253,15 +261,15 @@
  .reveal :is(.controls, .slides-overview-btn, .slides-fullscreen-btn) {
    z-index: 40;
  }
- .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn):hover {
+ .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn, .slides-speaker-btn):hover {
    opacity: 1;
    background: rgba(0, 0, 0, 0.06);
  }
- .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn):focus-visible {
+ .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn, .slides-speaker-btn):focus-visible {
    outline: 2px solid #2563eb;
    outline-offset: 1px;
  }
- html.print-pdf .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn) {
+ html.print-pdf .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn, .slides-speaker-btn) {
    display: none;
  }
 

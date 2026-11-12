@@ -79,7 +79,7 @@ body.aicampus-laser * {
   <a href="/courses/{{ course.id }}/slides">← Alle Folien</a>
   <span class="present-title">{{ deck.title }}</span>
   {% if is_tutor %}
-  <a href="/courses/{{ course.id }}/slides/{{ deck.id }}" title="Slide-Deck bearbeiten">✏️ Edit</a>
+  <a id="edit-deck-link" href="/courses/{{ course.id }}/slides/{{ deck.id }}" title="Slide-Deck bearbeiten">✏️ Edit</a>
   {% endif %}
   <button id="fullscreen-btn" title="Vollbild (oder F)">⛶</button>
   <a href="/courses/{{ course.id }}/slides/{{ deck.id }}/present?print-pdf" target="_blank">⬇️ PDF</a>
@@ -117,6 +117,16 @@ body.aicampus-laser * {
           <path d="M2 2h5v2H4V7H2z M9 2h5v5h-2V4H9z M2 9h2v3H7V14H2z M12 9H14v5h-5v-2h3z"></path>
         </svg>
       </button>
+      {# Speaker-View-Fallback (nur sichtbar, wenn ?speaker=1 gesetzt war
+         und der Browser das Popup blockiert hat — s. JS nach dem Mount). #}
+      {% if is_tutor %}
+      <button type="button" id="speaker-fallback-btn" class="slides-speaker-btn"
+              title="Speaker-View öffnen (Notizen + Folie)" aria-label="Speaker-View öffnen">
+        <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
+          <path d="M10 5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1a2 2 0 0 1 2 2zm1-3a3 3 0 0 0-3-3h-1a3 3 0 0 0-3 3v2a3 3 0 0 0 3 3h1a3 3 0 0 0 3-3zM12 6a1 1 0 1 0-2 0v1a1 1 0 1 0 2 0zm-9 5a7 7 0 0 0 5.39 6.78l.02.01A1 1 0 0 0 9 15v-1a1 1 0 0 0-.89-.99l-.01-.01A5 5 0 0 1 4 7H3zm4.4 7.46A1 1 0 0 0 8 15v-1a1 1 0 0 0-1-1z"></path>
+        </svg>
+      </button>
+      {% endif %}
    </div>
   {# Shortcuts-Panel: erscheint in der Reveal-Overview (Esc) oben rechts
      unterhalb der dunklen Toolbar (Toggling + Aktionen: s. JS unten). #}
@@ -188,6 +198,19 @@ function togglePageFullscreen() {
   if (!btn) return;
   btn.addEventListener("click", togglePageFullscreen);
 })();
+// Edit-Link: zur AKTUELLEN Folie — der Index wird per Query an den Editor
+// übergeben (?slide=<h> [&v=<v>]), dort als Start-Folie gelesen. Ohne
+// Instanz (noch kein Mount) bleibt der Link unverändert.
+document.getElementById("edit-deck-link")?.addEventListener("click", (e) => {
+  const inst = aicampusCurrentReveal;
+  if (!inst) return;
+  const idx = inst.getIndices();
+  e.preventDefault();
+  const url = new URL(e.currentTarget.href);
+  url.searchParams.set("slide", String(idx.h));
+  if (idx.v) url.searchParams.set("v", String(idx.v));
+  window.location.href = url.toString();
+});
 // Chalkboard (nur Tutoren/Profs): Strg/Cmd+Z nimmt den letzten Zug zurück,
 // Strg/Cmd+Y bzw. Strg/Cmd+Shift+Z wiederholt ihn.
 // Eigener document-Listener, weil Reveal Keydowns mit Modifikatoren
@@ -996,6 +1019,39 @@ async function aicampusDoMount() {
   aicampusRegisterSlideReveal(document.getElementById("reveal-root"), reveal);
   // MCP (get_user_focus): aktuelle Folie im Präsentationsmodus melden
   if (window.aicMcpWireReveal) aicMcpWireReveal(reveal, slidesEl);
+
+  // ?speaker=1 („Präsentieren"-Split-Button im Editor): Speaker-View direkt
+  // öffnen (dasselbe wie Taste S → Notes-Plugin). window.open ohne
+  // User-Gesture blockt der Popup-Blocker (die Navigation verbraucht sie)
+  // → dann den Ein-Klick-Fallback-Button in der Ecke zeigen.
+  // NICHT im Receiver-Iframe der Speaker-View selbst (dort ?receiver):
+  // ein Auto-Open dort würde über das benannte Fenster („reveal.js -
+  // Notes") das Speaker-Fenster selbst mit document.write überschreiben
+  // → weißes Fenster.
+  const _speakerParam = new URLSearchParams(window.location.search);
+  if (HAS_NOTES && !/receiver/i.test(window.location.search) && _speakerParam.get("speaker") === "1") {
+    // Vor dem Öffnen aus der URL entfernen: Das Notes-Plugin baut die
+    // Receiver-Iframe-URLs aus location.search — ein verbleibendes
+    // ?speaker=1 würde das Auto-Open dort erneut auslösen.
+    const _clean = new URL(window.location.href);
+    _clean.searchParams.delete("speaker");
+    history.replaceState(null, "", _clean.toString());
+    const _open = window.open;
+    let win = null;
+    window.open = function (...a) { win = _open.apply(window, a); return win; };
+    try { aicampusCurrentReveal.getPlugin("notes").open(); } catch (e) { win = null; }
+    window.open = _open;
+    if (!win) {
+      const fb = document.getElementById("speaker-fallback-btn");
+      if (fb) {
+        fb.style.display = "flex";
+        fb.addEventListener("click", () => {
+          try { if (aicampusCurrentReveal) aicampusCurrentReveal.getPlugin("notes").open(); } catch (e) {}
+          fb.style.display = "none";
+        }, { once: true });
+      }
+    }
+  }
 
   // Per-Slide-Transition: transition: fade|slide|zoom|none auf der ZIEL-Folie
   // gilt für den ganzen Wechsel (s. wirePerSlideTransitions in slides.js).

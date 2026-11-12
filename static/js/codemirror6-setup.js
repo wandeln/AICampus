@@ -857,12 +857,36 @@ class CM6Editor {
       return;
     }
     // Ziel AUSSERHALB des gerenderten Viewports: coordsAtPos liefert null
-    // (CM6 Virtual Rendering schätzt keine Höhen) → one-shot würde
-    // „eingefroren“ lassen. Dann den nativen CM6-Effect nehmen (wie vor
-    // dem Scroll-Sync-Tuning): der konvergiert intern über mehrere Frames
-    // und scrollt nur den Editor-Scroller, solange das Ziel darin
-    // darstellbar ist.
-    this.view.dispatch({ effects: EditorView.scrollIntoView(from, { y: "start" }) });
+    // (CM6 Virtual Rendering). Der native CM6-Effect allein ist hier
+    // NICHT verlässlich: Seine Viewport-Erweiterung schätzt die Zielposition
+    // über uniforme Zeilenhöhen (heightOracle) — bei lineWrapping sind
+    // umgebrochene Zeilen viel höher, und die Schätzung verfehlt das Ziel
+    // systematisch, je enger der Editor (Mobile). Dann wird die Zielzeile
+    // nie gerendert, der Effect scrollt gar nichts, und der Cursor sitzt
+    // auf der richtigen Zeile, aber der Viewport nicht. Deshalb: erst
+    // proportional annähern (Zeilenanteil × Content-Höhe), dann pro Frame
+    // exakt landen, sobald die Zielzeile gerendert ist.
+    scroller.scrollTop = Math.max(
+      0,
+      Math.round((n / Math.max(1, s.doc.lines - 1)) * (this.view.contentHeight || 0)),
+    );
+    const tryLand = (left) => {
+      if (!this.view) return;
+      const c = this.view.coordsAtPos(from);
+      if (c) {
+        // exakt, wie der one-shot-Pfad oben (Zeilen-Oberrand an Scroller-Top)
+        scroller.scrollTop = Math.max(0, c.top - this.view.documentTop);
+        return;
+      }
+      if (left <= 1) {
+        // Safety-Net (z. B. Editor noch nicht vollständig gemessen):
+        // CM6-Effect — der konvergiert intern über mehrere Frames.
+        this.view.dispatch({ effects: EditorView.scrollIntoView(from, { y: "start" }) });
+        return;
+      }
+      requestAnimationFrame(() => tryLand(left - 1));
+    };
+    requestAnimationFrame(() => tryLand(30));
   }
 
   getWrapperElement() { return this.wrapper; }

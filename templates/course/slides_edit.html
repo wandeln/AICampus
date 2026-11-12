@@ -74,10 +74,33 @@
       {% endif %}
     </div>
     <div class="flex gap-2 shrink-0 flex-wrap">
-      <a href="/courses/{{ course.id }}/slides/{{ material.id }}/present"
-         class="text-sm border border-blue-200 bg-blue-50 rounded-lg px-3 py-1.5 text-blue-700 hover:bg-blue-100 transition font-medium">
-        ▶ Präsentieren
-      </a>
+      {# Split-Button: Haupt-Teil = Präsentation ab AKTUELLER Folie
+         (Vorschau-Position); Dropdown = von Beginn / von Beginn mit
+         Speaker-View (?speaker=1 → Present-Seite öffnet die Speaker-
+         Window; Popup-Blocker → dort Ein-Klick-Button). #}
+      <div class="relative inline-flex" id="present-split">
+        <button type="button" id="present-now-btn"
+                data-base="/courses/{{ course.id }}/slides/{{ material.id }}/present"
+                title="Ab der aktuellen Folie präsentieren"
+                class="text-sm border border-blue-200 bg-blue-50 rounded-l-lg px-3 py-1.5 text-blue-700 hover:bg-blue-100 transition font-medium">
+          ▶ Präsentieren
+        </button>
+        <button type="button" id="present-menu-btn" aria-haspopup="true" aria-expanded="false"
+                title="Andere Startpunkte"
+                class="text-sm border border-l-0 border-blue-200 bg-blue-50 rounded-r-lg py-1.5 pl-1 pr-2 text-blue-700 hover:bg-blue-100 transition">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+        </button>
+        <div id="present-menu" class="hidden absolute right-0 top-full mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50">
+          <button type="button" data-present-start="begin"
+                  class="block w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-blue-50">
+            ▶ Von Beginn
+          </button>
+          <button type="button" data-present-start="begin-speaker"
+                  class="block w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-blue-50">
+            🎤 Von Beginn (mit Speaker-Modus)
+          </button>
+        </div>
+      </div>
       <a href="/courses/{{ course.id }}/slides/{{ material.id }}/present?print-pdf" target="_blank"
          class="text-sm border border-gray-300 rounded-lg px-3 py-1.5 text-gray-600 hover:bg-gray-50 transition">
         ⬇️ PDF
@@ -97,12 +120,68 @@
       {% endif %}
       {% if is_prof or is_admin %}
       <button onclick="deleteMaterial()" title="Slide-Deck löschen"
-              class="text-sm border border-red-200 rounded-lg px-3 py-1.5 text-red-600 hover:bg-red-50 transition">
+              class="text-sm border border-red-200 bg-red-50 rounded-lg px-3 py-1.5 text-red-600 hover:bg-red-50 transition">
         🗑️
       </button>
       {% endif %}
     </div>
   </div>
+
+  <script>
+  // „Präsentieren"-Split-Button: Haupt-Button startet ab der AKTUELLEN
+  // Folie (Index der eingebetteten Vorschau), das Dropdown ab Folie 1 —
+  // optional mit Speaker-View (?speaker=1).
+  (function () {
+    const wrap = document.getElementById("present-split");
+    if (!wrap) return;
+    const nowBtn = document.getElementById("present-now-btn");
+    const menuBtn = document.getElementById("present-menu-btn");
+    const menu = document.getElementById("present-menu");
+    const base = nowBtn.dataset.base;
+    const currentIdx = () => {
+      try {
+        const i = window.__aicampusPreviewReveal && window.__aicampusPreviewReveal.getIndices();
+        if (i) return i;
+      } catch (e) { /* Vorschau noch nicht bereit */ }
+      return null;
+    };
+    const go = (mode) => {
+      let url = base;
+      if (mode === "current") {
+        const idx = currentIdx();
+        if (idx) url += "#" + "/" + idx.h + (idx.v ? "/" + idx.v : "");
+      } else if (mode === "begin-speaker") {
+        url += "?speaker=1";
+      }
+      window.location.href = url;
+    };
+    const setMenu = (open) => {
+      menu.classList.toggle("hidden", !open);
+      menuBtn.setAttribute("aria-expanded", String(open));
+      if (open) {
+        // Default (CSS right-0): das Menü ragt nach LINKS. Steht die
+        // Button-Gruppe auf schmalen Viewports (Handy) am linken Rand,
+        // wird es dort abgeschnitten → dann an der linken Kante ankeren.
+        // (256px Breite passt in jede Richtung auf jedem Viewport ≥ 272px.)
+        menu.style.left = "";
+        menu.style.right = "";
+        if (menu.getBoundingClientRect().left < 8) {
+          menu.style.left = "0";
+          menu.style.right = "auto";
+        }
+      }
+    };
+    nowBtn.addEventListener("click", () => go("current"));
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setMenu(menu.classList.contains("hidden"));
+    });
+    menu.querySelectorAll("[data-present-start]").forEach((b) =>
+      b.addEventListener("click", () => { const m = b.dataset.presentStart; setMenu(false); go(m); }));
+    document.addEventListener("click", (e) => { if (!wrap.contains(e.target)) setMenu(false); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") setMenu(false); });
+  })();
+  </script>
 
   {% if is_tutor or is_admin %}
   <!-- ═══ Tutor/PROF: 2-Spalten-Layout (links LLM+Preview, rechts Titel+Editor) ═══
@@ -607,10 +686,23 @@
   // vorherigen Folie nach einem Re-Render (unten in renderPreview) ist
   // keine bewusste Navigation und darf den Editor nicht springen lassen.
   let pendingSkipSlide = null;
+  // Start-Folie aus der URL (Edit-Link der Präsentation: ?slide=<h>&v=<v>)
+  // → Preview UND Editor öffnen direkt auf dieser Folie.
+  const urlSlideSeed = (() => {
+    const q = new URLSearchParams(window.location.search);
+    const h = parseInt(q.get("slide"), 10);
+    const v = parseInt(q.get("v"), 10);
+    return Number.isFinite(h) && h >= 0
+      ? { h, v: Number.isFinite(v) && v > 0 ? v : 0 }
+      : null;
+  })();
   // Letzte Nutzer-Navigation (vorheriges Deck): Fallback für den
   // Position-Restore, wenn die alte Preview-Instanz schon weg ist, weil
   // der Render, der ihren Index erfasst hat, im Build überholt wurde.
-  let lastViewedIndex = { h: 0, v: 0 };
+  // Beim Erstladen evtl. durch den URL-Seed vorbelegt.
+  let lastViewedIndex = urlSlideSeed
+    ? { h: urlSlideSeed.h, v: urlSlideSeed.v }
+    : { h: 0, v: 0 };
   // Content, zu dem der Editor nach dem Re-Render auf die Zeile der
   // aktuellen Folie ausgerichtet werden soll (LLM-Update). Content-Vergleich
   // statt Boolean, weil der Render, für den die Ausrichtung gedacht ist,
@@ -958,9 +1050,27 @@
         const rv = Math.min(restoreIdx.v || 0, subCount - 1);
         // Editor-Jump unterdrücken: das ist nur die Wiederherstellung der
         // vorherigen Folie, keine bewusste Navigation (transition:none →
-        // ohne Flash).
-        pendingSkipSlide = { h: rh, v: rv };
+        // ohne Flash). AUSNAHME: URL-Seed beim Erstladen (kein prevIndex) —
+        // genau diese Folie soll im Editor sichtbar werden.
+        if (prevIndex || !urlSlideSeed) pendingSkipSlide = { h: rh, v: rv };
         try { inst.slide(rh, rv, restoreIdx.f); } catch (e) { /* ignore */ }
+        // URL-Seed beim Erstladen: verzögert NACHLANDET. Beim unmittelbaren
+        // Jump ist der Editor auf langsamen Netzen (Mobile) manchmal noch
+        // nicht voll einsatzbereit (CM6-Modul/Fonts) → der Scroll geht
+        // verloren. Falls bis dahin nicht navigiert wurde, erneut springen.
+        if (!prevIndex && urlSlideSeed) {
+          setTimeout(() => {
+            if (seq !== previewSeq) return;
+            if (lastViewedIndex.h !== rh || (lastViewedIndex.v || 0) !== rv) return;
+            if (!cmContent) return;
+            const entry = lineMap[rh];
+            if (!entry) return;
+            const line = entry.subs && (lastViewedIndex.v || 0) < entry.subs.length
+              ? entry.subs[lastViewedIndex.v || 0]
+              : entry.line;
+            if (line != null) cmContent.scrollToLineTop(Math.min(line, cmContent.lastLine()));
+          }, 1500);
+        }
       }
       // Per-Slide-Transition (transition: fade|slide|zoom|none): pro Instanz,
       // NACH dem Restore-Jump oben — der Restore (Programm-Navigation nach

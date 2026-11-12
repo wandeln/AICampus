@@ -158,6 +158,16 @@
       if (!this.wrapper.isConnected || !this.wrapper.contains(this.ta) || !this.ta.isConnected) return null;
       const impl = new EditorClass(this.ta, this.cfg, this.wrapper);
       impl._handlers = this._handlers; // registrierte Listener übertragen
+      // Cursor aus der Fallback-Phase übernehmen: ein Folien-Jump
+      // (scrollToLineTop) kann im Platzhalter-Textarea angewendet worden
+      // sein, bevor das CM6-Modul geladen war — sonst würde der Upgrade
+      // (frischer State, Cursor/Scroll oben) den Jump verwerfen. Auf
+      // Mobilnetzen ist das CM6-Modul (CDN) oft langsamer als der lokale
+      // Content-Fetch → genau dieses Race.
+      const sel = this.ta.selectionStart;
+      if (sel != null && sel > 0) {
+        try { impl.scrollToLineTop(lineOf(this.ta.value, sel)); } catch (err) { /* ignore */ }
+      }
       this.ta.removeEventListener("input", this._inputHandler);
       this.wrapper.classList.remove("ta-cm-fallback");
       this._impl = impl;
