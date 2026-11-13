@@ -1156,7 +1156,44 @@ def _overview_data(
     if type_filter:
         tasks = [t for t in tasks if t.task_type.value == type_filter]
 
-    # Scores berechnen
+    # Scores berechnen — batched (2 Queries statt einer pro Student/Aufgabe-Paar).
+    # Früher: N×M Submission-Queries + N×M Lazy-Load-Queries für feedback_list.
+    task_ids = [t.id for t in tasks]
+    student_ids = [m.user_id for m in memberships]
+
+    # Alle Einreichungen (nur nötige Spalten, keine solution-Texte) für die
+    # sichtbaren Aufgaben/Studenten in einer Query. Aufsteigend sortiert →
+    # das jeweils letzte Paar ist die neueste Einreichung (id als Tiebreak).
+    pair_solve: dict[tuple[int, int], float] = {}    # Summe solve_time je Paar
+    pair_latest: dict[tuple[int, int], int] = {}      # id der neuesten Einreichung je Paar
+    if task_ids and student_ids:
+        rows = session.execute(
+            select(
+                Submission.student_id,
+                Submission.task_id,
+                Submission.id,
+                Submission.submitted_at,
+                Submission.solve_time_seconds,
+            )
+            .where(Submission.task_id.in_(task_ids))  # type: ignore[attr-defined]
+            .where(Submission.student_id.in_(student_ids))  # type: ignore[attr-defined]
+            .order_by(Submission.submitted_at.asc(), Submission.id.asc())  # type: ignore[attr-defined]
+        ).all()
+        for _sid, _tid, _sub_id, _sub_at, _solve in rows:
+            key = (_sid, _tid)
+            pair_solve[key] = pair_solve.get(key, 0.0) + (_solve or 0.0)
+            pair_latest[key] = _sub_id  # aufsteigend → letztes gewinnt
+
+    # Feedback nur für die jeweils neuesten Einreichungen (1 Query).
+    fb_by_sub: dict[int, list[Feedback]] = {}
+    latest_ids = list(pair_latest.values())
+    if latest_ids:
+        for fb in session.exec(
+            select(Feedback)
+            .where(Feedback.submission_id.in_(latest_ids))  # type: ignore[attr-defined]
+        ).all():
+            fb_by_sub.setdefault(fb.submission_id, []).append(fb)
+
     scores = {}  # { student_id: { task_id: points } }
     has_override = {}  # { student_id: { task_id: bool } }
     has_submitted = {}  # { student_id: { task_id: bool } }
@@ -1164,37 +1201,33 @@ def _overview_data(
     solve_time = {}  # { student_id: { task_id: seconds } } — Summe über alle Versuche
 
     for m in memberships:
-        scores[m.user_id] = {}
-        has_override[m.user_id] = {}
-        has_submitted[m.user_id] = {}
-        has_feedback[m.user_id] = {}
-        solve_time[m.user_id] = {}
+        sid = m.user_id
+        scores[sid] = {}
+        has_override[sid] = {}
+        has_submitted[sid] = {}
+        has_feedback[sid] = {}
+        solve_time[sid] = {}
         for task in tasks:
-            subs = session.exec(
-                select(Submission)
-                .where(Submission.task_id == task.id)
-                .where(Submission.student_id == m.user_id)
-                .order_by(Submission.submitted_at.desc())  # type: ignore[attr-defined]
-            ).all()
+            key = (sid, task.id)
+            solve_time[sid][task.id] = float(pair_solve.get(key, 0.0))
 
             human_points = 0.0
             llm_points = 0.0
             override_exists = False
-            solve_time[m.user_id][task.id] = float(sum(s.solve_time_seconds or 0.0 for s in subs))
-            if subs:
-                latest_sub = subs[0]  # newest
-                has_submitted[m.user_id][task.id] = True
-                has_feedback[m.user_id][task.id] = bool(latest_sub.feedback_list)
-                for fb in latest_sub.feedback_list:
+            latest_id = pair_latest.get(key)
+            if latest_id is not None:
+                has_submitted[sid][task.id] = True
+                latest_fb = fb_by_sub.get(latest_id, [])
+                has_feedback[sid][task.id] = bool(latest_fb)
+                for fb in latest_fb:
                     if fb.source == FeedbackSource.HUMAN:
                         human_points = max(human_points, fb.points_earned)
                         override_exists = True
                     else:
                         llm_points = max(llm_points, fb.points_earned)
 
-            point_val = human_points if override_exists else llm_points
-            scores[m.user_id][task.id] = point_val
-            has_override[m.user_id][task.id] = override_exists
+            scores[sid][task.id] = human_points if override_exists else llm_points
+            has_override[sid][task.id] = override_exists
 
     max_total = sum(t.max_points for t in tasks)
     return tasks, memberships, scores, has_override, has_submitted, has_feedback, max_total, solve_time
@@ -1219,11 +1252,19 @@ async def get_course_overview(
         session, course_id, filter_text, type_filter, annotation_filter
     )
 
+    task_ids = [t.id for t in tasks]
+    student_ids = [m.user_id for m in memberships]
+
+    # User in einer Query laden (statt m.user → N+1 Lazy-Loads)
+    users = {u.id: u for u in session.exec(select(User).where(User.id.in_(student_ids))).all()} if student_ids else {}
+
     # Gesamtprozent pro Student
     student_list = []
     for m in memberships:
-        student = m.user
-        total = sum(scores[student.id].get(t.id, 0) for t in tasks)
+        student = users.get(m.user_id)
+        if student is None:
+            continue
+        total = sum(scores[m.user_id].get(t.id, 0) for t in tasks)
         student_list.append({
             "id": student.id,
             "username": student.username,
@@ -1233,8 +1274,6 @@ async def get_course_overview(
         })
 
     # Anzahl Socratic-Hints pro Student/Aufgabe (alle Requests; leeres Dict = 0)
-    task_ids = [t.id for t in tasks]
-    student_ids = [m.user_id for m in memberships]
     hint_counts = {sid: {} for sid in student_ids}
     if task_ids and student_ids:
         for he in session.exec(
