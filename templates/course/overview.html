@@ -319,7 +319,14 @@
     html += taskCols();
     html += '<td data-avg-time-sum class="' + sumCellCls + '"></td>';
     html += '<td class="' + sumCellCls + ' text-gray-400">—</td></tr>';
-    // Zeile 4: Teilnahmequote (% der sichtbaren Studenten mit Einreichung).
+    // Zeile 4: Anzahl Socratic-Hints (Summe über alle Studenten, kein Ø/Md)
+    html += '<tr class="' + rowClass + '" data-avg-row="hints">';
+    html += '<td class="' + labelBase + '" title="Anzahl der Socratic-Hint-Requests (Summe über alle sichtbaren Studierenden)">Anzahl Hinweise</td>';
+    html += '<td class="' + emptyCell + '"></td><td class="' + emptyCell + '"></td>';
+    html += taskCols();
+    html += '<td data-avg-hints-sum class="' + sumCellCls + '"></td>';
+    html += '<td class="' + sumCellCls + ' text-gray-400">—</td></tr>';
+    // Zeile 5: Teilnahmequote (% der sichtbaren Studenten mit Einreichung).
     // Gesamtquote steht in der Anteil-Spalte (rechtste), da es ein %-Wert ist.
     html += '<tr class="' + rowClass + '" data-avg-row="part">';
     html += '<td class="' + labelBase + '" title="Anteil der sichtbaren Studierenden mit mindestens einer Einreichung">Teilnahme</td>';
@@ -355,20 +362,24 @@
     const pctRow = document.querySelector('#table-body tr[data-avg-row="pct"]');
     const timeRow = document.querySelector('#table-body tr[data-avg-row="time"]');
     const partRow = document.querySelector('#table-body tr[data-avg-row="part"]');
-    if (!pointsRow || !pctRow || !timeRow || !partRow) return;
+    const hintsRow = document.querySelector('#table-body tr[data-avg-row="hints"]');
+    if (!pointsRow || !pctRow || !timeRow || !partRow || !hintsRow) return;
 
     const getPts = (sid, taskId) => (overviewData.scores[sid] || {})[taskId] || 0;
     const getSub = (sid, taskId) => !!overviewData.has_submitted?.[sid]?.[taskId];
     const getTime = (sid, taskId) => (overviewData.solve_time?.[sid] || {})[taskId] || 0;
+    const getHint = (sid, taskId) => (overviewData.hint_counts?.[sid] || {})[taskId] || 0;
     const fmtPts = v => v === null ? '—' : v.toFixed(1);
     const fmtPct = v => v === null ? '—' : v.toFixed(1) + '%';
     const fmtTime = v => v === null ? '—' : formatDuration(v);
+    const fmtCnt = v => v === null ? '—' : (Number.isInteger(v) ? String(v) : v.toFixed(1));
     const taskCell = (row, i, text) => {
       const c = row.querySelector('td[data-task-idx="' + i + '"]');
       if (c) c.textContent = text;
     };
 
-    // Pro Aufgabe: Punkte, Anteil, Zeit (Ø/Md nur über Einreichungen) + Teilnahme
+    // Pro Aufgabe: Punkte, Anteil, Zeit (Ø/Md nur über Einreichungen),
+    // Hinweise (Summe über alle Studenten) und Teilnahme (%)
     visibleTasks.forEach(i => {
       const task = overviewData.tasks[i];
       const submitted = sids.filter(sid => getSub(sid, task.id));
@@ -378,6 +389,7 @@
         ? fmtPct(agg(submitted.map(sid => (getPts(sid, task.id) / task.max_points) * 100)))
         : '—');
       taskCell(timeRow, i, fmtTime(agg(submitted.map(sid => getTime(sid, task.id)))));
+      taskCell(hintsRow, i, count > 0 ? fmtCnt(sids.reduce((a, sid) => a + getHint(sid, task.id), 0)) : '—');
       taskCell(partRow, i, count > 0 ? fmtPct(submitted.length / count * 100) : '—');
     });
 
@@ -417,6 +429,14 @@
     // Teilnahme-Spalte Summe: % Studenten mit mind. 1 Einreichung (sichtbare Aufgaben)
     const partSumCell = partRow.querySelector('[data-avg-part-sum]');
     if (partSumCell) partSumCell.textContent = count > 0 ? fmtPct(withSub.length / count * 100) : '—';
+
+    // Summe-Spalte (Hinweise): Gesamtzahl der Hints über die sichtbaren Aufgaben
+    let hintSum = 0;
+    sids.forEach(sid => {
+      visibleTasks.forEach(i => { hintSum += getHint(sid, overviewData.tasks[i].id); });
+    });
+    const hintsSumCell = hintsRow.querySelector('[data-avg-hints-sum]');
+    if (hintsSumCell) hintsSumCell.textContent = count > 0 ? fmtCnt(hintSum) : '—';
   }
 
   // Ø/Md umschalten (Klick auf die linke Label-Zelle) + Werte + Label neu

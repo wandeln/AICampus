@@ -1232,6 +1232,18 @@ async def get_course_overview(
             "annotation": m.annotation,
         })
 
+    # Anzahl Socratic-Hints pro Student/Aufgabe (alle Requests; leeres Dict = 0)
+    task_ids = [t.id for t in tasks]
+    student_ids = [m.user_id for m in memberships]
+    hint_counts = {sid: {} for sid in student_ids}
+    if task_ids and student_ids:
+        for he in session.exec(
+            select(HintExchange)
+            .where(HintExchange.task_id.in_(task_ids))  # type: ignore[attr-defined]
+            .where(HintExchange.student_id.in_(student_ids))  # type: ignore[attr-defined]
+        ).all():
+            hint_counts[he.student_id][he.task_id] = hint_counts[he.student_id].get(he.task_id, 0) + 1
+
     return {
         "tasks": [
             {
@@ -1248,6 +1260,7 @@ async def get_course_overview(
         "has_submitted": has_submitted,
         "has_feedback": has_feedback,
         "solve_time": solve_time,
+        "hint_counts": hint_counts,
         "max_total": max_total,
     }
 
