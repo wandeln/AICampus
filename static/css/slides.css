@@ -996,9 +996,13 @@ html.print-pdf .reveal .slides .markdown-preview pre {
 /* Kacheln in slides.html (Deck-Übersicht): echte Reveal-Mini-Präsentation
    (.slides-preview-shell) + Empty-State für leere Decks. */
 /* Vorschau füllt die Kachel bis an die Kante — keine eigenen Rundungen
-   (an den Seitenrand attacht wäre sonst doppelt abgerundet). */
+   (an den Seitenrand attacht wäre sonst doppelt abgerundet).
+   isolation: die Kachel ist ein geschlossener Stacking-Kontext — die
+   PEN-Modus-z-40 der .controls (s. oben) wirkt sonst im Root-Kontext und
+   malt beim Scrollen über die sticky Tab-Bar (z-30) hinaus. */
 .deck-preview {
   border-radius: 0;
+  isolation: isolate;
 }
 
 /* Semitransparentes Lade-Overlay während des Mini→Voll-Upgrades
