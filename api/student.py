@@ -1093,80 +1093,86 @@ async def get_my_points(
     if status_filter in ("open", "processed"):
         tasks = _filter_status(tasks, session, user.id, status_filter)
 
+    # Batched: alle Einreichungen (gefilterte Aufgaben x alle Kurs-Studenten)
+    # in 2 Queries statt einer pro (Student x Aufgabe) — deckt die eigene
+    # Aufgabenliste UND das Kurs-Perzentil ab.
+    student_members = session.exec(
+        select(UserCourse)
+        .where(UserCourse.course_id == course_id)
+        .where(UserCourse.role_in_course == CourseRole.STUDENT)
+    ).all()
+    student_ids = [m.user_id for m in student_members]
+    if user.id not in student_ids:
+        student_ids.append(user.id)
+    task_ids = [t.id for t in tasks]
+
+    pair_count: dict[tuple[int, int], int] = {}   # Anzahl Versuche je (Student, Aufgabe)
+    pair_latest: dict[tuple[int, int], int] = {}   # id der neuesten Einreichung je Paar
+    if task_ids and student_ids:
+        rows = session.execute(
+            select(
+                Submission.student_id,
+                Submission.task_id,
+                Submission.id,
+                Submission.submitted_at,
+            )
+            .where(Submission.task_id.in_(task_ids))  # type: ignore[attr-defined]
+            .where(Submission.student_id.in_(student_ids))  # type: ignore[attr-defined]
+            .order_by(Submission.submitted_at.asc(), Submission.id.asc())  # type: ignore[attr-defined]
+        ).all()
+        for _sid, _tid, _sub_id, _sub_at in rows:
+            key = (_sid, _tid)
+            pair_count[key] = pair_count.get(key, 0) + 1
+            pair_latest[key] = _sub_id  # aufsteigend → letztes gewinnt
+
+    latest_ids = list(pair_latest.values())
+    fb_by_sub: dict[int, list[Feedback]] = {}
+    if latest_ids:
+        for fb in session.exec(
+            select(Feedback).where(Feedback.submission_id.in_(latest_ids))  # type: ignore[attr-defined]
+        ).all():
+            fb_by_sub.setdefault(fb.submission_id, []).append(fb)
+
+    def _points_for(sid: int, tid: int) -> float:
+        latest_id = pair_latest.get((sid, tid))
+        if latest_id is None:
+            return 0.0
+        hp = lp = 0.0
+        ov = False
+        for fb in fb_by_sub.get(latest_id, []):
+            if fb.source == FeedbackSource.HUMAN:
+                hp = max(hp, fb.points_earned)
+                ov = True
+            else:
+                lp = max(lp, fb.points_earned)
+        return hp if ov else lp
+
     task_list = []
     total_points = 0.0
     max_points = 0
-
     for task in tasks:
         max_points += task.max_points
-        subs = session.exec(
-            select(Submission)
-            .where(Submission.task_id == task.id)
-            .where(Submission.student_id == user.id)
-            .order_by(Submission.submitted_at.desc())  # type: ignore[attr-defined]
-        ).all()
-
-        human_points = 0.0
-        llm_points = 0.0
-        override_exists = False
-        has_feedback = False
-        if subs:
-            latest_sub = subs[0]  # newest
-            for fb in latest_sub.feedback_list:
-                has_feedback = True
-                if fb.source == FeedbackSource.HUMAN:
-                    human_points = max(human_points, fb.points_earned)
-                    override_exists = True
-                else:
-                    llm_points = max(llm_points, fb.points_earned)
-        my_points = human_points if override_exists else llm_points
-
+        my_points = _points_for(user.id, task.id)
         total_points += my_points
-
+        latest_id = pair_latest.get((user.id, task.id))
         task_list.append({
             "id": task.id,
             "title": task.title,
             "task_type": task.task_type.value,
             "max_points": task.max_points,
             "max_attempts": task.max_attempts,
-            "attempts_used": len(subs),
+            "attempts_used": pair_count.get((user.id, task.id), 0),
             "deadline": deadline_iso(task.deadline),
             "my_points": my_points,
-            "has_feedback": has_feedback,
+            "has_feedback": bool(fb_by_sub.get(latest_id, [])) if latest_id is not None else False,
         })
 
-    # Berechne Perzentil im Kurs: Gesamtpunkte der gefilterten Aufgaben vergleichen
-    student_members = session.exec(
-        select(UserCourse)
-        .where(UserCourse.course_id == course_id)
-        .where(UserCourse.role_in_course == CourseRole.STUDENT)
-    ).all()
-
-    other_total_scores = []
-    for member in student_members:
-        if member.user_id == user.id:
-            continue
-        member_total = 0.0
-        for task in tasks:  # Gefilterte Aufgaben (konsistent mit total_points)
-            m_subs = session.exec(
-                select(Submission)
-                .where(Submission.task_id == task.id)
-                .where(Submission.student_id == member.user_id)
-                .order_by(Submission.submitted_at.desc())  # type: ignore[attr-defined]
-            ).all()
-            if m_subs:
-                m_latest = m_subs[0]
-                m_human = 0.0
-                m_llm = 0.0
-                m_override = False
-                for fb in m_latest.feedback_list:
-                    if fb.source == FeedbackSource.HUMAN:
-                        m_human = max(m_human, fb.points_earned)
-                        m_override = True
-                    else:
-                        m_llm = max(m_llm, fb.points_earned)
-                member_total += m_human if m_override else m_llm
-        other_total_scores.append(member_total)
+    # Perzentil: Gesamtpunkte der anderen Studenten über die gefilterten Aufgaben
+    other_total_scores = [
+        sum(_points_for(m.user_id, t.id) for t in tasks)
+        for m in student_members
+        if m.user_id != user.id
+    ]
 
     below = sum(1 for s in other_total_scores if s < total_points)
     equal = sum(1 for s in other_total_scores if s == total_points)
