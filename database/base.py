@@ -163,6 +163,9 @@ def migrate_schema():
         "courses": {
             "toc_visible": "BOOLEAN DEFAULT 1",  # Inhaltsverzeichnis für Studenten sichtbar
             "deleted_at": "DATETIME",  # Soft Delete (null = aktiv)
+            # short_info kommt aus dem Rename (s. column_renames) — hier NICHT
+            # ergänzen, sonst würde sie doppelt angelegt und das Rename übersprungen.
+            "teaser_media_id": "INTEGER",  # Teaser-Medium aus den Kurs-Medien (null = ohne)
         },
         "tasks": {
             # (Legacy-Spalten workspace_spec/workspace_dataset wurden mit dem
@@ -261,6 +264,8 @@ def migrate_schema():
         # Code-Aufgaben entfernt (2026-10): Spalte speichert nur noch die
         # MC-Antworten (mc:v1:<json>-Payload).
         "submissions": {"code_solution": "mc_answers"},
+        # Semester-Label ist optional und frei nutzbar (Kurs-Label/Modulnummer).
+        "courses": {"semester": "short_info"},
     }
     is_sqlite = "sqlite" in DATABASE_URL
 

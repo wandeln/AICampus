@@ -178,7 +178,7 @@ def main() -> None:
             if older_than is not None:
                 stmt = stmt.where(Course.deleted_at < older_than)
             for c in session.exec(stmt).all():
-                label = (f"[course  ] id={c.id:4}  {c.name!r} ({c.semester})  "
+                label = (f"[course  ] id={c.id:4}  {c.name!r} ({c.short_info})  "
                          f"(gelöscht {c.deleted_at:%d.%m.%Y})")
                 course_plan.append((c.id, label, _course_bytes(session, c.id)))
 

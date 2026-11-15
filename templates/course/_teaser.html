@@ -1,0 +1,21 @@
+{# ─────────────────────────────────────────────────────────────────────
+   Kurs-Teaser (Medium aus der Kurs-Medienbibliothek).
+   Kontext: teaser = {url, mime_type, media_type} oder None/leer.
+   Rendering: Video stumm loopend, Applet im Sandbox-Iframe (wie im
+   Skript), alles andere (Bilder, SVG) als <img>.
+   ───────────────────────────────────────────────────────────────────── #}
+{% macro course_teaser(teaser) %}
+{% if teaser %}
+<div class="w-full aspect-video overflow-hidden bg-gray-100">
+  {% if teaser.mime_type.startswith("video/") %}
+  <video src="{{ teaser.url }}" muted loop playsinline autoplay
+         class="w-full h-full object-cover"></video>
+  {% elif teaser.media_type == "applet" %}
+  <iframe src="{{ teaser.url }}" sandbox="allow-scripts" title="Kurs-Teaser"
+          class="w-full h-full border-0 bg-white"></iframe>
+  {% else %}
+  <img src="{{ teaser.url }}" alt="" class="w-full h-full object-cover">
+  {% endif %}
+</div>
+{% endif %}
+{% endmacro %}

@@ -23,7 +23,7 @@ from sqlmodel import Session, select
 
 from config import MEDIA_DIR
 from database.base import get_session
-from database.models import CourseMedia, CourseRole, MediaUsage, ScriptSection, User
+from database.models import Course, CourseMedia, CourseRole, MediaUsage, ScriptSection, User
 from services.auth_service import require_course_access
 from services.llm_service import LLMService
 from services.settings_resolver import get_effective_llm_config
@@ -1025,6 +1025,12 @@ async def delete_media(
     media_type = media.media_type
 
     trash_service.soft_delete(session, media)
+    # Teaser-Verweis auflösen, wenn dieses Medium der Kurs-Teaser war
+    course = session.get(Course, course_id)
+    if course and course.teaser_media_id == media.id:
+        course.teaser_media_id = None
+        session.add(course)
+        session.commit()
     # Live-Update: offene Medien-Listen/Studio-Tabs entfernen die Kachel.
     # (media_id aus dem Path — `media.id` wäre nach dem Commit expired)
     notifications.push_content_updated(

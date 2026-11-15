@@ -45,7 +45,7 @@
           {% for c in courses %}
           <label class="flex items-center gap-2 text-sm text-gray-700">
             <input type="checkbox" name="course" value="{{ c.id }}" checked>
-            <span>{{ c.name }} <span class="text-gray-400 text-xs">({{ c.semester }})</span></span>
+            <span>{{ c.name }}{% if c.short_info %} <span class="text-gray-400 text-xs">({{ c.short_info }})</span>{% endif %}</span>
           </label>
           {% else %}
           <p class="text-sm text-gray-400">Du bist aktuell Mitglied in keinem Kurs.</p>

@@ -429,7 +429,7 @@ async def aicampus_mcp_instructions(ctx: Context) -> str:
 
 @mcp_tool
 async def list_courses(ctx: Context) -> str:
-    """Alle für dieses Token freigegebenen Kurse (ID, Name, Semester, deine Rolle).
+    """Alle für dieses Token freigegebenen Kurse (ID, Name, Kurzbeschreibung, deine Rolle).
 
     Erst aufrufen, um das course_id für alle anderen Tools zu ermitteln."""
     with Session(engine) as session:
@@ -457,7 +457,7 @@ async def list_courses(ctx: Context) -> str:
             courses.append({
                 "course_id": course.id,
                 "name": course.name,
-                "semester": course.semester,
+                "short_info": course.short_info,
                 "role": ROLE_LABELS[role],
             })
         return _json({
@@ -692,7 +692,7 @@ async def course_overview(course_id: int, ctx: Context) -> str:
         ).one()
 
         out = {
-            "course": {"course_id": course.id, "name": course.name, "semester": course.semester},
+            "course": {"course_id": course.id, "name": course.name, "short_info": course.short_info},
             "script_sections": section_list,
             "slide_decks_and_scripts": deck_list,
             "tasks": task_list,

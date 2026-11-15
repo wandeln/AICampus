@@ -17,6 +17,7 @@ from database.base import get_session
 from database.models import (
     Course,
     CourseInvite,
+    CourseMedia,
     CourseRole,
     GlobalUserRole,
     User,
@@ -289,13 +290,15 @@ async def update_course_name(
     auth_result: tuple = Depends(require_prof_or_admin()),
 ):
     """
-    Kurstitel, Beschreibung und Semester beschreiben (PROF oder Admin).
+    Kurstitel, Beschreibung, Kurzbeschreibung und Teaser-Medium setzen
+    (PROF oder Admin).
 
     Request:
         {
             "name": "Neuer Kurstitel",
             "description": "Neue Beschreibung",
-            "semester": "WS 2025/26",
+            "short_info": "WS 2025/26",
+            "teaser_media_id": 42,   # null = Teaser entfernen
         }
     """
     course = session.get(Course, course_id)
@@ -307,8 +310,17 @@ async def update_course_name(
         course.name = body["name"]
     if "description" in body:
         course.description = body["description"]
-    if "semester" in body:
-        course.semester = body["semester"]
+    if "short_info" in body:
+        course.short_info = str(body["short_info"] or "").strip()[:50]
+    if "teaser_media_id" in body:
+        tid = body["teaser_media_id"]
+        if tid is None:
+            course.teaser_media_id = None
+        else:
+            media = session.get(CourseMedia, int(tid))
+            if not media or media.deleted_at is not None or media.course_id != course_id:
+                raise HTTPException(400, "Teaser-Medium gehört nicht zu diesem Kurs.")
+            course.teaser_media_id = media.id
 
     session.add(course)
     session.commit()
@@ -320,7 +332,8 @@ async def update_course_name(
             "id": course.id,
             "name": course.name,
             "description": course.description,
-            "semester": course.semester,
+            "short_info": course.short_info,
+            "teaser_media_id": course.teaser_media_id,
         },
     }
 
@@ -332,7 +345,7 @@ async def update_course_name(
 class CourseDuplicateRequest(BaseModel):
     name: str
     description: str
-    semester: str
+    short_info: str = ""
 
 
 @router.post("/courses/{course_id}/duplicate")
@@ -353,7 +366,7 @@ async def duplicate_course(
         raise HTTPException(404, "Kurs nicht gefunden.")
 
     result = course_service.duplicate_course_content(
-        session, user, course, data.name, data.description, data.semester
+        session, user, course, data.name, data.description, data.short_info
     )
     new_course = result["course"]
     return {
@@ -361,7 +374,7 @@ async def duplicate_course(
         "course": {
             "id": new_course.id,
             "name": new_course.name,
-            "semester": new_course.semester,
+            "short_info": new_course.short_info,
             "task_count": result["task_count"],
             "section_count": result["section_count"],
             "material_count": result["material_count"],

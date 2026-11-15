@@ -24,7 +24,7 @@ class _FakeRequest:
     url = _FakeUrl()
 
 
-COURSE = {"id": 1, "name": "ML-Kurs", "semester": "SS 2026", "description": "Dummy"}
+COURSE = {"id": 1, "name": "ML-Kurs", "short_info": "SS 2026", "description": "Dummy"}
 
 TASK_WS = {
     "id": 42,

@@ -21,6 +21,9 @@
     </h1>
   </div>
 
+  {% from "course/_teaser.html" import course_teaser %}
+  {{ course_teaser(course.teaser) }}
+
   {% if already_member %}
   <!-- Bereits Mitglied -->
   <div class="card">
@@ -47,7 +50,9 @@
       <h2 class="text-xl font-bold text-gray-800 mb-2">
         Willkommen in <span class="text-blue-600">{{ course.name }}</span>!
       </h2>
-      <p class="text-gray-500 mb-2">{{ course.semester }}</p>
+      {% if course.short_info %}
+      <p class="text-gray-500 mb-2">{{ course.short_info }}</p>
+      {% endif %}
       {% if course.description %}
       <p class="text-gray-500 mb-6">{{ course.description }}</p>
       {% endif %}

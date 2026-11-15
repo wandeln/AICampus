@@ -15,6 +15,7 @@ from sqlmodel import Session, delete, select
 
 from database.models import (
     ContentVersion,
+    Course,
     CourseMaterial,
     CourseMedia,
     MediaUsage,
@@ -145,6 +146,10 @@ def hard_delete_media(session: Session, media: CourseMedia) -> None:
     for u in session.exec(select(MediaUsage).where(MediaUsage.media_id == media.id)).all():
         session.delete(u)
     session.delete(media)
+    # Teaser-Verweis auflösen, wenn dieses Medium der Kurs-Teaser war
+    course = session.get(Course, course_id)
+    if course and course.teaser_media_id == media.id:
+        course.teaser_media_id = None
     session.commit()
 
     media_service.delete_file(media.file_path)

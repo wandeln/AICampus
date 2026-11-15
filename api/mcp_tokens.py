@@ -77,7 +77,7 @@ def _token_dict(session: Session, token: McpToken) -> dict:
     for cid in course_ids:
         course = session.get(Course, cid)
         if course:
-            courses.append({"id": course.id, "name": course.name, "semester": course.semester})
+            courses.append({"id": course.id, "name": course.name, "short_info": course.short_info})
     return {
         "id": token.id,
         "name": token.name,

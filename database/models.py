@@ -130,7 +130,7 @@ class UserInDB(UserBase):
 class CourseBase(SQLModel):
     name: str = Field(max_length=200)
     description: str = Field(default="", max_length=2000)
-    semester: str = Field(max_length=50)  # z.B. "WS 2025/26"
+    short_info: str = Field(default="", max_length=50)  # optional, z.B. "WS 2025/26" oder Modulnummer
     toc_visible: bool = Field(default=True)  # Inhaltsverzeichnis für Studenten sichtbar
 
 
@@ -147,7 +147,8 @@ class Course(CourseBase, table=True):
     created_by: int = Field(foreign_key="users.id")
     created_at: datetime = Field(default_factory=datetime.now)
     deleted_at: Optional[datetime] = Field(default=None)  # Soft Delete (null = aktiv)
-    
+    teaser_media_id: Optional[int] = Field(default=None)  # Teaser-Medium aus den Kurs-Medien (Dashboard/Join)
+
     # Relationships
     course_members: List["UserCourse"] = Relationship(back_populates="course")
     tasks: List["Task"] = Relationship(back_populates="course")

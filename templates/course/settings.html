@@ -38,10 +38,10 @@
           </div>
 
           <div>
-            <label for="settings-semester" class="block text-sm font-medium text-gray-700 mb-1">Semester</label>
-            <input id="settings-semester" type="text"
+            <label for="settings-short-info" class="block text-sm font-medium text-gray-700 mb-1">Kurzbeschreibung</label>
+            <input id="settings-short-info" type="text"
                    class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                   value="{{ course.semester }}" maxlength="50" placeholder="z.B. WS 2025/26">
+                   value="{{ course.short_info }}" maxlength="50" placeholder="z.B. WS 2025/26 oder Modulnummer (optional)">
           </div>
 
           <div>
@@ -49,6 +49,18 @@
             <textarea id="settings-description" rows="4"
                       class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
                       maxlength="2000">{{ course.description }}</textarea>
+          </div>
+
+          <div>
+            <label for="settings-teaser" class="block text-sm font-medium text-gray-700 mb-1">Teaser-Medium <span class="text-gray-400 font-normal">(optional)</span></label>
+            <select id="settings-teaser"
+                    class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none">
+              <option value="">— kein Teaser —</option>
+            </select>
+            <div id="teaser-preview" class="mt-2"></div>
+            <p class="text-xs text-gray-400 mt-1">
+              Wird auf dem Dashboard (Kurs-Karte) und der Einladungsseite angezeigt.
+            </p>
           </div>
 
           <div class="flex justify-end pt-2">
@@ -721,8 +733,10 @@
     e.preventDefault();
 
     const name = document.getElementById('settings-name').value.trim();
-    const semester = document.getElementById('settings-semester').value.trim();
+    const shortInfo = document.getElementById('settings-short-info').value.trim();
     const description = document.getElementById('settings-description').value.trim();
+    const teaserSel = document.getElementById('settings-teaser');
+    const teaserMediaId = teaserSel && teaserSel.value !== '' ? parseInt(teaserSel.value, 10) : null;
 
     if (!name) {
       showToast('Titel darf nicht leer sein.', 'error');
@@ -736,8 +750,9 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: name,
-          semester: semester,
+          short_info: shortInfo,
           description: description,
+          teaser_media_id: teaserMediaId,
         }),
       });
 
@@ -751,13 +766,57 @@
       const h1El = document.getElementById('course-name');
       const pEl = document.getElementById('course-subtitle');
       if (h1El) h1El.textContent = name;
-      if (pEl) pEl.textContent = semester + (description ? ' — ' + description : '');
+      if (pEl) pEl.textContent = [shortInfo, description].filter(Boolean).join(' — ');
 
       showToast(data.message || 'Kurs aktualisiert.', 'success');
     } catch (err) {
       showToast('Fehler: ' + err.message, 'error');
     }
   });
+
+  // ─── Teaser-Medium: Auswahl aus den Kurs-Medien befüllen ─────────
+  const teaserMediaMap = {}; // media_id → {url, mime_type, media_type}
+  const courseTeaserMediaId = {{ course.teaser_media_id | tojson }};
+
+  function updateTeaserPreview() {
+    const sel = document.getElementById('settings-teaser');
+    const box = document.getElementById('teaser-preview');
+    if (!sel || !box) return;
+    const m = teaserMediaMap[sel.value];
+    const frame = 'w-full aspect-video object-cover rounded-lg bg-gray-100';
+    if (!m) { box.innerHTML = ''; return; }
+    if (m.mime_type && m.mime_type.startsWith('video/')) {
+      box.innerHTML = `<video src="${m.url}" muted loop playsinline autoplay class="${frame}"></video>`;
+    } else if (m.media_type === 'applet') {
+      box.innerHTML = `<iframe src="${m.url}" sandbox="allow-scripts" title="Teaser-Vorschau" class="w-full aspect-video border rounded-lg bg-white"></iframe>`;
+    } else {
+      box.innerHTML = `<img src="${m.url}" alt="" class="${frame}">`;
+    }
+  }
+
+  async function loadTeaserOptions() {
+    const sel = document.getElementById('settings-teaser');
+    if (!sel) return;
+    sel.addEventListener('change', updateTeaserPreview);
+    try {
+      const res = await fetch('/api/courses/' + courseId + '/media', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const payload = await res.json();
+      const items = Array.isArray(payload) ? payload : (payload.items || []);
+      for (const m of items) {
+        const icon = m.mime_type && m.mime_type.startsWith('video/') ? '▶'
+          : m.media_type === 'applet' ? '⚙️' : '🖼';
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = icon + ' ' + (m.title || ('Medium #' + m.id));
+        sel.appendChild(opt);
+        teaserMediaMap[m.id] = { url: m.url, mime_type: m.mime_type, media_type: m.media_type };
+      }
+      if (courseTeaserMediaId) sel.value = String(courseTeaserMediaId);
+    } catch (err) { /* Teaser-Auswahl ist optional */ }
+    updateTeaserPreview();
+  }
+  loadTeaserOptions();
 
   // ─── Papierkorb: Item wiederherstellen ──────────────────────────
   async function restoreTrashItem(kind, id, btn) {
@@ -3300,9 +3359,9 @@
                     class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></textarea>
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Semester <span class="text-red-500">*</span></label>
-          <input type="text" id="duplicate-course-semester" placeholder="WS 2025/26"
-                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          <label class="block text-sm font-medium text-gray-700 mb-1">Kurzbeschreibung</label>
+          <input type="text" id="duplicate-course-short-info" placeholder="z.B. WS 2025/26 oder Modulnummer (optional)"
+                 maxlength="50" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
         </div>
       </div>
 
@@ -3318,13 +3377,13 @@
   const duplicateDefaults = {
     name: {{ course.name | tojson }},
     description: {{ course.description | tojson }},
-    semester: {{ course.semester | tojson }},
+    short_info: {{ course.short_info | tojson }},
   };
 
   function showDuplicateCourseModal() {
     document.getElementById('duplicate-course-name').value = duplicateDefaults.name + ' (Kopie)';
     document.getElementById('duplicate-course-desc').value = duplicateDefaults.description;
-    document.getElementById('duplicate-course-semester').value = duplicateDefaults.semester;
+    document.getElementById('duplicate-course-short-info').value = duplicateDefaults.short_info;
     document.getElementById('duplicate-course-modal').classList.remove('hidden');
   }
 
@@ -3332,16 +3391,16 @@
     document.getElementById('duplicate-course-modal').classList.add('hidden');
     document.getElementById('duplicate-course-name').value = '';
     document.getElementById('duplicate-course-desc').value = '';
-    document.getElementById('duplicate-course-semester').value = '';
+    document.getElementById('duplicate-course-short-info').value = '';
   }
 
   async function duplicateCourse() {
     const name = document.getElementById('duplicate-course-name').value.trim();
     const description = document.getElementById('duplicate-course-desc').value.trim();
-    const semester = document.getElementById('duplicate-course-semester').value.trim();
+    const shortInfo = document.getElementById('duplicate-course-short-info').value.trim();
 
-    if (!name || !semester) {
-      showToast('Name und Semester sind erforderlich.', 'error');
+    if (!name) {
+      showToast('Kursname ist erforderlich.', 'error');
       return;
     }
 
@@ -3350,7 +3409,7 @@
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description, semester }),
+        body: JSON.stringify({ name, description, short_info: shortInfo }),
       });
 
       const data = await res.json();

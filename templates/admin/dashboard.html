@@ -56,7 +56,9 @@
               {% else %}
               <span class="font-semibold text-gray-400">{{ course.name }}</span>
               {% endif %}
-              <div class="text-sm text-gray-500">{{ course.semester }}</div>
+              {% if course.short_info %}
+              <div class="text-sm text-gray-500">{{ course.short_info }}</div>
+              {% endif %}
             </div>
             <div class="flex items-center gap-3">
               {% if course.deleted %}
@@ -69,7 +71,7 @@
                       data-course-id="{{ course.id }}"
                       data-course-name="{{ course.name | e }}"
                       data-course-description="{{ course.description | e }}"
-                      data-course-semester="{{ course.semester | e }}"
+                       data-course-short-info="{{ course.short_info | e }}"
                       class="text-blue-500 hover:text-blue-700 text-sm transition" title="Kurs duplizieren">
                 📋
               </button>
@@ -743,9 +745,9 @@
                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></textarea>
       </div>
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Semester <span class="text-red-500">*</span></label>
-        <input type="text" id="new-course-semester" placeholder="WS 2025/26"
-               class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        <label class="block text-sm font-medium text-gray-700 mb-1">Kurzbeschreibung</label>
+        <input type="text" id="new-course-short-info" placeholder="z.B. WS 2025/26 oder Modulnummer (optional)"
+               maxlength="50" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
       </div>
     </div>
 
@@ -775,9 +777,9 @@
                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></textarea>
       </div>
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Semester <span class="text-red-500">*</span></label>
-        <input type="text" id="duplicate-course-semester" placeholder="WS 2025/26"
-               class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        <label class="block text-sm font-medium text-gray-700 mb-1">Kurzbeschreibung</label>
+        <input type="text" id="duplicate-course-short-info" placeholder="z.B. WS 2025/26 oder Modulnummer (optional)"
+               maxlength="50" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
       </div>
     </div>
 
@@ -870,7 +872,7 @@
     document.getElementById('create-course-modal').classList.add('hidden');
     document.getElementById('new-course-name').value = '';
     document.getElementById('new-course-desc').value = '';
-    document.getElementById('new-course-semester').value = '';
+    document.getElementById('new-course-short-info').value = '';
   }
 
   // ─── Duplicate Course ────────────────────────────────────────
@@ -878,12 +880,12 @@
     const id = parseInt(btn.getAttribute('data-course-id'));
     const name = decodeHtml(btn.getAttribute('data-course-name') || '');
     const description = decodeHtml(btn.getAttribute('data-course-description') || '');
-    const semester = decodeHtml(btn.getAttribute('data-course-semester') || '');
+    const shortInfo = decodeHtml(btn.getAttribute('data-course-short-info') || '');
     document.getElementById('duplicate-source-id').value = id;
     document.getElementById('duplicate-source-name').textContent = 'Original: ' + name;
     document.getElementById('duplicate-course-name').value = name + ' (Kopie)';
     document.getElementById('duplicate-course-desc').value = description;
-    document.getElementById('duplicate-course-semester').value = semester;
+    document.getElementById('duplicate-course-short-info').value = shortInfo;
     document.getElementById('duplicate-course-modal').classList.remove('hidden');
   }
 
@@ -895,17 +897,17 @@
     document.getElementById('duplicate-course-modal').classList.add('hidden');
     document.getElementById('duplicate-course-name').value = '';
     document.getElementById('duplicate-course-desc').value = '';
-    document.getElementById('duplicate-course-semester').value = '';
+    document.getElementById('duplicate-course-short-info').value = '';
   }
 
   async function duplicateCourse() {
     const sourceId = document.getElementById('duplicate-source-id').value;
     const name = document.getElementById('duplicate-course-name').value.trim();
     const desc = document.getElementById('duplicate-course-desc').value.trim();
-    const semester = document.getElementById('duplicate-course-semester').value.trim();
+    const shortInfo = document.getElementById('duplicate-course-short-info').value.trim();
 
-    if (!name || !semester) {
-      showToast('Name und Semester sind erforderlich.', 'error');
+    if (!name) {
+      showToast('Kursname ist erforderlich.', 'error');
       return;
     }
 
@@ -913,7 +915,7 @@
       const res = await fetch('/api/admin/courses/' + sourceId + '/duplicate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description: desc, semester }),
+        body: JSON.stringify({ name, description: desc, short_info: shortInfo }),
         credentials: 'same-origin',
       });
 
@@ -941,10 +943,10 @@
   async function createCourse() {
     const name = document.getElementById('new-course-name').value.trim();
     const desc = document.getElementById('new-course-desc').value.trim();
-    const semester = document.getElementById('new-course-semester').value.trim();
+    const shortInfo = document.getElementById('new-course-short-info').value.trim();
 
-    if (!name || !semester) {
-      showToast('Name und Semester sind erforderlich.', 'error');
+    if (!name) {
+      showToast('Kursname ist erforderlich.', 'error');
       return;
     }
 
@@ -952,7 +954,7 @@
       const res = await fetch('/api/admin/courses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description: desc, semester }),
+        body: JSON.stringify({ name, description: desc, short_info: shortInfo }),
         credentials: 'same-origin',
       });
 
@@ -2571,7 +2573,7 @@
       `<tr class="hover:bg-gray-50 border-t">
         <td class="py-2 px-3 text-sm">
           <span class="font-medium">${escHtml(r.name || '(gelöschter Kurs)')}</span>
-          <div class="text-xs text-gray-400">${escHtml(r.semester || '')}</div>
+          <div class="text-xs text-gray-400">${escHtml(r.short_info || '')}</div>
         </td>
         <td class="py-2 px-3 text-sm text-center">${r.views} <span class="text-gray-400 text-xs">(${total ? Math.round(r.views / total * 100) : 0}%)</span></td>
         <td class="py-2 px-3 text-sm text-center">${r.users}</td>

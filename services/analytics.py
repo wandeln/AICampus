@@ -339,12 +339,12 @@ def top_pages(days: int, course_id: Optional[int] = None, limit: int = 20) -> li
 def top_courses(days: int, limit: int = 15) -> list[dict[str, Any]]:
     """Beliebteste Kurse (Views + distinct User) im Fenster."""
     sql = (
-        "SELECT pv.course_id, c.name, c.semester, COUNT(*) AS views, "
+        "SELECT pv.course_id, c.name, c.short_info, COUNT(*) AS views, "
         "COUNT(DISTINCT pv.user_id) AS users "
         "FROM page_views pv "
         "JOIN courses c ON c.id = pv.course_id "
         "WHERE pv.created_at >= :since AND pv.course_id IS NOT NULL "
-        "GROUP BY pv.course_id, c.name, c.semester "
+        "GROUP BY pv.course_id, c.name, c.short_info "
         "ORDER BY views DESC LIMIT :limit"
     )
     with Session(engine) as session:
@@ -353,7 +353,7 @@ def top_courses(days: int, limit: int = 15) -> list[dict[str, Any]]:
         {
             "course_id": r[0],
             "name": r[1],
-            "semester": r[2],
+            "short_info": r[2],
             "views": r[3],
             "users": r[4],
         }

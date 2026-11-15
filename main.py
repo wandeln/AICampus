@@ -552,8 +552,9 @@ def _get_user_courses(user: User, session: Session) -> list[dict[str, Any]]:
             courses.append({
                 "id": course.id,
                 "name": course.name,
-                "semester": course.semester,
+                "short_info": course.short_info,
                 "role_in_course": m.role_in_course.value,
+                "teaser_media_id": course.teaser_media_id,
             })
     return courses
 
@@ -738,7 +739,8 @@ def _course_tab_context(
             "id": course.id,
             "name": course.name,
             "description": course.description,
-            "semester": course.semester,
+            "short_info": course.short_info,
+            "teaser_media_id": course.teaser_media_id,
         },
         "is_tutor": is_tutor,
         "is_prof": is_prof,
@@ -776,6 +778,7 @@ async def index(
     total_completed = 0
     total_points_earned = 0.0
     total_points_possible = 0
+    total_medals = {"bronze": 0, "silver": 0, "gold": 0, "platinum": 0}
     stats_by_course = {}
     student_courses = [
         c for c in courses
@@ -834,6 +837,8 @@ async def index(
             total_completed += completed_count
             total_points_earned += course_earned
             total_points_possible += course_possible
+            for tier in total_medals:
+                total_medals[tier] += medals[tier]
             stats_by_course[course_id] = {
                 "completed": completed_count,
                 "total_tasks": len(point_tasks),
@@ -850,6 +855,18 @@ async def index(
     # Auf dem Dashboard (kein Kurs) zeigen wir die globale Rolle
     display_role = "Admin" if user.role == GlobalUserRole.ADMIN else "User"
 
+    # Kurs-Teaser (Medium aus den Kurs-Einstellungen) für die Kurs-Karten
+    teaser_ids = [c.get("teaser_media_id") for c in courses if c.get("teaser_media_id")]
+    teaser_by_course: dict[int, dict] = {}
+    if teaser_ids:
+        for m in session.exec(select(CourseMedia).where(CourseMedia.id.in_(teaser_ids))).all():
+            if not m.deleted_at:
+                teaser_by_course[m.course_id] = {
+                    "url": media_service.media_url(m),
+                    "mime_type": m.mime_type,
+                    "media_type": m.media_type,
+                }
+
     return templates.TemplateResponse(
         "dashboard.html",
         {
@@ -857,12 +874,14 @@ async def index(
             "page_title": "Dashboard",
             "current_user": _user_ctx(user, display_role),
             "courses": courses,
+            "teaser_by_course": teaser_by_course,
             "selected_course_id": None,
             "is_admin": user.role == GlobalUserRole.ADMIN,
             "total_completed": total_completed,
             "total_points_earned": total_points_earned,
             "total_points_possible": total_points_possible,
             "total_percentage": pct,
+            "total_medals": total_medals,
             "stats_by_course": stats_by_course,
         },
     )
@@ -1510,7 +1529,7 @@ async def script_section_print_page(
             "id": course.id,
             "name": course.name,
             "description": course.description,
-            "semester": course.semester,
+            "short_info": course.short_info,
         },
         "section": {
             "id": section.id,
@@ -1549,7 +1568,7 @@ def _slides_theme_ctx(session: Session, course_id: int) -> dict:
       slides_theme_templates – Template-Defaults (für Design-Modal)
       slides_aspect_ratios  – Seitenverhältnis-Map Key→Wert (für Design-Modal/JS)
       slides_aspect_labels  – Seitenverhältnis-Labels (für Design-Modal)
-      slides_footer_text  – Fußzeilen-Text („Kurs — Semester")
+      slides_footer_text  – Fußzeilen-Text („Kurs — Kurzbeschreibung")
     """
     row = session.get(CourseSlidesTheme, course_id)
     theme = resolve_theme(row.theme if row else None)
@@ -1582,7 +1601,10 @@ def _slides_theme_ctx(session: Session, course_id: int) -> dict:
         "slides_theme_templates": THEME_TEMPLATES,
         "slides_aspect_ratios": ASPECT_RATIOS,
         "slides_aspect_labels": ASPECT_LABELS,
-        "slides_footer_text": f"{course.name} — {course.semester}" if course else "",
+        "slides_footer_text": (
+            f"{course.name} — {course.short_info}" if course and course.short_info
+            else course.name if course else ""
+        ),
         "slides_has_logo": logo_url is not None,
     }
 
@@ -1705,7 +1727,7 @@ async def slides_present_page(
             "id": course.id,
             "name": course.name,
             "description": course.description,
-            "semester": course.semester,
+            "short_info": course.short_info,
         },
         "deck": {
             "id": deck.id,
@@ -2176,6 +2198,17 @@ async def join_page(
     if not course:
         raise HTTPException(404, "Kurs nicht gefunden.")
 
+    # Kurs-Teaser (Medium aus den Kurs-Einstellungen) für die Einladungsseite
+    teaser = None
+    if course.teaser_media_id:
+        teaser_media = session.get(CourseMedia, course.teaser_media_id)
+        if teaser_media and not teaser_media.deleted_at:
+            teaser = {
+                "url": media_service.media_url(teaser_media),
+                "mime_type": teaser_media.mime_type,
+                "media_type": teaser_media.media_type,
+            }
+
     user = None
     try:
         user = await get_current_user(request, session)
@@ -2212,7 +2245,8 @@ async def join_page(
                     "id": course.id,
                     "name": course.name,
                     "description": course.description,
-                    "semester": course.semester,
+                    "short_info": course.short_info,
+                    "teaser": teaser,
                 },
                 "already_member": True,
             },
@@ -2242,7 +2276,7 @@ async def join_page(
                 "id": course.id,
                 "name": course.name,
                 "description": course.description,
-                "semester": course.semester,
+                "short_info": course.short_info,
             },
             "already_member": False,
         },
@@ -2348,7 +2382,7 @@ async def new_task_page(
             "course": {
                 "id": course.id,
                 "name": course.name,
-                "semester": course.semester,
+                "short_info": course.short_info,
                 "description": course.description,
             },
             "task": None,
@@ -2571,7 +2605,7 @@ async def task_page(
             "course": {
                 "id": course.id,
                 "name": course.name,
-                "semester": course.semester,
+                "short_info": course.short_info,
                 "description": course.description,
             },
             "task": {
@@ -2709,7 +2743,7 @@ async def live_dashboard_page(
             "id": course.id,
             "name": course.name,
             "description": course.description,
-            "semester": course.semester,
+            "short_info": course.short_info,
         },
         "can_view": can_view,
     }
@@ -2769,7 +2803,7 @@ async def live_mc_dashboard_page(
             "id": course.id,
             "name": course.name,
             "description": course.description,
-            "semester": course.semester,
+            "short_info": course.short_info,
         },
         "mc_tasks": [
             {"id": t.id, "title": t.title, "max_points": t.max_points}
@@ -2922,7 +2956,7 @@ async def submission_review_page(
             "course": {
                 "id": course.id,
                 "name": course.name,
-                "semester": course.semester,
+                "short_info": course.short_info,
                 "description": course.description,
             },
             "tabs": tab_ctx["tabs"],
@@ -3030,7 +3064,7 @@ async def admin_page(
             "id": c.id,
             "name": c.name,
             "description": c.description,
-            "semester": c.semester,
+            "short_info": c.short_info,
             "role_in_course": membership_roles.get(c.id, "NONE"),
             "is_member": c.id in member_course_ids,
             "deleted": c.deleted_at is not None,

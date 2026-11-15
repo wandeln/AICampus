@@ -101,7 +101,7 @@ def duplicate_course_content(
     source_course: Course,
     name: str,
     description: str,
-    semester: str,
+    short_info: str,
 ) -> dict:
     """Kurs-Kopie anlegen (z. B. für das nächste Semester).
 
@@ -114,7 +114,7 @@ def duplicate_course_content(
     new_course = Course(
         name=name,
         description=description,
-        semester=semester,
+        short_info=short_info,
         created_by=user.id,  # type: ignore[arg-type]
     )
     session.add(new_course)
@@ -278,6 +278,7 @@ def duplicate_course_content(
         select(CourseMedia).where(CourseMedia.course_id == src_id)
     ).all()
     new_media: list[CourseMedia] = []
+    media_id_map: dict[int, int] = {}  # alte Media-ID → neue (Teaser-Remap)
     for src_m in source_media:
         fname = src_m.file_path.rsplit("/", 1)[-1]
         src_path = MEDIA_DIR / src_m.file_path
@@ -298,6 +299,14 @@ def duplicate_course_content(
         )
         session.add(new_m)
         new_media.append(new_m)
+    session.commit()
+    for src_m, new_m in zip(source_media, new_media):
+        if src_m.id is not None and new_m.id is not None:
+            media_id_map[src_m.id] = new_m.id
+
+    # 7b. Teaser auf die Kopie des Mediums umleiten
+    new_course.teaser_media_id = media_id_map.get(source_course.teaser_media_id)
+    session.add(new_course)
     session.commit()
 
     # 8. Medien-Nutzung aus dem kopierten Markdown neu ableiten

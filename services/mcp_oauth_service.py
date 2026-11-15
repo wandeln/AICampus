@@ -349,7 +349,7 @@ def grants_for_user(session: Session, user_id: int) -> List[dict]:
         for cid in sorted(e["course_ids"]):
             course = session.get(Course, cid)
             if course:
-                courses.append({"id": course.id, "name": course.name, "semester": course.semester})
+                courses.append({"id": course.id, "name": course.name, "short_info": course.short_info})
         out.append({
             "client_id": client_id,
             "name": (crow.client_name if crow and crow.client_name else client_id),

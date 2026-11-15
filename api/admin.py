@@ -55,7 +55,7 @@ async def list_courses(
             "id": c.id,
             "name": c.name,
             "description": c.description,
-            "semester": c.semester,
+            "short_info": c.short_info,
             "created_at": utc_iso(c.created_at),
             "member_count": len(c.course_members),
         }
@@ -73,7 +73,7 @@ async def create_course(
     course = Course(
         name=data.name,
         description=data.description,
-        semester=data.semester,
+        short_info=data.short_info,
         created_by=user.id,  # type: ignore[arg-type]
     )
     session.add(course)
@@ -104,7 +104,7 @@ async def create_course(
         "course": {
             "id": course.id,
             "name": course.name,
-            "semester": course.semester,
+            "short_info": course.short_info,
         },
     }
 
@@ -112,7 +112,7 @@ async def create_course(
 class CourseDuplicateRequest(BaseModel):
     name: str
     description: str
-    semester: str
+    short_info: str = ""
 
 
 @router.post("/courses/{course_id}/duplicate")
@@ -128,7 +128,7 @@ async def duplicate_course(
         raise HTTPException(404, "Kurs nicht gefunden.")
 
     result = course_service.duplicate_course_content(
-        session, user, source_course, data.name, data.description, data.semester
+        session, user, source_course, data.name, data.description, data.short_info
     )
     new_course = result["course"]
     return {
@@ -136,7 +136,7 @@ async def duplicate_course(
         "course": {
             "id": new_course.id,
             "name": new_course.name,
-            "semester": new_course.semester,
+            "short_info": new_course.short_info,
             "task_count": result["task_count"],
             "section_count": result["section_count"],
             "material_count": result["material_count"],

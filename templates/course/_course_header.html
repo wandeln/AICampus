@@ -1,15 +1,18 @@
 {# ─────────────────────────────────────────────────────────────────────
-   Kurs-Header (Name + Semester/Beschreibung) — steht auf allen
+   Kurs-Header (Name + Kurzbeschreibung/Beschreibung) — steht auf allen
    Kurs-Tab-Seiten (course/base.html) und den Task-Seiten über der
    Tab-Leiste.
 
-   Erwartetes Kontext: course = {id, name, semester, description}
+   Erwartetes Kontext: course = {id, name, short_info, description}
    ───────────────────────────────────────────────────────────────────── #}
 <div class="mb-4">
   <div class="flex items-start justify-between">
     <div>
       <h1 id="course-name" class="text-2xl font-bold text-gray-800">{{ course.name }}</h1>
-      <p id="course-subtitle" class="text-gray-500">{{ course.semester }}{% if course.description %} — {{ course.description }}{% endif %}</p>
+      <p id="course-subtitle" class="text-gray-500">
+        {% if course.short_info %}{{ course.short_info }}{% if course.description %} — {% endif %}{% endif %}
+        {% if course.description %}{{ course.description }}{% endif %}
+      </p>
     </div>
   </div>
 </div>

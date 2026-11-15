@@ -798,7 +798,7 @@
       return MCP_COURSES.map((c) => `
         <label class="flex items-center gap-2 text-sm text-gray-700">
           <input type="checkbox" class="mcp-course-cb" data-course-id="${c.id}" ${selectedIds.includes(c.id) ? 'checked' : ''}>
-          <span>${esc(c.name)} <span class="text-gray-400 text-xs">(${esc(c.semester)})</span></span>
+          <span>${esc(c.name)}${c.short_info ? ' <span class="text-gray-400 text-xs">(' + esc(c.short_info) + ')</span>' : ''}</span>
         </label>`).join('');
     }
 

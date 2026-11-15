@@ -323,7 +323,7 @@ def _consent_context(
             courses.append({
                 "id": course.id,
                 "name": course.name,
-                "semester": course.semester,
+                "short_info": course.short_info,
                 "role_in_course": role,
             })
     return {

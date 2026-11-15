@@ -9,6 +9,8 @@
   .badge-gold { background:linear-gradient(135deg, #fff8dc, #ffd700, #daa520); color:#6b4c00; }
   .badge-platinum { background:linear-gradient(135deg, #e8e8e8, #b9f2ff, #7dd3fc, #b9f2ff); color:#1e3a5f; animation:platinumShine 2s ease-in-out infinite; }
   @keyframes platinumShine { 0%,100%{box-shadow:0 0 8px rgba(125,211,252,0.5);} 50%{box-shadow:0 0 16px rgba(125,211,252,0.8);} }
+  @keyframes medalGrow { from { height: 0; } }
+  .medal-bar { animation: medalGrow 0.6s ease-out; }
 </style>
 {% endblock %}
 
@@ -42,19 +44,35 @@
       <div class="text-xs text-gray-500 mt-1">Bearbeitete Aufgaben</div>
     </div>
     <div class="bg-white rounded-xl shadow-lg border border-gray-200 text-center p-5 col-span-2 md:col-span-1">
-      <div class="text-2xl font-bold {% if total_percentage >= 80 %}text-green-600{% elif total_percentage >= 50 %}text-yellow-600{% elif total_percentage > 0 %}text-orange-600{% else %}text-gray-400{% endif %}">{{ total_percentage }}%</div>
-      <div class="text-xs text-gray-500 mt-1">{{ "%.1f"|format(total_points_earned) }} / {{ total_points_possible }} Punkte</div>
+      <div class="text-xs text-gray-500 mb-2">Medaillenspiegel</div>
+      {% set medal_max = [total_medals.platinum, total_medals.gold, total_medals.silver, total_medals.bronze] | max %}
+      <div class="flex items-end justify-center gap-2">
+        {% for key, label, color, badge_class, emoji in [("platinum", "Platinum", "#7dd3fc", "badge-platinum", "💎"), ("gold", "Gold", "#ffd700", "badge-gold", "🥇"), ("silver", "Silber", "#c0c0c0", "badge-silver", "🥈"), ("bronze", "Bronze", "#cd7f32", "badge-bronze", "🥉")] %}
+        <div class="flex flex-col items-center gap-1">
+          <div class="h-14 flex items-end">
+            <div class="medal-bar w-5 rounded-t-sm"
+                 style="height: {{ (total_medals[key] / medal_max * 100) if medal_max > 0 and total_medals[key] > 0 else 2 }}%; background: {{ color }};"
+                 title="{{ label }}: {{ total_medals[key] }}"></div>
+          </div>
+          <span class="badge-tier {{ badge_class }}">{{ emoji }} {{ total_medals[key] }}</span>
+        </div>
+        {% endfor %}
+      </div>
     </div>
   </div>
   {% endif %}
 
   <!-- Course Cards with inline stats -->
+  {% from "course/_teaser.html" import course_teaser %}
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
     {% for course in courses %}
     <a href="/courses/{{ course.id }}"
        class="bg-white rounded-xl shadow-md border border-gray-200 hover:shadow-lg hover:border-gray-300 transition-all duration-200 block overflow-hidden">
 
-      <!-- Top: colored accent bar -->
+      <!-- Top: Teaser-Medium (Kurs-Einstellungen) -->
+      {{ course_teaser(teaser_by_course.get(course.id)) }}
+
+      <!-- Colored accent bar -->
       <div class="h-1
         {% if course.role_in_course == 'PROF' %}bg-purple-500
         {% elif course.role_in_course == 'TUTOR' %}bg-blue-500
@@ -67,8 +85,8 @@
       <div class="flex items-start justify-between mb-3">
           <div>
             <h2 class="text-lg font-semibold text-gray-800 leading-tight">{{ course.name }}</h2>
-            {% if course.semester %}
-            <p class="text-xs text-gray-400 mt-0.5">{{ course.semester }}</p>
+            {% if course.short_info %}
+            <p class="text-xs text-gray-400 mt-0.5">{{ course.short_info }}</p>
             {% endif %}
           </div>
         <span class="ml-2 flex-shrink-0 px-2 py-0.5 rounded text-xs font-medium
@@ -152,9 +170,9 @@
                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></textarea>
       </div>
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Semester <span class="text-red-500">*</span></label>
-        <input type="text" id="new-course-semester" placeholder="WS 2025/26"
-               class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        <label class="block text-sm font-medium text-gray-700 mb-1">Kurzbeschreibung</label>
+        <input type="text" id="new-course-short-info" placeholder="z.B. WS 2025/26 oder Modulnummer (optional)"
+               maxlength="50" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
       </div>
     </div>
 
@@ -175,16 +193,16 @@
     document.getElementById('create-course-modal').classList.add('hidden');
     document.getElementById('new-course-name').value = '';
     document.getElementById('new-course-desc').value = '';
-    document.getElementById('new-course-semester').value = '';
+    document.getElementById('new-course-short-info').value = '';
   }
 
   async function createCourse() {
     const name = document.getElementById('new-course-name').value.trim();
     const desc = document.getElementById('new-course-desc').value.trim();
-    const semester = document.getElementById('new-course-semester').value.trim();
+    const shortInfo = document.getElementById('new-course-short-info').value.trim();
 
-    if (!name || !semester) {
-      showToast('Name und Semester sind erforderlich.', 'error');
+    if (!name) {
+      showToast('Kursname ist erforderlich.', 'error');
       return;
     }
 
@@ -192,7 +210,7 @@
       const res = await fetch('/api/admin/courses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description: desc, semester }),
+        body: JSON.stringify({ name, description: desc, short_info: shortInfo }),
         credentials: 'same-origin',
       });
 
