@@ -244,6 +244,20 @@ class ComputeClient:
                              task_id=task, student_id=student, timeout=600)
         return resp.content
 
+    def volume_backup_tar(self, key: str) -> bytes | None:
+        """tar.gz des /workspace-Volumes (hostseitig; auch gestoppt).
+
+        None = nicht möglich (keine Host-Sicht, Cap überschritten) —
+        dann bleibt es beim alten Verhalten (kein lesbarer Stand)."""
+        course, task, student = _key_parts(key)
+        try:
+            resp = self._request("GET", f"/workspaces/{key}/volume-tar",
+                                 op=f"ws:{key}", task_id=task,
+                                 student_id=student, timeout=600)
+        except ComputeAgentError:
+            return None
+        return resp.content
+
     # ── Assets & Task-Images (.init.sh-Build) ────────────────────
 
     def sync_assets(self, course: int, task: int, files: list[dict],

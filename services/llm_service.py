@@ -939,6 +939,7 @@ class LLMService:
         script_context: str = "",
         media_context: str = "",
         mc_context: str = "",
+        workspace_files: str = "",
         custom_prompt: Optional[str] = None,
         config: Optional[dict] = None,
     ):
@@ -963,6 +964,7 @@ class LLMService:
             script_context=script_context,
             media_context=media_context,
             mc_context=mc_context,
+            workspace_files=workspace_files,
         )
 
         return await self._call_with_json(prompt, response_format={"type": "json_object"}, config=config)

@@ -210,6 +210,28 @@ def workspace_stop(key: str, payload: dict = Depends(auth.verify_token)) -> dict
     return {"ok": True, "state": "stopped"}
 
 
+@app.get("/workspaces/{key}/volume-tar")
+def workspace_volume_tar(key: str, payload: dict = Depends(auth.verify_token)):
+    """tar.gz des /workspace-Volumes (hostseitig, auch gestoppt).
+
+    On-Demand-Backup beim manuellen Stopp: AICampus legt es unter
+    data/workspace_backups/ ab (wie das Sleep-Backup), damit Student
+    (Dateibaum, read-only) und LLM-Hinweis den Stand sofort sehen.
+    409, wenn das Volume nicht hostseitig erreichbar ist oder über
+    der Cap liegt (wie beim Sleep-Backup)."""
+    _op(payload, f"ws:{key}")
+    spec_ = (REGISTRY.get(key) or {}).get("spec") or {}
+    quota_mb = spec_.get("disk_quota_mb")
+    cap = quota_mb * 1024 * 1024 if quota_mb else config.MAX_WORKSPACE_SIZE
+    data = docker_ops.volume_backup_tar(key, cap)
+    if data is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Volume nicht backup-fähig (nicht hostseitig erreichbar "
+                   "oder über der Größen-Cap)")
+    return Response(content=data, media_type="application/gzip")
+
+
 @app.post("/workspaces/{key}/restore")
 @_translate
 async def workspace_restore(key: str, request: Request,

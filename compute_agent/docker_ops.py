@@ -1116,6 +1116,13 @@ def _port_scan(key: str) -> dict[int, set[str]]:
 # Container = frische Bestätigung).
 _PORT_CONFIRMED: dict[str, dict[int, set[str]]] = {}
 
+# Ports ab hier (Linux-Ephemeral-Bereich, Standard-Range 32768–60999)
+# sind in der Regel keine Web-Dienste, sondern interne Helfer-Listener
+# (v. a. Jupyter-Kernel-ZMQ-Kanäle shell/iopub/stdin/control, ML-
+# Helfer-Ports) → aus der Preview-Liste ausgeblendet. Direct-Preview
+# per URL (/preview/{task}/{port}) bleibt für jeden Port möglich.
+_HIDDEN_PORT_MIN = 32768
+
 
 def list_workspace_ports(key: str) -> list[dict]:
     """Im Container lauschende, BESTÄTIGTE Ports: [{port, pid}] (sortiert).
@@ -1135,7 +1142,8 @@ def list_workspace_ports(key: str) -> list[dict]:
         return []  # erster Scan: alles erst in Bestätigung
     confirmed = {p: pids for p, pids in ports.items() if p in prev}
     return [{"port": p, "pid": min(pids) if pids else None}
-            for p, pids in sorted(confirmed.items())]
+            for p, pids in sorted(confirmed.items())
+            if p < _HIDDEN_PORT_MIN]
 
 
 # Wie runs._TREE_KILL, aber Signal-Parameter (15/9): rekursiv den

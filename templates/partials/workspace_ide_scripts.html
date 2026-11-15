@@ -275,7 +275,7 @@
     apiBase: WS_API,
     mainFile: WS_MAIN_FILE || "",
     allowMain: false,
-    readOnlyCheck: (p) => wsIsCold() || wsUI.accessOf(p) !== "edit",
+    readOnlyCheck: (p) => wsIsCold() || wsFromBackup() || wsUI.accessOf(p) !== "edit",
     canCreate: true,
     canDelete: true,
     canMove: true,
@@ -306,6 +306,15 @@
     return WS_REVIEW_ID != null && !WS_AUTO_START &&
       !(wsState.status && wsState.status.container &&
         wsState.status.container.state === "running");
+  }
+
+  // Gestoppt/slept mit Sleep-Backup: Dateien werden read-only aus dem
+  // Backup serviert (Baum + Inhalte) — alle Schreibaktionen blockiert.
+  function wsFromBackup() {
+    const s = wsState.status;
+    return !!(s && !s.degraded && s.container &&
+              s.container.state && s.container.state !== "running" &&
+              s.container.files_from_backup);
   }
 
   // ▶-Buttons im Baum blockieren: Status noch unbekannt, Agent down oder
@@ -367,10 +376,30 @@
       // Flush-Border müssen nachgezogen werden.
       wsTaskDescApplyDefault();
       if (!data.degraded) {
-        // Gestoppt (hold „user“ oder „quota“): Dateibetrieb ist blockiert
-        // (409) → Baum bleibt beim letzten Zustand (kein Auto-Start).
-        if (refreshFiles && !(data.container && data.container.held))
+        // Gestoppt (hold „user“/„quota“): kein Auto-Start. Mit Sleep-
+        // Backup kommen die Dateien read-only aus dem Backup (Baum +
+        // Inhalte); ohne Backup (Idle-Sweep lief noch nicht) zeigt der
+        // Baum statt des ewigen „Dateien werden geladen …“-Placeholders
+        // eine klare Meldung. (Cold-Instanz: eigene Snapshot-Pipeline.)
+        const c = data.container;
+        const stopped = !wsIsCold() && !!(c && c.state && c.state !== "running");
+        const fromBackup = stopped && !!c.files_from_backup;
+        if (refreshFiles) {
+          if (stopped && !fromBackup) {
+            const tree = $w("ws-filetree");
+            if (tree) tree.innerHTML =
+              '<div class="text-gray-400 text-xs p-1">⏸ Arbeitsumgebung ist ' +
+              'gestoppt — die Dateien erscheinen nach <b>▶ Starten</b>.</div>';
+          } else {
+            await wsUI.refresh();
+          }
+        } else if (fromBackup && !wsState.backupTreeShown) {
+          // Backup ist inzwischen entstanden (Idle-Sweep) → Baum einmal
+          // füllen; die Backup-Inhalte ändern sich nicht (gestoppt).
+          wsState.backupTreeShown = true;
           await wsUI.refresh();
+        }
+        if (!fromBackup) wsState.backupTreeShown = false;
       } else {
         setWsToolbarEnabled(false);
       }
@@ -439,7 +468,7 @@
       banner.innerHTML = '<span class="animate-spin inline-block">⏳</span> Arbeitsumgebung wird vorbereitet …';
     }
     wsRenderUsage();
-    setWsToolbarEnabled(!s.degraded && !wsIsCold());
+    setWsToolbarEnabled(!s.degraded && !wsIsCold(), !wsFromBackup());
     wsUI.setRunDisabled(wsRunBlocked());  // ▶ im Baum folgt dem Container-Status
     const toggle = $w("ws-toggle-btn");
     if (toggle && !wsToggling) {
@@ -484,12 +513,18 @@
     el.classList.toggle("text-gray-500", !over);
   }
 
-  function setWsToolbarEnabled(enabled) {
-    ["submit-btn", "ws-new-file-btn", "ws-new-folder-btn",
-     "ws-upload-btn",
-     "ws-tree-refresh-btn", "ws-reset-btn", "ws-new-terminal-btn"].forEach(id => {
+  function setWsToolbarEnabled(enabled, create = enabled) {
+    // create: Datei-/Umfeld-Erstellung (neue Datei/Ordner, Upload, Reset,
+    // Terminal) — im Backup-Modus (gestoppt + Backup) gesperrt, obwohl
+    // Submit/Refresh weiter erlaubt bleiben.
+    ["submit-btn", "ws-tree-refresh-btn"].forEach(id => {
       const el = $w(id);
       if (el) el.disabled = !enabled;
+    });
+    ["ws-new-file-btn", "ws-new-folder-btn", "ws-upload-btn",
+     "ws-reset-btn", "ws-new-terminal-btn"].forEach(id => {
+      const el = $w(id);
+      if (el) el.disabled = !create;
     });
   }
 

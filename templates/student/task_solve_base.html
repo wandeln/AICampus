@@ -1677,6 +1677,14 @@
     const question = hintInput.value.trim();
     if (!question) return;
 
+    // Workspace: debounced Autosave flushen, damit das Agenten-Volume den
+    // aktuellsten Stand hat (gleicher Pattern wie Submit). Best-Effort:
+    // bei Fehlschlag läuft der Hinweis einfach ohne den letzten Edit.
+    if (typeof window._workspaceFlush === 'function') {
+      try { await window._workspaceFlush(); }
+      catch (err) { console.warn('Workspace-Flush vor Hinweis fehlgeschlagen:', err); }
+    }
+
     // Get current solution from editor/textarea
     let currentSolution = '';
     const textEd = window._textSolutionEditor;

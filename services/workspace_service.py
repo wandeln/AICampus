@@ -2276,6 +2276,111 @@ class WorkspaceService:
             total += len(text)
         return out
 
+    def hint_file_context(self, task: Task, student_id: int,
+                          agent: Optional[dict],
+                          folder_map: dict[str, str],
+                          file_access: dict[str, str]) -> tuple[str, bool]:
+        """LLM-Hinweis-Kontext: aktueller Student-Code (Workspace-Aufgabe).
+
+        NUR studentensichtbare Dateien (effektiv ✏️ edit + 🔒 readonly) —
+        👤 hidden kommt NIEMALS rein (Musterlösung/Privat-Tests dürften
+        sonst über den Hinweis an den Student durchleaken). Gleiche
+        Kontext-Regeln wie das Grading: Binary-Skip, Notebook-Output-
+        Strip, Truncation (MAX_LLM_FILE_CHARS / MAX_LLM_TOTAL_CHARS).
+
+        Liefert ``(dateien, lesbar)``:
+        - ``lesbar=True``  → der aktuelle Stand wurde gelesen (``dateien``
+          kann leer sein: Workspace läuft und ist wirklich leer).
+        - ``lesbar=False`` → nichts lesbar (gestoppt ohne Backup, Agent
+          down) — der Aufrufer informiert das LLM dann explizit
+          statt zu schweigen.
+
+        Quellen-Logik (Status vom Agenten, nicht geraten):
+        - Container **läuft** → live lesen (inkl. 🔒).
+        - Container **gestoppt** (manuell/quota/nach Idle-Sleep) oder
+          dem Agenten unbekannt (Agent down) → Backup-Tar, wenn es auf
+          dem Server liegt. Seit dem manuellen Stopp entsteht das
+          Backup SOFORT beim Stopp (wie der Idle-Sweep); gestoppt ist
+          das Volume gefroren → vorhandenes Backup = aktueller Stand.
+          Ohne Backup (z. B. Cap überschritten) → ``lesbar=False``.
+          Das Backup enthält kein 🔒 — ro-Mounts liegen physikalisch
+          außerhalb des Volumes.
+
+        DB-freie Methode: ``agent``, ``folder_map`` und ``file_access``
+        sammelt der Aufrufer VOR dem Session-Rollback."""
+        def visible(rel: str) -> bool:
+            return effective_file_access(
+                rel, file_access.get(rel), folder_map) in ("edit", "readonly")
+
+        def format_visible(files: dict[str, str]) -> str:
+            kept = {p: t for p, t in files.items() if visible(p)}
+            return "\n\n".join(
+                f"=== {p} ===\n{kept[p]}" for p in sorted(kept))
+
+        key = workspace_key(task.course_id, task.id, student_id)
+        client = self.client_for(agent) if agent is not None else None
+
+        # Workspace-Status vom Agenten (1 LIST-Call): `state` sagt, ob
+        # der Container läuft (→ live) oder nicht (→ Backup, s. unten).
+        entry = None
+        if client is not None:
+            try:
+                for w in client.list_workspaces():
+                    if w.get("key") == key:
+                        entry = w
+                        break
+            except ComputeAgentError:
+                entry = None
+        state = str(entry.get("state") or "").lower() if entry else ""
+
+        if entry is not None and state == "running":
+            # 1) live vom Agenten (Container-Sicht: inkl. 🔒-ro-Mounts)
+            files: dict[str, str] = {}
+            total = 0
+            try:
+                entries = client.list_files(key)
+            except ComputeAgentError:
+                entries = None
+            if entries is not None:
+                for e in sorted(entries, key=lambda x: str(x.get("path") or "")):
+                    if total >= MAX_LLM_TOTAL_CHARS:
+                        break
+                    rel = str(e.get("path") or "")
+                    if not rel or not visible(rel):
+                        continue
+                    try:
+                        data = client.read_file(key, rel)
+                    except ComputeAgentError:
+                        continue  # zu groß / gerade weg — überspringen
+                    if b"\x00" in data[:1024]:
+                        continue  # Binary — nicht in den LLM
+                    text = data.decode(errors="replace")
+                    if rel.endswith(".ipynb"):
+                        text = self._strip_notebook_outputs(text)
+                    if len(text) > MAX_LLM_FILE_CHARS:
+                        text = text[:MAX_LLM_FILE_CHARS] + "\n… (gekürzt)"
+                    files[rel] = text
+                    total += len(text)
+                return format_visible(files), True
+            # lief, aber Dateilistung fehlgeschlagen (z. B. PIDs-Limit):
+            # das Volume ist der aktuelle Stand → kein Backup
+            return "", False
+
+        # 2) gestoppt (manuell/quota/Idle-Sleep) oder dem Agenten
+        #    unbekannt (Agent down) → Backup-Tar, wenn vorhanden
+        backup_rel = f"workspace_backups/{key}.tar.gz"
+        if snapshot_abs_path(backup_rel).is_file():
+            with tempfile.TemporaryDirectory(prefix="aicampus-hint-") as tmp:
+                try:
+                    self.extract_snapshot(backup_rel, Path(tmp))
+                except (ValueError, tarfile.TarError, OSError,
+                        EOFError, zlib.error):
+                    return "", False
+                files = self._collect_texts(Path(tmp))
+            return format_visible(files), True
+
+        return "", False
+
     def grade_context(self, session: Session, task: Task, submission) -> dict:
         """Material für den LLM-Grading-Prompt (nur relevante Teile!):
         student_files (aus Snapshot, ohne 👤-Pfade) + private_files

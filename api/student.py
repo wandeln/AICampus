@@ -54,6 +54,7 @@ from services.workspace_service import (
     file_disk_path,
     snapshot_list_files,
     snapshot_read_file,
+    workspace_backup_tar,
     workspace_key,
     workspace_service,
 )
@@ -1488,10 +1489,47 @@ async def request_hint(
             + "\nEin inhaltlich passendes Medium aus dieser Liste DARFST du im Hinweis einbinden (max. 1) — verwende dafür exakt den angegebenen /media/-Pfad. Erfinde KEINE anderen Medien-Pfade."
         )
 
+    # Workspace: aktueller Code für den Hinweis. DB-Teile VOR dem Rollback
+    # sammeln (Agent-Auswahl + Access-Filter) — die langsamen Agent-Reads
+    # bzw. Sleep-Backup-Tar-Extraktion laufen danach ohne offene Session.
+    ws_agent = None
+    ws_folder_map: dict[str, str] = {}
+    ws_file_access: dict[str, str] = {}
+    if task.task_type.value == "workspace":
+        ws_agent = workspace_service.pick_task_agent(session, task)
+        ws_folder_map = workspace_service.folder_map(session, task)
+        ws_file_access = {
+            f.path: f.access for f in workspace_service.task_files(session, task)
+        }
+
     # DB-Connection vor dem langen LLM-Call freigeben (sonst hält die
     # Session sie die gesamte Generierung; s. database/base.py). Der
     # Rollback beendet nur das Read-Transaction — ORM-Objekte bleiben nutzbar.
     session.rollback()
+
+    # Workspace: Code-Kontext bauen (live Container → Sleep-Backup).
+    # Nichts lesbar (z. B. Workspace gestoppt) → explizite Nachricht,
+    # damit das LLM den Studenten auf den Workspace-Start hinweist,
+    # statt blind ohne Code zu antworten.
+    ws_files_context = ""
+    if task.task_type.value == "workspace":
+        ws_files, ws_code_readable = await asyncio.to_thread(
+            workspace_service.hint_file_context, task, user.id,
+            ws_agent, ws_folder_map, ws_file_access)
+        if ws_files:
+            ws_files_context = (
+                "AKTUELLE CODE-DATEIEN DES STUDENTEN (Workspace, aktueller "
+                "Stand — nur studentensichtbare Dateien):\n" + ws_files
+            )
+        elif not ws_code_readable:
+            ws_files_context = (
+                "CODE DES STUDENTEN NICHT VERFÜGBAR: Der aktuelle Code "
+                "konnte nicht geladen werden, weil der Workspace nicht "
+                "läuft (oder nicht lesbar ist). Falls du den Code "
+                "benötigst, um die Frage zu beantworten, fordere den "
+                "Studenten auf, den Workspace zu starten (▶ Starten) "
+                "und danach erneut zu fragen."
+            )
 
     # Rufe LLM fuer sokratischen Hinweis auf
     result = await llm_service.generate_socratic_hint(
@@ -1508,6 +1546,7 @@ async def request_hint(
         script_context=script_context,
         media_context=media_context,
         mc_context=mc_context,
+        workspace_files=ws_files_context,
         config=llm_cfg,
     )
 
@@ -1825,6 +1864,18 @@ def _ws_effective_access(session: Session, task: Task, path: str) -> str:
     return effective_file_access(path, file_acc.get(path), fm)
 
 
+def _ws_backup_rel(task: Task, user: User) -> Optional[str]:
+    """Sleep-Backup-Tar als snapshot_rel (None = nicht vorhanden).
+
+    Read-only-Fallback für gestoppte/slepte Workspaces: die Files-
+    Endpoints servieren dann aus dem Backup (Dateibaum + Inhalte),
+    statt 409 zu werfen — der Student sieht seinen Stand bis zum
+    ▶ Starten."""
+    key = _ws_key(task, user)
+    return (f"workspace_backups/{key}.tar.gz"
+            if workspace_backup_tar(key).is_file() else None)
+
+
 def _ws_require_writable(session: Session, task: Task, path: str) -> None:
     """Studenten schreiben nur Dateien der effektiven Klasse ✏️ edit:
     👤-Dateien existieren für sie nicht (404), 🔒-Dateien sind read-only (403)."""
@@ -1885,6 +1936,12 @@ async def workspace_status(
         out["container"] = {"state": ws.get("state"),
                             "fresh": bool(ws.get("fresh")),
                             "held": ws.get("held")}
+        # Gestoppt/slept: Dateibaum/Inhalte kommen read-only aus dem
+        # Sleep-Backup (falls vorhanden) — Files-Endpoints fallen
+        # darauf zurück; die UI zeigt die Dateien statt "geladen …".
+        if str(ws.get("state")) != "running":
+            out["container"]["files_from_backup"] = (
+                workspace_backup_tar(_ws_key(task, user)).is_file())
         assets = await asyncio.to_thread(client.list_assets, task.course_id, task.id)
         out["assets"] = [{"path": a.get("path"), "size": a.get("size")} for a in assets]
         # Disk-Quota-Status (Usage/Quota/over) — isoliert, damit ein
@@ -2056,14 +2113,22 @@ async def workspace_list_files(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Dateiliste des eigenen Containers (/workspace)."""
+    """Dateiliste des eigenen Containers (/workspace).
+
+    Gestoppt/slept: Read-only-Fallback aus dem Sleep-Backup-Tar
+    (statt 409) — der Dateibaum zeigt den Stand bis zum ▶ Starten."""
     task = await _load_ws_task(task_id, session, user)
     client = _ws_client_or_error(session, task)
     key = _ws_key(task, user)
+    from_backup = False
     try:
         files = await asyncio.to_thread(client.list_files, key)
     except ComputeAgentError as e:
-        raise _agent_http(e)
+        backup = _ws_backup_rel(task, user)
+        if backup is None:
+            raise _agent_http(e)
+        files = await asyncio.to_thread(snapshot_list_files, backup)
+        from_backup = True
     # Effektive Zugriffs-Klasse je Datei (effektiv inkl. Ordner-Erbung;
     # 👤-Dateien fehlen im Container automatisch) + gepflegte
     # (Tutor-)Reihenfolge sort_order aus der DB.
@@ -2082,6 +2147,14 @@ async def workspace_list_files(
         vol_dirs = await asyncio.to_thread(client.list_dirs, key)
     except ComputeAgentError:
         vol_dirs = []
+    if not vol_dirs:
+        # Backup-Fallback (oder leeres Volume): Ordner aus den Pfaden,
+        # damit implizite Verzeichnisse im Baum sichtbar bleiben.
+        vol_dirs = sorted({
+            "/".join(str(f.get("path") or "").split("/")[:-1])
+            for f in files
+            if "/" in str(f.get("path") or "")
+        })
     folder_paths = set(fm)
     for d in vol_dirs:
         if d and d not in folder_paths:
@@ -2099,6 +2172,7 @@ async def workspace_list_files(
             "folders": out_folders,
             "folder_order": workspace_service.order_map(session, task),
             "total": sum(f.get("size", 0) for f in files),
+            "from_backup": from_backup,
         },
         headers={"Cache-Control": "no-store"},
     )
@@ -2111,7 +2185,9 @@ async def workspace_read_file(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Datei-Inhalt laden (für den Editor). Binarys: als octet-stream."""
+    """Datei-Inhalt laden (für den Editor). Binarys: als octet-stream.
+
+    Gestoppt/slept: Read-only-Fallback aus dem Sleep-Backup-Tar."""
     task = await _load_ws_task(task_id, session, user)
     client = _ws_client_or_error(session, task)
     key = _ws_key(task, user)
@@ -2119,7 +2195,12 @@ async def workspace_read_file(
     try:
         data = await asyncio.to_thread(client.read_file, key, p)
     except ComputeAgentError as e:
-        raise _agent_http(e)
+        backup = _ws_backup_rel(task, user)
+        if backup is None:
+            raise _agent_http(e)
+        data = await asyncio.to_thread(snapshot_read_file, backup, p)
+        if data is None:
+            raise HTTPException(404, "Datei nicht gefunden.")
     if len(data) > MAX_FILE_BYTES:
         raise HTTPException(413, "Datei zu groß für den Editor (max. 50 MB).")
     is_binary = b"\x00" in data[:1024]
@@ -2377,7 +2458,13 @@ async def workspace_stop(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Container manuell stoppen (Dateien/Volume bleiben erhalten)."""
+    """Container manuell stoppen (Dateien/Volume bleiben erhalten).
+
+    Erzeugt SOFORT das Sleep-Backup (wie der Idle-Sweep, nur ohne
+    Wartezeit): gestoppt = Stand liegt auf dem Server = für den
+    Studenten (Dateibaum, read-only) und den LLM-Hinweis sichtbar.
+    Ohne Backup (z. B. Volume über der Cap) bleibt es beim alten
+    Verhalten — der Stopp selbst ist immer erfolgreich."""
     task = await _load_ws_task(task_id, session, user)
     client = _ws_client_or_error(session, task)
     key = _ws_key(task, user)
@@ -2385,6 +2472,16 @@ async def workspace_stop(
         await asyncio.to_thread(client.stop_workspace, key)
     except ComputeAgentError as e:
         raise _agent_http(e)
+    try:
+        data = await asyncio.to_thread(client.volume_backup_tar, key)
+        if data:
+            tar = workspace_backup_tar(key)
+            tar.parent.mkdir(parents=True, exist_ok=True)
+            tar.write_bytes(data)
+    except Exception:
+        logger.warning(
+            "workspace %s: Stopp-Backup fehlgeschlagen — ohne Backup "
+            "weiter (Stand erst nach dem Idle-Sweep sichtbar)", key)
     return {"ok": True}
 
 
@@ -2394,14 +2491,21 @@ async def workspace_start(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Container explizit starten (hebt die manuelle Stop-Sperre)."""
+    """Container explizit starten (hebt die manuelle Stop-Sperre).
+
+    Nach einem Idle-Sleep ist das Volume auf dem Server (Backup) — der
+    Agent legt dann ein frisches Volume an, und das Backup wird wie im
+    Auto-Start-Flow (ensure_workspace) vom Server zurückgespielt."""
     task = await _load_ws_task(task_id, session, user)
     client = _ws_client_or_error(session, task)
     key = _ws_key(task, user)
     try:
-        await asyncio.to_thread(client.start_workspace, key)
+        result = await asyncio.to_thread(client.start_workspace, key)
     except ComputeAgentError as e:
         raise _agent_http(e)
+    if result.get("fresh"):
+        await asyncio.to_thread(
+            workspace_service._restore_backup_if_any, client, key)
     return {"ok": True}
 
 
