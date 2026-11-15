@@ -132,6 +132,14 @@
   const SQ_IS_TUTOR = {{ 'true' if is_tutor or is_admin else 'false' }};
   // Deep-Link /script/{section_id}: Kapitel aufklappen + #chapter-Hash nachtragen
   const SQ_OPEN_SECTION = {{ open_section_id or 'null' }};
+  // Kapitel (inkl. rollenabhängiger Nummer) + TOC-Sichtbarkeit: serverseitig
+  // eingebettet (der Server hat die Daten für diese Seite ohnehin geladen)
+  // → Karten, „Kap. N“-Chips und TOC-Header erscheinen im ersten Paint,
+  // ohne API-Runde. Die Refmap (Content-Scan, der teure Teil) bleibt lazy:
+  // TOC-Body, Objekt-Deep-Links und Kapitel-Rendering holen sie, das
+  // Nicht-blockierende Warmladen unten holt sie im Hintergrund.
+  const SQ_SECTIONS = {{ sections | tojson }};
+  const SQ_TOC_VISIBLE = {{ 'true' if toc_visible else 'false' }};
 
   function decodeHtml(text) {
     return text.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
@@ -919,6 +927,76 @@
   // Kein Drag-Handle und kein data-section-id → Sortable und die
   // Kapitel-Deep-Links ignorieren die Karte; sie wird immer an der
   // Spitze wieder eingefügt (auch nach Reorder).
+  //
+  // Initial-Load: sqBuildTocSkeleton() rendert sofort nur den Header — seine
+  // Sichtbarkeit (SQ_TOC_VISIBLE) ist ohne den Refmap-Content-Scan bekannt.
+  // Der Body (Sections/Figuren/…) wird beim ersten Aufklappen per
+  // sqBuildToc() geladen. sqBuildToc() ist danach zugleich der Rebuild-Pfad
+  // (Reorder, TOC-Auge, Live-Updates).
+
+  // Karten-HTML (Header + eingeklappter Body): shared Skeleton/Rebuild.
+  // Ganz analog zur Kapitel-Karte: Header-Zeile (Klick = ein-/ausklappen) +
+  // darunter (nur Tutor/Prof, im aufgeklappten Zustand) Toolbar rechtsbündig
+  // mit dem Auge — wie bei den Kapiteln (sq-toolbar).
+  // Kein overflow-hidden an der Card (wie bei den Kapiteln): es würde die
+  // Card zum Scroll-Container machen und den Sticky-Kapitel-Header einsperren.
+  // Aufbau exakt wie der Kapitel-Header, damit „Inhaltsverzeichnis" am selben
+  // x-Startpunkt steht wie die Kapitel-Titel: [Tutor: 20-px-Platzhalter für das
+  // Drag-Handle] + titlewrap (Icon w-12 = Chip w-12, gap-2) + Chevron.
+  function sqTocCardHtml(tocVisible) {
+    return '<button type="button" class="sq-toc-toggle sq-chapter-header w-full flex items-center gap-3 px-6 py-4 text-left hover:bg-gray-50 transition">' +
+      (SQ_IS_TUTOR ? '<span class="w-5 flex-shrink-0" aria-hidden="true"></span>' : '') +
+      '<span class="sq-toc-titlewrap flex items-center gap-2 min-w-0 flex-1"><span class="w-12 text-xl text-center flex-shrink-0" aria-hidden="true">📑</span><span class="text-lg font-semibold text-blue-600 truncate">Inhaltsverzeichnis</span>' +
+      (SQ_IS_TUTOR && !tocVisible ? '<span class="sq-hidden-badge px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-200 text-gray-500 shrink-0">versteckt</span>' : '') +
+      '</span>' +
+      '<svg class="sq-toc-chevron h-5 w-5 text-gray-400 flex-shrink-0 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
+      '</button>' +
+      '<div class="script-toc-body hidden px-6 pb-5 border-t border-gray-100">' +
+      (SQ_IS_TUTOR
+        ? '<div class="sq-toolbar flex items-center gap-2 pt-4 pb-2"><span class="flex-1"></span>' +
+          '<button type="button" class="sq-toc-eye p-1.5 rounded hover:bg-gray-100 transition ' + (tocVisible ? 'text-gray-400 hover:text-blue-600' : 'text-gray-300') + '" title="' + (tocVisible ? 'Inhaltsverzeichnis für Studierende verstecken' : 'Inhaltsverzeichnis für Studierende einblenden') + '">' + sqEyeIcon(tocVisible) + '</button></div>'
+        : '') +
+      '</div>';
+  }
+
+  // TOC-Karte sofort ohne Refmap einbauen: Header + „Wird geladen…" im
+  // eingeklappten Body. Student sieht die Karte nur, wenn das TOC
+  // freigeschaltet ist (wie beim Rebuild in sqBuildToc).
+  function sqBuildTocSkeleton() {
+    const container = document.getElementById('script-reading');
+    if (container.querySelector('.script-toc-card')) return;
+    if (!SQ_SECTIONS.length) return;
+    if (!SQ_IS_TUTOR && !SQ_TOC_VISIBLE) return;
+    const card = document.createElement('div');
+    card.className = 'script-toc-card bg-white border border-gray-200 shadow-sm -mx-4 border-x-0 border-t-0 rounded-none sm:mx-0 sm:border-t sm:border-x sm:rounded-xl overflow-clip';
+    card.innerHTML = sqTocCardHtml(SQ_TOC_VISIBLE);
+    const body = card.querySelector('.script-toc-body');
+    const p = document.createElement('p');
+    p.className = 'text-gray-400 text-sm py-0.5';
+    p.textContent = 'Wird geladen…';
+    body.appendChild(p);
+    sqAttachTocToggle(card);
+    container.prepend(card);
+  }
+
+  // Header-Klick: lokales Ein-/Ausklappen (Chevron). Die Studierende-
+  // Sichtbarkeit steuert nur das Auge (Backend-Flag, analog zu den Kapiteln).
+  // Beim ersten Aufklappen (Body noch ohne data-loaded) füllt sqBuildToc()
+  // den Body — der Expanded-Zustand wird dabei übernommen (der Body ist zu
+  // dem Zeitpunkt bereits sichtbar).
+  function sqAttachTocToggle(card) {
+    const body = card.querySelector('.script-toc-body');
+    const chevron = card.querySelector('.sq-toc-chevron');
+    card.querySelector('.sq-toc-toggle').addEventListener('click', () => {
+      const willExpand = body.classList.contains('hidden');
+      body.classList.toggle('hidden');
+      chevron.style.transform = body.classList.contains('hidden') ? '' : 'rotate(180deg)';
+      if (willExpand && !body.hasAttribute('data-loaded')) sqBuildToc();
+    });
+    const tocEye = card.querySelector('.sq-toc-eye');
+    if (tocEye) tocEye.addEventListener('click', () => sqToggleTocVisibility());
+  }
+
   async function sqBuildToc() {
     const container = document.getElementById('script-reading');
     const old = container.querySelector('.script-toc-card');
@@ -927,57 +1005,31 @@
     const oldBody = old ? old.querySelector('.script-toc-body') : null;
     // Initialer Load (keine Vorgänger-Karte): TOC eingeklappt; Rebuilds halten den Zustand
     const wasCollapsed = oldBody ? oldBody.classList.contains('hidden') : true;
-    if (old) old.remove();
     const refMap = await getCourseRefMap();
+    // Refmap nicht da (z. B. Fetch-Fehler) → alte Karte (Skeleton) bleibt stehen
     if (!refMap || !refMap.chapters) return;
     // TOC-Sichtbarkeit für Studierende (Backend-Flag; robust gegen alte Caches ohne Feld)
     const tocVisible = refMap.tocVisible !== false;
-    // Student: bei verstecktem TOC gar keine TOC-Karte; Tutor/Prof sieht es immer
-    if (!SQ_IS_TUTOR && !tocVisible) return;
     // Display-Reihenfolge aus chapterOrder — Object.keys(refMap.chapters) geht
     // NICHT: JSON.parse sortiert numerische Keys ("5","6","7") immer aufsteigend!
     const ids = (Array.isArray(refMap.chapterOrder) && refMap.chapterOrder.length)
       ? refMap.chapterOrder
       : Object.keys(refMap.chapters);
-    if (!ids.length) return;
-
+    // Student: bei verstecktem TOC gar keine TOC-Karte (Tutor/Prof sieht es
+    // immer); keine Kapitel → ebenfalls keine Karte
+    if ((!SQ_IS_TUTOR && !tocVisible) || !ids.length) {
+      if (old) old.remove();
+      return;
+    }
+    if (old) old.remove();
     const card = document.createElement('div');
     card.className = 'script-toc-card bg-white border border-gray-200 shadow-sm -mx-4 border-x-0 border-t-0 rounded-none sm:mx-0 sm:border-t sm:border-x sm:rounded-xl overflow-clip';
-    // Ganz analog zur Kapitel-Karte: Header-Zeile (Klick = ein-/ausklappen) +
-    // darunter (nur Tutor/Prof, im aufgeklappten Zustand) Toolbar rechtsbündig
-    // mit dem Auge — wie bei den Kapiteln (sq-toolbar).
-    // Kein overflow-hidden an der Card (wie bei den Kapiteln): es würde die
-    // Card zum Scroll-Container machen und den Sticky-Header einsperren.
-    // Aufbau exakt wie der Kapitel-Header, damit „Inhaltsverzeichnis" am selben
-    // x-Startpunkt steht wie die Kapitel-Titel: [Tutor: 20-px-Platzhalter für das
-    // Drag-Handle] + titlewrap (Icon w-12 = Chip w-12, gap-2) + Chevron.
-    card.innerHTML =
-      '<button type="button" class="sq-toc-toggle sq-chapter-header w-full flex items-center gap-3 px-6 py-4 text-left hover:bg-gray-50 transition">' +
-      (SQ_IS_TUTOR ? '<span class="w-5 flex-shrink-0" aria-hidden="true"></span>' : '') +
-      '<span class="sq-toc-titlewrap flex items-center gap-2 min-w-0 flex-1"><span class="w-12 text-xl text-center flex-shrink-0" aria-hidden="true">📑</span><span class="text-lg font-semibold text-blue-600 truncate">Inhaltsverzeichnis</span>' +
-      (SQ_IS_TUTOR && !tocVisible ? '<span class="sq-hidden-badge px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-200 text-gray-500 shrink-0">versteckt</span>' : '') +
-      '</span>' +
-      '<svg class="sq-toc-chevron h-5 w-5 text-gray-400 flex-shrink-0 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
-      '</button>' +
-      '<div class="script-toc-body px-6 pb-5 border-t border-gray-100">' +
-      (SQ_IS_TUTOR
-        ? '<div class="sq-toolbar flex items-center gap-2 pt-4 pb-2"><span class="flex-1"></span>' +
-          '<button type="button" class="sq-toc-eye p-1.5 rounded hover:bg-gray-100 transition ' + (tocVisible ? 'text-gray-400 hover:text-blue-600' : 'text-gray-300') + '" title="' + (tocVisible ? 'Inhaltsverzeichnis für Studierende verstecken' : 'Inhaltsverzeichnis für Studierende einblenden') + '">' + sqEyeIcon(tocVisible) + '</button></div>'
-        : '') +
-      '</div>';
+    card.innerHTML = sqTocCardHtml(tocVisible);
     const body = card.querySelector('.script-toc-body');
     const chevron = card.querySelector('.sq-toc-chevron');
-    // Header-Klick = lokales Ein-/Ausklappen (Chevron). Die Studierende-Sichtbarkeit
-    // steuert nur das Auge (Backend-Flag, analog zu den Kapiteln).
     body.classList.toggle('hidden', wasCollapsed);
     chevron.style.transform = wasCollapsed ? '' : 'rotate(180deg)';
-    const collapseToc = () => {
-      body.classList.toggle('hidden');
-      chevron.style.transform = body.classList.contains('hidden') ? '' : 'rotate(180deg)';
-    };
-    card.querySelector('.sq-toc-toggle').addEventListener('click', collapseToc);
-    const tocEye = card.querySelector('.sq-toc-eye');
-    if (tocEye) tocEye.addEventListener('click', () => sqToggleTocVisibility());
+    sqAttachTocToggle(card);
 
     const subHead = (text) => {
       const d = document.createElement('div');
@@ -1103,6 +1155,7 @@
       }
     }
 
+    body.setAttribute('data-loaded', '1');
     container.prepend(card);
     sqUpdateChapterNumbers();
   }
@@ -1226,11 +1279,19 @@
 
     const titleWrap = document.createElement("span");
     titleWrap.className = "sq-title-wrap flex items-center gap-2 min-w-0 flex-1";
-    // Kapitelnummer (rollenabhängig; wird von sqUpdateChapterNumbers() gefüllt).
+    // Kapitelnummer (rollenabhängig): beim Initial-Load direkt aus SQ_SECTIONS
+    // (serverseitig eingebettet) → sofort sichtbar, kein Refmap-Warten. Bei
+    // Live-Neuanlagen (sqLiveCreateSection) fehlt sie noch → hidden, bis
+    // sqUpdateChapterNumbers() sie per Refmap füllt.
     // Fixe Breite w-12 → Titelanfang ist über alle Kapitel hinweg gleich (und
     // stimmt mit dem TOC-Icon-Platzhalter überein).
     const chapNum = document.createElement("span");
-    chapNum.className = "sq-chap-num hidden w-12 inline-flex items-center justify-center py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-400 shrink-0";
+    chapNum.className = "sq-chap-num w-12 inline-flex items-center justify-center py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-400 shrink-0";
+    if (s.num != null) {
+      chapNum.textContent = "Kap. " + s.num;
+    } else {
+      chapNum.classList.add("hidden");
+    }
     titleWrap.appendChild(chapNum);
     const title = document.createElement("span");
     title.className = "sq-title text-lg font-semibold text-blue-600";
@@ -1300,51 +1361,54 @@
   }
 
 
-  async function loadScript() {
+  // Karten + „Kap. N“-Chips + TOC-Header aus den serverseitig eingebetteten
+  // Daten (SQ_SECTIONS) bauen — synchron, also im ersten Paint, ohne API-
+  // Runde (der Server hat die Liste für diese Seite ohnehin geladen). Die
+  // Refmap (Content-Scan) ist hier nicht nötig: Kapitelnummern sind rein
+  // positionsbasiert, der TOC-Body lädt lazy beim ersten Aufklappen.
+  function loadScript() {
     const container = document.getElementById('script-reading');
-    try {
-      const res = await fetch(`/api/courses/${courseId}/script-sections`, { credentials: "same-origin" });
-      if (!res.ok) throw new Error("Nicht geladen");
-      const sections = await res.json();
-      container.innerHTML = "";
+    const sections = SQ_SECTIONS;
+    container.innerHTML = "";
 
-      if (!sections.length) {
-        // Nur Hinweistext; das neue Kapitel wird per Button unter der Liste erstellt.
-        // (sq-empty-state: wird von sqAddNewSection() beim Erstellen entfernt)
-        if (SQ_IS_TUTOR) {
-          container.innerHTML =
-            '<div class="sq-empty-state text-center py-6">' +
-            '<div class="text-4xl mb-3">📖</div>' +
-            '<p class="text-gray-500 text-sm">Noch keine Kapitel im Skript.</p>' +
-            '</div>';
-        } else {
-          container.innerHTML = '<p class="text-gray-400 text-sm">Noch keine Kapitel freigeschaltet.</p>';
-        }
-        return;
+    if (!sections.length) {
+      // Nur Hinweistext; das neue Kapitel wird per Button unter der Liste erstellt.
+      // (sq-empty-state: wird von sqAddNewSection() beim Erstellen entfernt)
+      if (SQ_IS_TUTOR) {
+        container.innerHTML =
+          '<div class="sq-empty-state text-center py-6">' +
+          '<div class="text-4xl mb-3">📖</div>' +
+          '<p class="text-gray-500 text-sm">Noch keine Kapitel im Skript.</p>' +
+          '</div>';
+      } else {
+        container.innerHTML = '<p class="text-gray-400 text-sm">Noch keine Kapitel freigeschaltet.</p>';
       }
-
-      for (const s of sections) {
-        const card = buildSectionCard(s);
-        container.appendChild(card);
-        // Toolbar erst nach dem Einbau befüllen (querySelector braucht den DOM-Pfad)
-        sqSetNormalToolbar(card);
-      }
-
-      if (SQ_IS_TUTOR) initSortable();
-      await sqBuildToc();
-      handleChapterHash();
-      handleObjectHash();
-      handleSectionHash();
-      handleQuestionHash();
-      // Deep-Link /script/{section_id} (ohne Hash): Hash nachtragen, damit die
-      // URL teilbar bleibt, und das Kapitel anfahren (Expand + Scroll).
-      if (SQ_OPEN_SECTION != null && !location.hash) {
-        history.replaceState(null, "", location.pathname + "#chapter-" + SQ_OPEN_SECTION);
-        handleChapterHash();
-      }
-    } catch (e) {
-      container.innerHTML = '<p class="text-red-500 text-sm">Fehler beim Laden des Skripts.</p>';
+      return;
     }
+
+    for (const s of sections) {
+      const card = buildSectionCard(s);
+      container.appendChild(card);
+      // Toolbar erst nach dem Einbau befüllen (querySelector braucht den DOM-Pfad)
+      sqSetNormalToolbar(card);
+    }
+
+    if (SQ_IS_TUTOR) initSortable();
+    // TOC-Header sofort (ohne Refmap); der Body lädt beim ersten Aufklappen
+    sqBuildTocSkeleton();
+    handleChapterHash();
+    handleObjectHash();
+    handleSectionHash();
+    handleQuestionHash();
+    // Deep-Link /script/{section_id} (ohne Hash): Hash nachtragen, damit die
+    // URL teilbar bleibt, und das Kapitel anfahren (Expand + Scroll).
+    if (SQ_OPEN_SECTION != null && !location.hash) {
+      history.replaceState(null, "", location.pathname + "#chapter-" + SQ_OPEN_SECTION);
+      handleChapterHash();
+    }
+    // Refmap (Content-Scan, der teure Teil) nicht blockierend warmladen:
+    // beim ersten Aufklappen von TOC/Kapitel ist sie dann schon gecacht.
+    getCourseRefMap();
   }
 
   // ─── Deep-Link: #chapter-{id} → Kapitel aufklappen und dazu scrollen ───

@@ -1401,6 +1401,10 @@ def _render_script_page(session, user, request, course_id, open_section_id=None)
     if not is_tutor and not sections:
         raise HTTPException(404, "Kein Skript für diesen Kurs vorhanden.")
 
+    # Kapitel-Liste + Nummer (rollenabhängig, wie script-refmap) und
+    # TOC-Sichtbarkeit direkt einbetten: beides ist rein positionsbasiert
+    # (kein Content-Scan), damit der erste Paint ohne API-Runde und ohne
+    # den (zeitintensiven) script-refmap-Endpoint korrekt ist.
     ctx["sections"] = [
         {
             "id": s.id,
@@ -1408,9 +1412,11 @@ def _render_script_page(session, user, request, course_id, open_section_id=None)
             "is_visible": s.is_visible,
             "display_order": s.display_order,
             "updated_at": timeutil.utc_iso(s.updated_at),
+            "num": i,
         }
-        for s in sections
+        for i, s in enumerate(sections, start=1)
     ]
+    ctx["toc_visible"] = bool(session.get(Course, course_id).toc_visible)
     ctx["page_title"] = f"Skript — {ctx['course']['name']}"
     ctx["code_editor"] = True  # CodeMirror (Markdown-Mode) für die Kapitel-Editoren
     ctx["open_section_id"] = open_section_id
