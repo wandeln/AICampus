@@ -62,24 +62,29 @@
   </div>
   {% endif %}
 
-  <!-- Course Cards with inline stats -->
+  <!-- Course Cards with inline stats:
+       immer eine Karte pro Reihe; ab md (768 px, also auch Handy-Landscape)
+       Teaser links, Inhalt rechts (Karte wird breiter + flacher) -->
   {% from "course/_teaser.html" import course_teaser %}
-  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+  <div class="grid grid-cols-1 gap-6">
     {% for course in courses %}
     <a href="/courses/{{ course.id }}"
        class="bg-white rounded-xl shadow-md border border-gray-200 hover:shadow-lg hover:border-gray-300 transition-all duration-200 block overflow-hidden">
+      <div class="flex flex-col md:flex-row">
 
-      <!-- Top: Teaser-Medium (Kurs-Einstellungen) -->
-      {{ course_teaser(teaser_by_course.get(course.id)) }}
+      <!-- Teaser-Medium (Kurs-Einstellungen): mobil oben, ab md links -->
+      {{ course_teaser(teaser_by_course.get(course.id),
+                       "w-full aspect-video md:aspect-auto md:w-72 shrink-0 overflow-hidden bg-gray-100") }}
 
-      <!-- Colored accent bar -->
-      <div class="h-1
+      <!-- Colored accent stripe: trennt Teaser von Inhalt
+           (mobil horizontal, ab md vertikal) -->
+      <div class="h-1 md:h-auto md:w-1 shrink-0
         {% if course.role_in_course == 'PROF' %}bg-purple-500
         {% elif course.role_in_course == 'TUTOR' %}bg-blue-500
         {% else %}bg-green-500
         {% endif %}"></div>
 
-      <div class="p-5">
+      <div class="flex-1 min-w-0 p-5">
 
       <!-- Role badge + title -->
       <div class="flex items-start justify-between mb-3">
@@ -101,29 +106,9 @@
       {% if course.role_in_course == 'STUDENT' and stats_by_course|length > 0 %}
         {% set cs = stats_by_course.get(course.id) %}
         {% if cs %}
-          <!-- Aufgaben-Fortschritt (nur wenn der Kurs Aufgaben auf AICampus hat) -->
-          <div class="mb-3">
-            <div class="flex justify-between text-xs text-gray-500 mb-1">
-              <span>Bearbeitete Aufgaben</span>
-              <span>{{ cs.completed }} / {{ cs.total_tasks }}</span>
-            </div>
-            <div class="w-full bg-gray-200 rounded-full h-2">
-              <div class="bg-blue-500 h-2 rounded-full transition-all"
-                   style="width: {{ (cs.completed / cs.total_tasks * 100) if cs.total_tasks > 0 else 0 }}%"></div>
-            </div>
-          </div>
-
-          <!-- Punkte -->
-          <div class="flex items-center justify-between text-sm">
-            <span class="text-gray-500">Punkte</span>
-            <span class="font-semibold
-              {% if cs.possible > 0 and cs.earned / cs.possible >= 0.8 %}text-green-600
-              {% elif cs.possible > 0 and cs.earned / cs.possible >= 0.5 %}text-yellow-600
-              {% elif cs.earned > 0 %}text-orange-600
-              {% else %}text-gray-400
-              {% endif %}">
-              {{ "%.1f"|format(cs.earned) }} / {{ cs.possible }}
-            </span>
+          <!-- Bearbeitet + Punkte (eine Zeile, neutral, ohne Maximalwerte) -->
+          <div class="text-sm text-gray-500">
+            {{ cs.completed }} Aufgaben bearbeitet{% if cs.earned > 0 %}, {{ "%.1f"|format(cs.earned) }} Punkte{% endif %}
           </div>
           <!-- Medaillen -->
           {% set medal_count = cs.medals.platinum + cs.medals.gold + cs.medals.silver + cs.medals.bronze %}
@@ -139,6 +124,7 @@
       {% elif course.role_in_course != 'STUDENT' %}
         <p class="text-gray-500 text-sm mt-2">Zum Kurs öffnen →</p>
       {% endif %}
+      </div>
       </div>
     </a>
     {% endfor %}
@@ -165,14 +151,14 @@
                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
       </div>
       <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Beschreibung</label>
-        <textarea id="new-course-desc" rows="2" placeholder="Kurze Beschreibung..."
-                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></textarea>
-      </div>
-      <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">Kurzbeschreibung</label>
         <input type="text" id="new-course-short-info" placeholder="z.B. WS 2025/26 oder Modulnummer (optional)"
                maxlength="50" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Beschreibung</label>
+        <textarea id="new-course-desc" rows="2" placeholder="Kurze Beschreibung..."
+                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></textarea>
       </div>
     </div>
 

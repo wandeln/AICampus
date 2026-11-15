@@ -1,12 +1,13 @@
 {# ─────────────────────────────────────────────────────────────────────
    Kurs-Teaser (Medium aus der Kurs-Medienbibliothek).
-   Kontext: teaser = {url, mime_type, media_type} oder None/leer.
+   Kontext: teaser = {url, mime_type, media_type} oder None/leer;
+   wrapper_class für das äußere Div (Default: volle Breite, 16:9).
    Rendering: Video stumm loopend, Applet im Sandbox-Iframe (wie im
    Skript), alles andere (Bilder, SVG) als <img>.
    ───────────────────────────────────────────────────────────────────── #}
-{% macro course_teaser(teaser) %}
+{% macro course_teaser(teaser, wrapper_class="w-full aspect-video overflow-hidden bg-gray-100") %}
 {% if teaser %}
-<div class="w-full aspect-video overflow-hidden bg-gray-100">
+<div class="{{ wrapper_class }}">
   {% if teaser.mime_type.startswith("video/") %}
   <video src="{{ teaser.url }}" muted loop playsinline autoplay
          class="w-full h-full object-cover"></video>
