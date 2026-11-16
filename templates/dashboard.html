@@ -72,17 +72,18 @@
        class="bg-white rounded-xl shadow-md border border-gray-200 hover:shadow-lg hover:border-gray-300 transition-all duration-200 block overflow-hidden">
       <div class="flex flex-col md:flex-row">
 
+      {% set stripe_color = 'bg-purple-500' if course.role_in_course == 'PROF'
+           else 'bg-blue-500' if course.role_in_course == 'TUTOR'
+           else 'bg-green-500' %}
+      <!-- Colored accent stripe: ab md an der Kartenkante (links, vertikal) -->
+      <div class="hidden md:block md:h-auto md:w-1 shrink-0 {{ stripe_color }}"></div>
+
       <!-- Teaser-Medium (Kurs-Einstellungen): mobil oben, ab md links -->
       {{ course_teaser(teaser_by_course.get(course.id),
                        "w-full aspect-video md:aspect-auto md:w-72 shrink-0 overflow-hidden bg-gray-100") }}
 
-      <!-- Colored accent stripe: trennt Teaser von Inhalt
-           (mobil horizontal, ab md vertikal) -->
-      <div class="h-1 md:h-auto md:w-1 shrink-0
-        {% if course.role_in_course == 'PROF' %}bg-purple-500
-        {% elif course.role_in_course == 'TUTOR' %}bg-blue-500
-        {% else %}bg-green-500
-        {% endif %}"></div>
+      <!-- Colored accent stripe: mobil horizontal zwischen Teaser und Inhalt -->
+      <div class="h-1 md:hidden shrink-0 {{ stripe_color }}"></div>
 
       <div class="flex-1 min-w-0 p-5">
 
@@ -113,7 +114,7 @@
           <!-- Medaillen -->
           {% set medal_count = cs.medals.platinum + cs.medals.gold + cs.medals.silver + cs.medals.bronze %}
           {% if medal_count > 0 %}
-          <div class="flex items-center mt-2">
+          <div class="flex items-center mt-3">
             {% if cs.medals.platinum > 0 %}<span class="badge-tier badge-platinum">{% if cs.medals.platinum > 1 %}{{ cs.medals.platinum }} {% endif %}💎</span>{% endif %}
             {% if cs.medals.gold > 0 %}<span class="badge-tier badge-gold">{% if cs.medals.gold > 1 %}{{ cs.medals.gold }} {% endif %}🥇</span>{% endif %}
             {% if cs.medals.silver > 0 %}<span class="badge-tier badge-silver">{% if cs.medals.silver > 1 %}{{ cs.medals.silver }} {% endif %}🥈</span>{% endif %}
