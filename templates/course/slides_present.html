@@ -85,6 +85,10 @@ body.aicampus-laser * {
   <a href="/courses/{{ course.id }}/slides/{{ deck.id }}/present?print-pdf" target="_blank">⬇️ PDF</a>
 </div>
 <div class="present-shell" id="present-shell">
+  {# Lade-Meldung: sichtbar, bis das Deck gefitet ist (Present: Startfolie
+     stabil, Print: doPrint) — die rohen Sections wären sonst kurz als
+     aufgestapelte Folien zu sehen. #}
+  <div class="present-message" id="present-loading">Slides werden geladen …</div>
   <div class="reveal{% if slides_theme.template %} theme-{{ slides_theme.template }}{% endif %}{% if slides_has_logo %} slides-has-logo slides-logo-{{ slides_theme.logo_position }}{% endif %}"
        id="reveal-root">
     <div class="slides" id="reveal-slides"></div>
@@ -806,12 +810,12 @@ async function aicampusDoMount() {
   // Deck VOR dem Section-Build verbergen: die rohen <section>-Elemente
   // (noch ohne Reveal-Positionierung) würden sonst kurz als aufgestapelte
   // Folien gemalt, bevor initialize() sie anordnet. visibility:hidden
-  // behält das Layout (Reveal's initialize misst weiter); der Un-Hide
-  // erfolgt erst, wenn die Applet-/Font-Lade-Phase der Startfolie gefitet
-  // ist (Block nach initialize()). KEIN ?print-pdf: der Export wird nicht
-  // blockiert.
-  const _hideUntilStable = !/print-pdf/.test(window.location.search);
-  if (_hideUntilStable) document.getElementById("reveal-root").style.visibility = "hidden";
+  // behält das Layout (Reveal's initialize misst weiter). Während der
+  // Verdeckung ist die Lade-Meldung (in der present-shell) sichtbar.
+  // Un-Hide: Present — wenn die Applet-/Font-Lade-Phase der Startfolie
+  // gefitet ist (Block nach initialize()); Print — in doPrint direkt vor
+  // window.print() (der Export wird dadurch nicht blockiert).
+  document.getElementById("reveal-root").style.visibility = "hidden";
   for (let h = 0; h < slides.length; h++) {
     const footer = FOOTER_ENABLED && FOOTER_TEXT ? FOOTER_TEXT : null;
     // Folien-Position (S-Nummern unlabeled Subfigure-Komplexe):
@@ -972,8 +976,9 @@ async function aicampusDoMount() {
   // Höhendrop (eigener HTML-Load + dessen Webfonts → mehrere
   // postMessages) triggert einen Refit → sichtbare Skala-Stufen beim
   // Laden ("oszillierendes Auto-Scale"). Das Deck ist seit vor
-  // initialize() unsichtbar (_hideUntilStable); hier wird es erst sichtbar.
-  if (_hideUntilStable) {
+  // initialize() unsichtbar; hier (nur Present) wird es erst sichtbar.
+  // Print bleibt bis doPrint verdeckt.
+  if (!/print-pdf/.test(window.location.search)) {
     const _root = document.getElementById("reveal-root");
     try {
       const _sec = slidesEl.querySelector(":scope > section.present") || slidesEl.children[0];
@@ -999,6 +1004,7 @@ async function aicampusDoMount() {
       if (_sec) fitSlideSection(_sec, SLIDE_W, SLIDE_H);
     } catch (e) { /* Applet-Problem darf den Mount nicht brechen */ }
     _root.style.visibility = "";
+    document.getElementById("present-loading")?.remove();
   }
   aicampusCurrentReveal = reveal;
   // Laser-Pointer (nur Tutoren): Taste L + Color-Picker-Feld am frischen
@@ -1116,7 +1122,12 @@ async function aicampusDoMount() {
         // Safety-Net: finales Refit mit den JETZT (nach dem Font-/Bild-Wait
         // und fixPdfLayout) finalen Metriken. Sections sind exakt 960×540 →
         // in-place, exakt das gedruckte Layout → Print-Skala = Präsen-Skala.
+        // (Beinhaltet auch den Wide-Code-Shrink → Print = Present.)
         fitSlides(slidesEl, SLIDE_W, SLIDE_H);
+        // Deck erst HIER sichtbar machen (davor verdeckt, Lade-Meldung) →
+        // der erste PDF-Frame ist das fertige, gefitete Layout.
+        document.getElementById("reveal-root").style.visibility = "";
+        document.getElementById("present-loading")?.remove();
         window.print();
       }
     };

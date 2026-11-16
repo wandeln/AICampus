@@ -680,11 +680,15 @@ html.print-pdf .reveal.slides-logo-bottom-left .slides .pdf-page > section::befo
   overflow: auto !important;
 }
 
-/* PDF-Export: Cap weg — Code muss im PDF vollständig stehen bleiben
-   (internes Scrollen ist dort nicht bedienbar). */
+/* PDF-Export: Vertikale Cap weg — Code muss im PDF vollständig stehen
+   bleiben (internes Scrollen ist dort nicht bedienbar). Horizontal: Cap
+   BLEIBT (Code-Figuren max-width:100%, s. unten) + overflow:hidden als
+   Sicherheit, dass nichts die Druckseite verlässt — der Print-JS-Fit
+   (fitPrintCodeBoxes) senkt bei Bedarf die Code-Fontgröße, damit die
+   längste Zeile ohne Clipping in die Box passt. */
 html.print-pdf .reveal .slides .markdown-preview pre {
   max-height: none !important;
-  overflow: visible !important;
+  overflow: hidden !important;
 }
 
 /* Per-Line-Reveal-Clones (Code-Blöcke mit {#lines:…}): reveal.css positioniert
@@ -750,11 +754,14 @@ html.print-pdf .reveal .slides .markdown-preview pre {
       bekommt seine Horizontal-Scrollbar. */
    max-width: 100%;
  }
- html.print-pdf :is(.reveal .slides, .slides-canvas) .markdown-preview :is(.aicampus-figure, .aicampus-code-figure, .aicampus-table-figure) {
-   /* PDF-Export: Cap weg — Code muss vollständig stehen (overflow:visible,
-      s. pre-Regel oben); internes Scrollen ist im PDF nicht bedienbar. */
-   max-width: none;
- }
+  html.print-pdf :is(.reveal .slides, .slides-canvas) .markdown-preview :is(.aicampus-figure, .aicampus-table-figure) {
+    /* PDF-Export: Cap weg. Code-Figuren BLEIBEN begrenzt (max-width:100%
+       der Grundregel): wie in der Präsentation liegt die Box in der
+       Folie — überbreite Zeilen schrumpft fitPrintCodeBoxes per
+       Fontgröße (s. pre-Regel oben), statt die Box aus der Folie
+       wuchern zu lassen. */
+    max-width: none;
+  }
 :is(.reveal .slides, .slides-canvas) .markdown-preview :is(.aicampus-figure, .aicampus-code-figure, .aicampus-table-figure) figcaption {
   margin-top: 0.5em;
 }
@@ -1292,6 +1299,14 @@ body.present-mode .present-shortcuts kbd {
   text-align: center;
   color: #64748b;
   font-size: 1.1rem;
+}
+
+/* Lade-Meldung: viewport-fix — auch im ?print-pdf-Fenster gilt die
+   Print-CSS (Shell position:static), wo absolute inset:0 nicht mehr am
+   Shell-Block auflösen würde. Entfernt vor window.print() → nie im PDF. */
+#present-loading {
+  position: fixed;
+  z-index: 20;
 }
 
 /* ─── PDF-Druck (?print-pdf) ─────────────────────────────────────

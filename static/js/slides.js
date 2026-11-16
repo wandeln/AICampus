@@ -451,9 +451,44 @@ function _slideFitAvailable(section, title) {
   return avail;
 }
 
+/** Code-Blöcke in der Folie, deren längste Zeile breiter als die Box ist,
+ *  per Fontgröße verkleinern — bis die Zeile ohne X-Scroll/Clip passt.
+ *  Gilt für PRESENT und PRINT identisch: so bleibt die Code-Ansicht in
+ *  beiden Modi pixelgleich (Chalkboard-Notationen aus der Präsentation
+ *  übertragen 1:1 in den Print) und die Presentation verliert den
+ *  horizontalen Scroll bei überbreitem Code.
+ *
+ *  Die Fontgröße wird in PX gesetzt (absolut): der Y-Fit
+ *  (--slides-body-scale) skaliert em-Größen, px bleibt davon unberührt →
+ *  ein danach wachsende Y-Skala erzeugt keinen erneuten Überlauf.
+ *
+ *  Messen: der Text steht im <code>-Kind, das display:block ist (hljs) —
+ *  der Überlauf taucht NUR in code.scrollWidth auf (pre.scrollWidth bleibt
+ *  clientWidth). → Die Breite am blockigen code messen.
+ *
+ *  Rückgabe: true, wenn etwas geshrinkt wurde (→ Aufrufer fitet die Y-Skala
+ *  neu, die Box ist kürzer geworden). */
+function _shrinkWideCodeIn(section) {
+  let shrank = false;
+  section.querySelectorAll("pre").forEach((pre) => {
+    const code = pre.querySelector("code");
+    const el = code && getComputedStyle(code).display === "block" ? code : pre;
+    if (el.clientWidth <= 0 || el.scrollWidth <= el.clientWidth + 1) return;
+    const fs = parseFloat(getComputedStyle(pre).fontSize) * (el.clientWidth / el.scrollWidth);
+    pre.style.setProperty("font-size", fs.toFixed(2) + "px", "important");
+    shrank = true;
+  });
+  return shrank;
+}
+
 /** Auto-Fit für EINE Folie: --slides-body-scale so setzen, dass der
  *  Folienkörper (inkl. aller versteckter Fragments — die bleiben im
- *  Layout) in den Folienraum unterhalb des Titels passt. Synchron. */
+ *  Layout) in den Folienraum unterhalb des Titels passt. Synchron.
+ *  Pro Runde: überbreite Code-Boxen shrinken, dann Y-Bisektion — der
+ *  Shrink macht den Körper kürzer (die Skala darf wachsen) und ein
+ *  wachsende Skala kann bei em-Code neuen Breiten-Überlauf erzeugen
+ *  (nächste Runde fängt ihn). Max. 3 Runden; ohne Shrink bricht die
+ *  erste Bisektion ab. */
 function fitSlideSection(section, W, H) {
   const mp = section.querySelector(":scope > .markdown-preview");
   const body = mp && mp.querySelector(":scope > .aicampus-slide-body");
@@ -501,33 +536,37 @@ function fitSlideSection(section, W, H) {
       section.style.setProperty("--slides-body-scale", String(sc));
       return body.scrollHeight <= avail + 0.5; // +0.5px: Subpixel-Rundung
     };
-    if (fits(1)) {
-      best = 1;
-    } else {
-      // 1 passt nicht. Grobsuche nach einer passenden Obergrenze (×0.8-
-      // Schritte; lo = größt bekannte zu-große Skala). Kein lineares
-      // s·avail/h: die Zeilen-Umbruch-Neupackung macht die Höhe
-      // SUPERLINEAR in der Skala → die lineare Korrektur landete deutlich
-      // unter dem Optimum (Text wurde unnötig klein).
-      let lo = 1;
-      let hi = null;
-      while (lo > SLIDE_FIT_MIN) {
-        const sc = Math.max(SLIDE_FIT_MIN, lo * 0.8);
-        if (fits(sc)) { hi = sc; break; }
-        lo = sc;
-      }
-      if (hi !== null) {
-        // Bisektion: die Höhe ist monoton steigend in der Skala (kleiner →
-        // kleiner) → „passt" ist ein monotones Prädikat → konvergiert gegen
-        // die größte passende Skala (lo > hi immer, dazwischen liegt der
-        // Umbruch).
-        for (let i = 0; i < SLIDE_FIT_BISECT && lo - hi > 0.002; i++) {
-          const mid = (lo + hi) / 2;
-          if (fits(mid)) hi = mid; else lo = mid;
+    for (let round = 0; round < 3; round++) {
+      const shrank = _shrinkWideCodeIn(section);
+      if (fits(1)) {
+        best = 1;
+      } else {
+        // 1 passt nicht. Grobsuche nach einer passenden Obergrenze (×0.8-
+        // Schritte; lo = größt bekannte zu-große Skala). Kein lineares
+        // s·avail/h: die Zeilen-Umbruch-Neupackung macht die Höhe
+        // SUPERLINEAR in der Skala → die lineare Korrektur landete deutlich
+        // unter dem Optimum (Text wurde unnötig klein).
+        let lo = 1;
+        let hi = null;
+        while (lo > SLIDE_FIT_MIN) {
+          const sc = Math.max(SLIDE_FIT_MIN, lo * 0.8);
+          if (fits(sc)) { hi = sc; break; }
+          lo = sc;
         }
-        best = hi;
+        if (hi !== null) {
+          // Bisektion: die Höhe ist monoton steigend in der Skala
+          // (kleiner → kleiner) → „passt" ist ein monotones Prädikat →
+          // konvergiert gegen die größte passende Skala (lo > hi immer,
+          // dazwischen liegt der Umbruch).
+          for (let i = 0; i < SLIDE_FIT_BISECT && lo - hi > 0.002; i++) {
+            const mid = (lo + hi) / 2;
+            if (fits(mid)) hi = mid; else lo = mid;
+          }
+          best = hi;
+        }
+        s = SLIDE_FIT_MIN; // auch MIN zu groß → Letztausgang MIN
       }
-      s = SLIDE_FIT_MIN; // auch MIN zu groß → Letztausgang MIN
+      if (!shrank) break;
     }
   } finally {
     body.style.flex = flexSave;
