@@ -24,3 +24,10 @@ def multi_keyword_matches(text: str | None, filter_text: str) -> bool:
         return False
     text_cf = text.casefold()
     return all(term in text_cf for term in terms)
+
+
+def parse_type_filter(raw: str) -> list[str]:
+    """Aufgaben-Typ-Filter parsen: Comma-separierte Liste (OR) —
+    'workspace' → ['workspace'], 'text,mc' → ['text', 'mc'], '' → [].
+    """
+    return [t.strip() for t in raw.split(",") if t.strip()]

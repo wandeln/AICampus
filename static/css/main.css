@@ -1417,3 +1417,42 @@ a.aicampus-xref {
 .cm-ta-box { color: #0f766e; font-weight: 600; }  /* @startbox/@endbox */
 .cm-ta-label { color: #7c3aed; }   /* {#typ:label} u. ä. */
 .cm-ta-ref { color: #2563eb; }     /* @typ:label */
+
+/* Filter-Chips (Facetten-Filter, initialisiert per task-filter.js) */
+.filter-chip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.filter-chip-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #374151;
+  margin-right: 4px;
+  white-space: nowrap;
+}
+.filter-chip {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #4b5563;
+  font-size: 0.8125rem;
+  line-height: 1;
+  padding: 6px 12px;
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+.filter-chip:hover {
+  border-color: #9ca3af;
+  background: #f9fafb;
+}
+.filter-chip.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+.filter-chip.active:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}

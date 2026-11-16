@@ -31,23 +31,13 @@
         <input type="text" id="filter-input" placeholder="z.B. Blatt rek..."
                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
       </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Aufgabentyp</label>
-        <select id="type-filter" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
-          <option value="">Alle</option>
-          <option value="text">Textaufgaben</option>
-          <option value="mc">Multiple-Choice-Aufgaben</option>
-          <option value="upload">Upload-Aufgaben</option>
-          <option value="workspace">Workspace-Aufgaben</option>
-          <option value="extern">Externe Aufgaben</option>
-        </select>
-      </div>
       <div class="flex items-end">
         <button id="clear-filter-btn" class="text-gray-500 hover:text-gray-700 text-sm px-3 py-2" style="margin-top:20px">
           ✕ Filter löschen
         </button>
       </div>
     </div>
+    <div id="filter-chips" class="mt-3 space-y-2"></div>
   </div>
 
   <p class="text-sm text-gray-500 mb-2">Klicke auf eine Punktezahl, um die Einreichung zu bewerten (Strg/Cmd+Klick: in neuem Tab). · Spaltenüberschrift anklicken = sortieren (erneuter Klick = auf-/absteigend umschalten). · Aktive Filter &amp; Sortierung werden beim Öffnen in die Bewertungsseite mitgenommen.</p>
@@ -74,7 +64,7 @@
 
   <!-- Keine Treffer (nur bei aktivem Filter, per JS eingeblendet) -->
   <div id="filter-no-tasks" class="hidden text-center py-4">
-    <p class="text-gray-500 text-sm">🔍 Keine Aufgaben gefunden — Suchbegriff oder Aufgabentyp anpassen.</p>
+    <p class="text-gray-500 text-sm">🔍 Keine Aufgaben gefunden — Suchbegriff oder Typ anpassen.</p>
   </div>
   <div id="filter-no-results" class="hidden text-center py-6">
     <div class="text-4xl mb-3">🔍</div>
@@ -487,12 +477,24 @@
   // ─── Filter (client-seitig: nur Zeilen/Spalten ausblenden, kein Request) ───
   // (Match-Logik: task-filter.js, dieselbe Semantik wie serverseitig)
 
+  // Facetten-Chips: Typ (Multi-Select, innerhalb OR).
+  const chipApi = initFilterChips(document.getElementById('filter-chips'), [
+    { id: 'type', label: 'Typ', multi: true, values: [
+      { value: 'text', label: 'Text' },
+      { value: 'mc', label: 'MC' },
+      { value: 'upload', label: 'Upload' },
+      { value: 'workspace', label: 'Workspace' },
+      { value: 'extern', label: 'Extern' },
+    ]},
+  ], applyOverviewFilter);
+
   // Sichtbare Aufgabenspalten (Titelsuche + Typ) — Filter und Sortierung
   // nutzen dieselbe Definition (Summen-Sortierung = Summe der sichtbaren Spalten).
-  function visibleTaskIdx(filterText, typeFilter) {
+  function visibleTaskIdx(filterText, typeValues) {
     const s = new Set();
     overviewData.tasks.forEach((task, i) => {
-      if (multiKeywordMatches(task.title, filterText) && (!typeFilter || task.task_type === typeFilter)) s.add(i);
+      if (multiKeywordMatches(task.title, filterText)
+          && (typeValues.length === 0 || typeValues.includes(task.task_type))) s.add(i);
     });
     return s;
   }
@@ -501,12 +503,12 @@
     if (!overviewData) return;
 
     const filterText = document.getElementById('filter-input').value.trim();
-    const typeFilter = document.getElementById('type-filter').value;
+    const typeValues = chipApi.get().type;
     const annotationFilter = document.getElementById('annotation-filter').value.trim();
-    const filterActive = multiKeywordTerms(filterText).length > 0 || typeFilter !== '' || annotationFilter !== '';
+    const filterActive = multiKeywordTerms(filterText).length > 0 || typeValues.length > 0 || annotationFilter !== '';
 
     // 1. Aufgabenspalten (Titelsuche + Typ)
-    const visibleTasks = visibleTaskIdx(filterText, typeFilter);
+    const visibleTasks = visibleTaskIdx(filterText, typeValues);
     document.querySelectorAll('#overview-table [data-task-idx]').forEach(el => {
       el.classList.toggle('hidden', !visibleTasks.has(parseInt(el.dataset.taskIdx, 10)));
     });
@@ -568,8 +570,6 @@
     }
   });
 
-  document.getElementById('type-filter').addEventListener('change', applyOverviewFilter);
-
   document.getElementById('annotation-filter').addEventListener('input', () => {
     clearTimeout(annotationTimeout);
     annotationTimeout = setTimeout(applyOverviewFilter, 300);
@@ -584,9 +584,8 @@
 
   document.getElementById('clear-filter-btn').addEventListener('click', () => {
     document.getElementById('filter-input').value = '';
-    document.getElementById('type-filter').value = '';
     document.getElementById('annotation-filter').value = '';
-    applyOverviewFilter();
+    chipApi.clear(); // löst applyOverviewFilter aus
   });
 
   // ─── Sortierung (Klick auf Spaltenüberschrift) ───────────────
@@ -600,7 +599,7 @@
   }
 
   function currentVisibleTasks() {
-    return visibleTaskIdx(document.getElementById('filter-input').value.trim(), document.getElementById('type-filter').value);
+    return visibleTaskIdx(document.getElementById('filter-input').value.trim(), chipApi.get().type);
   }
 
   function sortValue(student, key, visible) {
@@ -672,7 +671,7 @@
     if (!a) return;
     const p = new URLSearchParams();
     const ft = document.getElementById('filter-input').value.trim();
-    const tf = document.getElementById('type-filter').value;
+    const tf = chipApi.get().type.join(',');
     const af = document.getElementById('annotation-filter').value.trim();
     if (ft) p.set('filter_text', ft);
     if (tf) p.set('type_filter', tf);
@@ -687,7 +686,7 @@
   document.getElementById('live-dashboard-link').addEventListener('click', (e) => {
     const p = new URLSearchParams();
     const ft = document.getElementById('filter-input').value.trim();
-    const tf = document.getElementById('type-filter').value;
+    const tf = chipApi.get().type.join(',');
     const af = document.getElementById('annotation-filter').value.trim();
     if (ft) p.set('filter_text', ft);
     if (tf) p.set('type_filter', tf);
@@ -699,7 +698,7 @@
   // ─── Excel Export ───────────────────────────────────────────
   document.getElementById('export-excel-btn').addEventListener('click', async () => {
     const filterText = document.getElementById('filter-input').value;
-    const typeFilter = document.getElementById('type-filter').value;
+    const typeFilter = chipApi.get().type.join(',');
     const annotationFilter = document.getElementById('annotation-filter').value;
 
     try {
@@ -766,7 +765,7 @@
   // Generate report button
   document.getElementById('generate-report-btn').addEventListener('click', async () => {
     const filterText = document.getElementById('filter-input').value;
-    const typeFilter = document.getElementById('type-filter').value;
+    const typeFilter = chipApi.get().type.join(',');
     const annotationFilter = document.getElementById('annotation-filter').value;
 
     // Show modal with loading state

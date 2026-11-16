@@ -73,7 +73,7 @@ from services.mc_service import (
 )
 from services import image_spec_service
 from services import upload_service
-from services.task_filter import multi_keyword_matches
+from services.task_filter import multi_keyword_matches, parse_type_filter
 from services import trash_service
 from services.workspace_service import workspace_service, prune_backup_loop
 from services.slides_service import (
@@ -2866,8 +2866,9 @@ async def submission_review_page(
     ).all()
     if filter_text:
         nav_tasks = [t for t in nav_tasks if multi_keyword_matches(t.title, filter_text)]
-    if type_filter:
-        nav_tasks = [t for t in nav_tasks if t.task_type.value == type_filter]
+    type_values = parse_type_filter(type_filter)
+    if type_values:
+        nav_tasks = [t for t in nav_tasks if t.task_type.value in type_values]
 
     prev_task_obj = None
     next_task_obj = None

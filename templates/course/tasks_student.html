@@ -18,25 +18,13 @@
         <input type="text" id="filter-input" placeholder="z.B. Blatt rek..."
                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
       </div>
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Filter</label>
-        <select id="type-filter" class="border border-gray-300 rounded-lg px-3 py-2 text-sm">
-          <option value="">Alle</option>
-          <option value="open">Noch bearbeitbar</option>
-          <option value="processed">Bearbeitet</option>
-          <option value="text">Textaufgaben</option>
-          <option value="mc">Multiple-Choice-Aufgaben</option>
-          <option value="upload">Upload-Aufgaben</option>
-          <option value="workspace">Workspace-Aufgaben</option>
-          <option value="extern">Externe Aufgaben</option>
-        </select>
-      </div>
       <div class="flex items-end">
         <button id="clear-filter-btn" class="text-gray-500 hover:text-gray-700 text-sm px-3 py-2" style="margin-top:20px">
           ✕ Filter löschen
         </button>
       </div>
     </div>
+    <div id="filter-chips" class="mt-3 space-y-2"></div>
   </div>
 
   <!-- Loading State -->
@@ -111,23 +99,51 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="{{ asset('js/content-live.js') }}"></script>
-<script>
-  // ─── Filter Helpers ─────────────────────────────────────────
-  const STATUS_FILTERS = ['open', 'processed'];
-  function currentFilters() {
-    const v = document.getElementById('type-filter').value;
-    const status = STATUS_FILTERS.includes(v) ? v : '';
-    return { text: document.getElementById('filter-input').value, type: status ? '' : v, status };
-  }
+  <script src="{{ asset('js/content-live.js') }}"></script>
+  <script src="{{ asset('js/task-filter.js') }}"></script>
+  <script>
+    // ─── Filter Helpers ─────────────────────────────────────────
+    // Facetten-Chips: Status (Single-Select) + Typ (Multi-Select).
+    // Innerhalb einer Facette OR, zwischen Facetten UND (serverseitig).
+    const chipApi = initFilterChips(document.getElementById('filter-chips'), [
+      { id: 'status', label: 'Status', multi: false, values: [
+        { value: 'open', label: 'Noch bearbeitbar' },
+        { value: 'processed', label: 'Bearbeitet' },
+      ]},
+      { id: 'type', label: 'Typ', multi: true, values: [
+        { value: 'text', label: 'Text' },
+        { value: 'mc', label: 'MC' },
+        { value: 'upload', label: 'Upload' },
+        { value: 'workspace', label: 'Workspace' },
+        { value: 'extern', label: 'Extern' },
+      ]},
+    ], applyFilterChips);
+
+    function currentFilters() {
+      const chips = chipApi.get();
+      return {
+        text: document.getElementById('filter-input').value,
+        type: chips.type.join(','),
+        status: chips.status[0] || '',
+      };
+    }
+
+    function applyFilterChips() {
+      const f = currentFilters();
+      loadData(f.text, f.type, f.status);
+    }
 
   // ─── Load Data ──────────────────────────────────────────────
-  async function loadData(filterText = '', typeFilter = '', status = '') {
+  // quiet: Live-Update-Refetch im Hintergrund — kein Lade-State, die Liste
+  // bleibt sichtbar und wird nach dem Fetch still neu gerendert.
+  async function loadData(filterText = '', typeFilter = '', status = '', quiet = false) {
     const loading = document.getElementById('loading-state');
     const taskContainer = document.getElementById('task-list-container');
 
-    loading.classList.remove('hidden');
-    taskContainer.classList.add('hidden');
+    if (!quiet) {
+      loading.classList.remove('hidden');
+      taskContainer.classList.add('hidden');
+    }
 
     try {
       const params = new URLSearchParams({ filter_text: filterText });
@@ -141,7 +157,7 @@
       const data = await res.json();
 
       if (!res.ok) {
-        showToast(data.detail || 'Fehler beim Laden.', 'error');
+        if (!quiet) showToast(data.detail || 'Fehler beim Laden.', 'error');
         return;
       }
 
@@ -150,10 +166,12 @@
       renderMedals(data);
 
     } catch (err) {
-      showToast('Fehler: ' + err.message, 'error');
+      if (!quiet) showToast('Fehler: ' + err.message, 'error');
     } finally {
-      loading.classList.add('hidden');
-      taskContainer.classList.remove('hidden');
+      if (!quiet) {
+        loading.classList.add('hidden');
+        taskContainer.classList.remove('hidden');
+      }
     }
   }
 
@@ -326,21 +344,12 @@
 
   document.getElementById('filter-input').addEventListener('input', (e) => {
     clearTimeout(filterTimeout);
-    filterTimeout = setTimeout(() => {
-      const f = currentFilters();
-      loadData(f.text, f.type, f.status);
-    }, 300);
-  });
-
-  document.getElementById('type-filter').addEventListener('change', () => {
-    const f = currentFilters();
-    loadData(f.text, f.type, f.status);
+    filterTimeout = setTimeout(applyFilterChips, 300);
   });
 
   document.getElementById('clear-filter-btn').addEventListener('click', () => {
     document.getElementById('filter-input').value = '';
-    document.getElementById('type-filter').value = '';
-    loadData();
+    chipApi.clear(); // löst applyFilterChips aus
   });
 
   // ─── Report Modal ───────────────────────────────────────────
@@ -484,7 +493,7 @@
   aicampusWatchContent(courseId, (data) => {
     if (data.entity_type !== "task") return;
     const f = currentFilters();
-    loadData(f.text, f.type, f.status);
+    loadData(f.text, f.type, f.status, true);
   });
 </script>
 {% endblock %}

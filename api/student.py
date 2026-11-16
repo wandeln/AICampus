@@ -45,7 +45,7 @@ from services.mc_service import McValidationError, grade_mc, mc_report_summary, 
 from services.llm_service import LLMService
 from services.media_service import all_media_for_course
 from services.settings_resolver import get_effective_llm_config
-from services.task_filter import multi_keyword_matches
+from services.task_filter import multi_keyword_matches, parse_type_filter
 from services.workspace_service import (
     MAX_FILE_BYTES,
     delete_workspace_backup,
@@ -1089,8 +1089,9 @@ async def get_my_points(
 
     if filter_text:
         tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
-    if type_filter:
-        tasks = [t for t in tasks if t.task_type.value == type_filter]
+    type_values = parse_type_filter(type_filter)
+    if type_values:
+        tasks = [t for t in tasks if t.task_type.value in type_values]
     if status_filter in ("open", "processed"):
         tasks = _filter_status(tasks, session, user.id, status_filter)
 
@@ -1657,8 +1658,9 @@ async def generate_student_report(
 
     if filter_text:
         tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
-    if type_filter:
-        tasks = [t for t in tasks if t.task_type.value == type_filter]
+    type_values = parse_type_filter(type_filter)
+    if type_values:
+        tasks = [t for t in tasks if t.task_type.value in type_values]
     if status_filter in ("open", "processed"):
         tasks = _filter_status(tasks, session, user.id, status_filter)
 

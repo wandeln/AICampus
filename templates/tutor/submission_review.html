@@ -362,7 +362,7 @@
     var sortLabel = appliedSortLabel();
     if (sortLabel) parts.push('sortiert nach ' + sortLabel);
     if (reviewState.filterText) parts.push('Aufgabensuche \u201E' + reviewState.filterText + '\u201C (Aufgaben-Navigation)');
-    if (reviewState.typeFilter) parts.push('Aufgabentyp \u201E' + reviewState.typeFilter + '\u201C (Aufgaben-Navigation)');
+    if (reviewState.typeFilter) parts.push('Typ \u201E' + reviewState.typeFilter + '\u201C (Aufgaben-Navigation)');
     if (!parts.length) {
       note.classList.add('hidden');
       return;

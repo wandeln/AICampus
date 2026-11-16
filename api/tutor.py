@@ -70,7 +70,7 @@ from services import upload_service
 from config import UPLOAD_MAX_FILE_BYTES
 from services.references_service import build_references_text
 from services.settings_resolver import get_effective_compute_config, get_effective_llm_config
-from services.task_filter import multi_keyword_matches
+from services.task_filter import multi_keyword_matches, parse_type_filter
 from services.timeutil import deadline_from_local, deadline_iso, utc_iso
 from services.workspace_presets import (
     IMAGE_SELECTION_FIELDS,
@@ -1153,8 +1153,9 @@ def _overview_data(
     # Aufgaben-Filter
     if filter_text:
         tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
-    if type_filter:
-        tasks = [t for t in tasks if t.task_type.value == type_filter]
+    type_values = parse_type_filter(type_filter)
+    if type_values:
+        tasks = [t for t in tasks if t.task_type.value in type_values]
 
     # Scores berechnen — batched (2 Queries statt einer pro Student/Aufgabe-Paar).
     # Früher: N×M Submission-Queries + N×M Lazy-Load-Queries für feedback_list.
@@ -2462,8 +2463,9 @@ async def export_excel(
     # Filter nach Suchbegriff
     if filter_text:
         tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
-    if type_filter:
-        tasks = [t for t in tasks if t.task_type.value == type_filter]
+    type_values = parse_type_filter(type_filter)
+    if type_values:
+        tasks = [t for t in tasks if t.task_type.value in type_values]
 
     # Alle Studenten des Kurses
     memberships = session.exec(
@@ -2562,8 +2564,9 @@ async def generate_course_report(
 
     if filter_text:
         tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
-    if type_filter:
-        tasks = [t for t in tasks if t.task_type.value == type_filter]
+    type_values = parse_type_filter(type_filter)
+    if type_values:
+        tasks = [t for t in tasks if t.task_type.value in type_values]
 
     if not tasks:
         raise HTTPException(400, "Keine Aufgaben gefunden. Passe den Filter an.")

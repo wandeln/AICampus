@@ -14,3 +14,79 @@ function multiKeywordMatches(text, filterText) {
   const t = String(text).toLowerCase();
   return terms.every(term => t.includes(term));
 }
+
+// ─── Filter-Chips (Facetten) ─────────────────────────────────
+// groups: [{ id, label, multi, values: [{ value, label }] }]
+// Innerhalb einer Gruppe OR, zwischen Gruppen AND.
+//   multi: false → Single-Select-Toggle (Klick aktiviert, erneuter Klick
+//                  deaktiviert, Klick auf anderen Wert wechselt)
+//   multi: true  → Toggle pro Wert
+// initial (optional): { [groupId]: string[] } — vorab aktivierte Werte
+// (z. B. aus der URL).
+// Liefert { get, clear, hasActive }:
+//   get()        → { [groupId]: string[] } (aktive Werte)
+//   clear()      → alle Chips deaktivieren (+ onChange)
+//   hasActive()  → true, wenn mindestens ein Chip aktiv
+function initFilterChips(container, groups, onChange, initial) {
+  const state = {};
+  const buttons = [];
+  container.innerHTML = '';
+  for (const g of groups) {
+    state[g.id] = new Set();
+    if (initial && initial[g.id]) {
+      for (const v of g.values) {
+        if (initial[g.id].includes(v.value)) state[g.id].add(v.value);
+      }
+    }
+    const row = document.createElement('div');
+    row.className = 'filter-chip-row';
+    if (g.label) {
+      const lab = document.createElement('span');
+      lab.className = 'filter-chip-label';
+      lab.textContent = g.label;
+      row.appendChild(lab);
+    }
+    for (const v of g.values) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'filter-chip';
+      b.textContent = v.label;
+      b.dataset.group = g.id;
+      b.dataset.value = v.value;
+      b.addEventListener('click', () => {
+        const set = state[g.id];
+        if (set.has(v.value)) set.delete(v.value);
+        else if (g.multi) set.add(v.value);
+        else { set.clear(); set.add(v.value); }
+        sync();
+      });
+      row.appendChild(b);
+      buttons.push(b);
+    }
+    container.appendChild(row);
+  }
+
+  function paint() {
+    for (const b of buttons) {
+      b.classList.toggle('active', state[b.dataset.group].has(b.dataset.value));
+    }
+  }
+
+  function sync() {
+    paint();
+    if (onChange) onChange();
+  }
+
+  paint(); // initialer State (z. B. aus URL) sichtbar machen
+
+  return {
+    get: () => Object.fromEntries(Object.entries(state).map(([k, s]) => [k, [...s]])),
+    clear: syncClear,
+    hasActive: () => Object.values(state).some(s => s.size > 0),
+  };
+
+  function syncClear() {
+    Object.values(state).forEach(s => s.clear());
+    sync();
+  }
+}
