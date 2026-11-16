@@ -111,11 +111,13 @@ def _scan_code_labels(content: str) -> list[tuple[str, str]]:
 # nummerierte Box ohne eigene Überschrift — der Normalfall!).
 # Ungültige Schreibweise (weitere Zeilentexte) → Box bleibt literal dort,
 # daher zählt sie hier auch nicht.
+# Caption: . (greedy) = vom ERSTEN [ bis zum LETZTEN ] der Zeile (nicht bis
+# zum ersten ]!): Formeln wie $[0,1]$ im Titel enthalten Klammerpaare.
 _BOX_LABEL_HEAD = (
     r"(?:"
     r"[ \t]*\{#box:(?P<box_lbl1>[\w-]+)\}"
-    r"|[ \t]*\{#box:(?P<box_lbl2>[\w-]+)\}[ \t]*\[(?P<box_cap2>[^\]]*)\]"
-    r"|[ \t]*\[(?P<box_cap3>[^\]]*)\][ \t]*\{#box:(?P<box_lbl3>[\w-]+)\}"
+    r"|[ \t]*\{#box:(?P<box_lbl2>[\w-]+)\}[ \t]*\[(?P<box_cap2>.*)\]"
+    r"|[ \t]*\[(?P<box_cap3>.*)\][ \t]*\{#box:(?P<box_lbl3>[\w-]+)\}"
     r")"
 )
 _BOX_LABEL_RE = re.compile(

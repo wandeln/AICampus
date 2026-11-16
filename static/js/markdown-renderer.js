@@ -1139,7 +1139,8 @@ async function renderMarkdown(text, targetElement, options = {}) {
   //     Label → Skript-Nummer, in Slides: eigene Labels → S1, S2, …). In
   //     Slides ist die Nummer eines Skript-Labels klickbar (→ Skript).
   //     [Caption]: Box-Überschrift → Kopf "Typ N: Caption" ($…$ wird
-  //     gerendert, s. renderCaptionMath).
+  //     gerendert, s. renderCaptionMath); ] innerhalb (z. B. $[0,1]$) ok —
+  //     Caption = erstes [ bis letztes ] der Zeile.
   const boxLabelNumbers = {};
   const boxLabelTypes = {};
   const boxFallbackBase = chapterRef ? (chapterRef.maxBox || 0) : 0;
@@ -1191,27 +1192,33 @@ async function renderMarkdown(text, targetElement, options = {}) {
   // Leerraum zwischen/nach den Tokens (CRLF: trailing \r vorher entfernen) →
   // { valid, caption, label } (null = nicht vorhanden). Abweichung (z. B.
   // weiterer Text) → valid = false (Box bleibt literal).
+  // Label zuerst extrahieren (striktes Format, max. einmal); der Rest muss
+  // leer oder EINE Caption sein, die vom ERSTEN [ bis zum LETZTEN ] reicht —
+  // nicht bis zum ersten ]! Formeln wie $[0,1]$ im Titel enthalten
+  // Klammerpaare (Semantik identisch zum Python-_BOX_LABEL_HEAD).
   function _parseBoxHead(headLine) {
     let caption = null;
     let label = null;
-    let valid = true;
-    let tokEnd = 0;
     const line = headLine.replace(/\r$/, '');
-    const tokRe = /\[([^\]]*)\]|\{#box:([\p{L}0-9_-]+)\}/gu;
-    let bt;
-    while ((bt = tokRe.exec(line)) !== null) {
-      if (!/^[ \t]*$/.test(line.slice(tokEnd, bt.index))) { valid = false; break; }
-      if (bt[1] !== undefined) {
-        if (caption !== null) { valid = false; break; }
-        caption = bt[1];
-      } else {
-        if (label !== null) { valid = false; break; }
-        label = bt[2];
-      }
-      tokEnd = bt.index + bt[0].length;
+    const labelRe = /\{#box:([\p{L}0-9_-]+)\}/gu;
+    let m;
+    let labelStart = -1;
+    let labelEnd = -1;
+    while ((m = labelRe.exec(line)) !== null) {
+      if (label !== null) return { valid: false, caption: null, label: null }; // Duplikat
+      label = m[1];
+      labelStart = m.index;
+      labelEnd = m.index + m[0].length;
     }
-    if (valid && !/^[ \t]*$/.test(line.slice(tokEnd))) valid = false;
-    return { valid, caption, label };
+    const rest = label === null
+      ? line
+      : line.slice(0, labelStart) + line.slice(labelEnd);
+    const t = rest.trim();
+    if (t !== '' && (t.charAt(0) !== '[' || t.charAt(t.length - 1) !== ']')) {
+      return { valid: false, caption: null, label: null };
+    }
+    if (t !== '') caption = t.slice(1, -1);
+    return { valid: true, caption, label };
   }
 
   function _convertBoxBlocks(text, lines) {
@@ -1305,10 +1312,13 @@ async function renderMarkdown(text, targetElement, options = {}) {
       if (caption !== null && caption.trim() !== '') {
         headTitle += ': ' + renderCaptionMath(caption.trim());
       }
+      // Titel (Text + Nummer + ggf. inline-Mathe/Links) als EIN Span: der
+      // Kopf ist display:flex — ohne Wrapper wären Text und Formel separate
+      // Flex-Items (Gap + Zentrierung → Formel wirkt wie eigener Block).
       wo = '\n\n<div class="aicampus-callbox aicampus-callbox-' + type + '"' + idAttr + '>\n' +
         '<div class="aicampus-callbox-head">' +
-        '<span class="aicampus-callbox-icon" aria-hidden="true">' + info.icon + '</span> ' +
-        headTitle + '</div>\n' +
+        '<span class="aicampus-callbox-icon" aria-hidden="true">' + info.icon + '</span>' +
+        '<span class="aicampus-callbox-title">' + headTitle + '</span></div>\n' +
         '<div class="aicampus-callbox-body">\n\n';
       wc = '\n\n</div>\n</div>\n\n';
     }

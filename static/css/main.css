@@ -671,6 +671,12 @@
   font-size: 1.1rem;
 }
 
+/* Kopf-Title als einzelnes Flex-Item: min-width 0 → darf schrumpfen/wrappen,
+   inline-Mathe darin fließt mit dem Text (Baseline) mit. */
+.aicampus-callbox-title {
+  min-width: 0;
+}
+
 .aicampus-callbox-body {
   padding: 0 1.25rem 0.5rem;
 }
