@@ -17,6 +17,17 @@
     </a>
   </div>
 
+  <!-- Challenges (benannte Aufgaben-Filter; Klick = Filter in Suche/Typ übernehmen) —
+       nur sichtbar, wenn der Kurs Challenges hat -->
+  <div id="challenges-card" class="card mb-6 hidden">
+    <div class="border border-gray-200 bg-gray-50/60 rounded-xl p-3">
+      <div class="flex items-center justify-between mb-3 px-1">
+        <h3 class="font-semibold text-gray-800 text-sm">🏆 Challenges <span class="text-xs font-normal text-gray-400">— Klick übernimmt den Filter</span></h3>
+      </div>
+      <div id="challenges-list" class="space-y-1.5"></div>
+    </div>
+  </div>
+
   <!-- Filters -->
   <div class="card mb-6">
     <div class="flex items-center gap-4 flex-wrap">
@@ -488,6 +499,81 @@
     ]},
   ], applyOverviewFilter);
 
+  // ─── Challenges (benannte Aufgaben-Filter; Klick = Filter übernehmen) ────
+  const CHALLENGE_TYPE_LABELS = { text: 'Text', mc: 'MC', upload: 'Upload', workspace: 'Workspace', extern: 'Extern' };
+  const challengesListEl = document.getElementById('challenges-list');
+  let challengesData = [];
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function challengeFilterSummary(ch) {
+    const parts = [];
+    parts.push(ch.filter_text ? 'Suche „' + ch.filter_text + '“' : 'alle Titel');
+    parts.push(ch.type_filter
+      ? 'Typ: ' + ch.type_filter.split(',').filter(Boolean).map(t => CHALLENGE_TYPE_LABELS[t] || t).join(', ')
+      : 'alle Typen');
+    return parts.join(' · ');
+  }
+
+  async function loadChallenges() {
+    try {
+      const res = await fetch('/api/courses/' + courseId + '/challenges', { credentials: 'same-origin' });
+      const data = await res.json();
+      if (!res.ok) return; // nicht kritisch für diese Seite → still
+      challengesData = data.challenges;
+      // Ohne Challenges bleibt die Box komplett unsichtbar.
+      document.getElementById('challenges-card').classList.toggle('hidden', challengesData.length === 0);
+      challengesListEl.innerHTML = '';
+      for (const ch of challengesData) challengesListEl.appendChild(challengeRow(ch));
+      markActiveChallenge();
+    } catch { /* nicht kritisch für diese Seite → still */ }
+  }
+
+  function challengeRow(ch) {
+    const div = document.createElement('div');
+    div.dataset.chId = ch.id;
+    div.className = 'flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer border border-gray-200 bg-white hover:border-indigo-300 transition';
+    const count = ch.matched_count || 0;
+    div.innerHTML =
+      '<span class="flex-1 min-w-0 truncate text-sm font-medium text-gray-800">' + escapeHtml(ch.name) + '</span>' +
+      '<span class="hidden md:inline text-xs text-gray-400 truncate max-w-[35%]">' + escapeHtml(challengeFilterSummary(ch)) + '</span>' +
+      '<span class="shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ' +
+        (count ? 'bg-gray-100 text-gray-600' : 'bg-orange-100 text-orange-700') + '">' +
+        count + (count === 1 ? ' Aufgabe' : ' Aufgaben') + '</span>';
+    div.title = 'Klick: Filter anwenden (Suche + Typ) — erneut klicken hebt ihn auf';
+    div.addEventListener('click', () => applyChallenge(ch));
+    return div;
+  }
+
+  function isChallengeActive(ch) {
+    const filterValue = document.getElementById('filter-input').value.trim();
+    const curTypes = chipApi.get().type.slice().sort().join(',');
+    const chTypes = (ch.type_filter || '').split(',').filter(Boolean).sort().join(',');
+    return (ch.filter_text || '') === filterValue && chTypes === curTypes;
+  }
+
+  function applyChallenge(ch) {
+    if (isChallengeActive(ch)) {
+      document.getElementById('filter-input').value = '';
+      chipApi.clear();
+      return;
+    }
+    document.getElementById('filter-input').value = ch.filter_text || '';
+    chipApi.set('type', ch.type_filter ? ch.type_filter.split(',').filter(Boolean) : []);
+  }
+
+  function markActiveChallenge() {
+    for (const ch of challengesData) {
+      const el = challengesListEl.querySelector('[data-ch-id="' + ch.id + '"]');
+      if (!el) continue;
+      const active = isChallengeActive(ch);
+      el.classList.toggle('bg-indigo-50', active);
+      el.classList.toggle('border-indigo-300', active);
+    }
+  }
+
   // Sichtbare Aufgabenspalten (Titelsuche + Typ) — Filter und Sortierung
   // nutzen dieselbe Definition (Summen-Sortierung = Summe der sichtbaren Spalten).
   function visibleTaskIdx(filterText, typeValues) {
@@ -552,6 +638,8 @@
     // 3. Bei aktiver Sortierung nach Filteränderung neu sortieren
     //    (Summen haben sich ggf. geändert) — nur Zeilen umsortieren.
     if (sortState) applySort();
+
+    markActiveChallenge();
   }
 
   // ─── Filter Events ──────────────────────────────────────────
@@ -870,5 +958,6 @@
 
   // ─── Initial Load ───────────────────────────────────────────
   loadOverview();
+  loadChallenges();
 </script>
 {% endblock %}
