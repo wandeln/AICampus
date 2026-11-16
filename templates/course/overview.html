@@ -21,13 +21,13 @@
   <div class="card mb-6">
     <div class="flex items-center gap-4 flex-wrap">
         <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1" title="Studenten nach ihrer Gruppe (wie in der Mitgliederübersicht hinterlegt) filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht vom Wortanfang (z.B. 'ÜG' → 'ÜG1' und 'ÜG-1'; '1' matcht aber nicht 'Jahrgang 2001').">Gruppe</label>
+            <label class="block text-sm font-medium text-gray-700 mb-1" title="Studenten nach ihrer Gruppe (wie in der Mitgliederübersicht hinterlegt) filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht, wenn er irgendwo im Gruppennamen vorkommt (z.B. 'ÜG' → 'ÜG1' und 'ÜG-1'; '1' → 'Jahrgang 2001').">Gruppe</label>
             <input type="text" id="annotation-filter" placeholder="z.B. ÜG-1"
                     class="border border-gray-300 rounded-lg px-3 py-2 text-sm w-[240px] focus:ring-2 focus:ring-blue-500">
         </div>
       <div class="flex-1 min-w-[200px]">
         <label class="block text-sm font-medium text-gray-700 mb-1"
-               title="Aufgaben nach Titel filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht vom Wortanfang (z.B. 'Blatt rek' → 'Blatt 4: Rekursion'; '1' matcht aber nicht 'Teil 12').">Suche</label>
+               title="Aufgaben nach Titel filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht, wenn er irgendwo im Titel vorkommt (z.B. 'Blatt rek' → 'Blatt 4: Rekursion'; '1' → 'Teil 12').">Suche</label>
         <input type="text" id="filter-input" placeholder="z.B. Blatt rek..."
                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
       </div>
@@ -138,6 +138,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ asset('js/task-filter.js') }}"></script>
 <script>
   // Volldaten für die clientseitige Filterung (wird in loadOverview gesetzt)
   let overviewData = null;
@@ -484,26 +485,14 @@
   }
 
   // ─── Filter (client-seitig: nur Zeilen/Spalten ausblenden, kein Request) ───
-  // Gleiche Semantik wie serverseitig (services/task_filter.py):
-  // alle leerzeichen-getrennten Begriffe müssen als Wort-Präfix vorkommen (UND).
-  function titleMatches(title, terms) {
-    const words = String(title).toLowerCase().split(/\s+/).filter(Boolean);
-    return terms.every(term => words.some(word => word.startsWith(term)));
-  }
-
-  function annotationMatches(annotation, filterText) {
-    const terms = filterText.toLowerCase().split(/\s+/).filter(Boolean);
-    if (!terms.length || !annotation) return false;
-    const words = annotation.toLowerCase().split(/\s+/).filter(Boolean);
-    return terms.every(term => words.some(word => word.startsWith(term)));
-  }
+  // (Match-Logik: task-filter.js, dieselbe Semantik wie serverseitig)
 
   // Sichtbare Aufgabenspalten (Titelsuche + Typ) — Filter und Sortierung
   // nutzen dieselbe Definition (Summen-Sortierung = Summe der sichtbaren Spalten).
-  function visibleTaskIdx(terms, typeFilter) {
+  function visibleTaskIdx(filterText, typeFilter) {
     const s = new Set();
     overviewData.tasks.forEach((task, i) => {
-      if (titleMatches(task.title, terms) && (!typeFilter || task.task_type === typeFilter)) s.add(i);
+      if (multiKeywordMatches(task.title, filterText) && (!typeFilter || task.task_type === typeFilter)) s.add(i);
     });
     return s;
   }
@@ -511,13 +500,13 @@
   function applyOverviewFilter() {
     if (!overviewData) return;
 
-    const terms = document.getElementById('filter-input').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const filterText = document.getElementById('filter-input').value.trim();
     const typeFilter = document.getElementById('type-filter').value;
     const annotationFilter = document.getElementById('annotation-filter').value.trim();
-    const filterActive = terms.length > 0 || typeFilter !== '' || annotationFilter !== '';
+    const filterActive = multiKeywordTerms(filterText).length > 0 || typeFilter !== '' || annotationFilter !== '';
 
     // 1. Aufgabenspalten (Titelsuche + Typ)
-    const visibleTasks = visibleTaskIdx(terms, typeFilter);
+    const visibleTasks = visibleTaskIdx(filterText, typeFilter);
     document.querySelectorAll('#overview-table [data-task-idx]').forEach(el => {
       el.classList.toggle('hidden', !visibleTasks.has(parseInt(el.dataset.taskIdx, 10)));
     });
@@ -527,7 +516,7 @@
     // 2. Studentenzeilen (Annotation) + Summen-/Anteilsspalten + Statistik
     let count = 0, sumTotals = 0, maxPts = 0, minPts = Infinity, passed = 0;
     document.querySelectorAll('#table-body tr[data-student-id]').forEach(row => {
-      const show = annotationFilter === '' || annotationMatches(row.dataset.annotation || '', annotationFilter);
+      const show = annotationFilter === '' || multiKeywordMatches(row.dataset.annotation || '', annotationFilter);
       row.classList.toggle('hidden', !show);
       if (!show) return;
 
@@ -611,8 +600,7 @@
   }
 
   function currentVisibleTasks() {
-    const terms = document.getElementById('filter-input').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    return visibleTaskIdx(terms, document.getElementById('type-filter').value);
+    return visibleTaskIdx(document.getElementById('filter-input').value.trim(), document.getElementById('type-filter').value);
   }
 
   function sortValue(student, key, visible) {

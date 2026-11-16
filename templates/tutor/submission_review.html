@@ -284,6 +284,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ asset('js/task-filter.js') }}"></script>
 <script>
   var courseId = {{ course_id }};
   var taskId = {{ task_id }};
@@ -303,25 +304,15 @@
     sortDir: reviewParams.get('sort_dir') || '',
   };
 
-  // Gleiche Semantik wie in der Punktetabelle: alle leerzeichen-getrennten
-  // Begriffe müssen als Wort-Präfix vorkommen (AND).
-  function annotationMatches(annotation, filterText) {
-    var terms = filterText.toLowerCase().split(/\s+/).filter(Boolean);
-    if (!terms.length || !annotation) return false;
-    var words = annotation.toLowerCase().split(/\s+/).filter(Boolean);
-    return terms.every(function (term) {
-      return words.some(function (w) { return w.startsWith(term); });
-    });
-  }
-
-  // Studenten-Liste filtern (Gruppe) + sortieren. Sortier-Schlüssel, die
+  // Studenten-Liste filtern (Gruppe) + sortieren. Match-Logik:
+  // task-filter.js (dieselbe Semantik wie serverseitig). Sortier-Schlüssel, die
   // hier nicht auswertbar sind (Summe, Anteil, andere Aufgabe), fallen
   // auf den API-Default (Name) zurück.
   function applyReviewStudentFilter(list) {
     var filtered = list;
     if (reviewState.annotationFilter) {
       filtered = filtered.filter(function (s) {
-        return annotationMatches(s.annotation || '', reviewState.annotationFilter);
+        return multiKeywordMatches(s.annotation || '', reviewState.annotationFilter);
       });
     }
     var mul = reviewState.sortDir === 'desc' ? -1 : 1;

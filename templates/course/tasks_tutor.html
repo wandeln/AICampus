@@ -15,7 +15,7 @@
     <div class="flex items-center gap-4 flex-wrap">
       <div class="flex-1 min-w-[200px]">
         <label class="block text-sm font-medium text-gray-700 mb-1"
-               title="Aufgaben nach Titel filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht vom Wortanfang (z.B. 'Blatt rek' → 'Blatt 4: Rekursion'; '1' matcht aber nicht 'Teil 12').">Suche</label>
+               title="Aufgaben nach Titel filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht, wenn er irgendwo im Titel vorkommt (z.B. 'Blatt rek' → 'Blatt 4: Rekursion'; '1' → 'Teil 12').">Suche</label>
         <input type="text" id="filter-input" placeholder="z.B. Blatt rek..."
                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
       </div>
@@ -169,6 +169,7 @@
 
 {% block extra_scripts %}
 <script src="{{ asset('js/content-live.js') }}"></script>
+<script src="{{ asset('js/task-filter.js') }}"></script>
 <script>
   // ─── Filter (client-seitig: nur die Liste wird gefiltert, keine Reload) ───
   const taskListEl = document.getElementById('task-list');
@@ -179,20 +180,13 @@
            document.getElementById('type-filter').value !== '';
   }
 
-  // Gleiche Semantik wie serverseitig (services/task_filter.py):
-  // alle leerzeichen-getrennten Begriffe müssen als Wort-Präfix vorkommen (UND).
-  function titleMatches(title, terms) {
-    const words = title.toLowerCase().split(/\s+/).filter(Boolean);
-    return terms.every(term => words.some(word => word.startsWith(term)));
-  }
-
   function applyTaskFilter() {
-    const terms = document.getElementById('filter-input').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const filterValue = document.getElementById('filter-input').value.trim();
     const typeFilter = document.getElementById('type-filter').value;
     let visibleCount = 0;
     const rows = Array.from(taskListEl.querySelectorAll('[data-task-id]'));
     for (const row of rows) {
-      const show = titleMatches(row.getAttribute('data-title') || '', terms) &&
+      const show = multiKeywordMatches(row.getAttribute('data-title') || '', filterValue) &&
                    (!typeFilter || row.getAttribute('data-type') === typeFilter);
       row.classList.toggle('hidden', !show);
       if (show) visibleCount++;
