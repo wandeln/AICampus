@@ -35,11 +35,11 @@
   <!-- Gesamtkennzahlen (nur für Studenten — basiert auf stats_by_course) -->
   {% if stats_by_course and stats_by_course|length > 0 %}
   <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
-    <div class="bg-white rounded-xl shadow-lg border border-gray-200 text-center p-5">
+    <div class="bg-white rounded-xl shadow-lg border border-gray-200 text-center p-5 flex flex-col items-center justify-center">
       <div class="text-2xl font-bold text-blue-600">{{ courses|length }}</div>
       <div class="text-xs text-gray-500 mt-1">Aktive Kurse</div>
     </div>
-    <div class="bg-white rounded-xl shadow-lg border border-gray-200 text-center p-5">
+    <div class="bg-white rounded-xl shadow-lg border border-gray-200 text-center p-5 flex flex-col items-center justify-center">
       <div class="text-2xl font-bold text-green-600">{{ total_completed }}</div>
       <div class="text-xs text-gray-500 mt-1">Bearbeitete Aufgaben</div>
     </div>
