@@ -25,6 +25,7 @@ from compute_agent.auth import make_token
 from config import SUBMISSION_DIR, UPLOAD_MAX_FILE_BYTES
 from database.base import engine, get_session
 from database.models import (
+    Challenge,
     Notification,
     User, Task, Submission, Feedback, HintExchange, ScriptSection,
     TaskDraft, TaskType, SubmissionStatus, FeedbackSource,
@@ -45,7 +46,7 @@ from services.mc_service import McValidationError, grade_mc, mc_report_summary, 
 from services.llm_service import LLMService
 from services.media_service import all_media_for_course
 from services.settings_resolver import get_effective_llm_config
-from services.task_filter import multi_keyword_matches, parse_type_filter
+from services.task_filter import multi_keyword_matches, parse_type_filter, task_matches_challenge
 from services.workspace_service import (
     MAX_FILE_BYTES,
     delete_workspace_backup,
@@ -1080,12 +1081,13 @@ async def get_my_points(
     type_filter = request.query_params.get("type_filter", "").strip()
     status_filter = request.query_params.get("status", "").strip()
 
-    tasks = session.exec(
+    all_tasks = session.exec(
         select(Task)
         .where(Task.course_id == course_id)
         .where(Task.is_visible == True)
         .order_by(Task.display_order.asc())  # type: ignore[attr-defined]
     ).all()
+    tasks = all_tasks
 
     if filter_text:
         tasks = [t for t in tasks if multi_keyword_matches(t.title, filter_text)]
@@ -1106,7 +1108,9 @@ async def get_my_points(
     student_ids = [m.user_id for m in student_members]
     if user.id not in student_ids:
         student_ids.append(user.id)
-    task_ids = [t.id for t in tasks]
+    # ALLLE sichtbaren Tasks (nicht nur die gefilterten): die Challenges
+    # haben eigene Tasks-Mengen, unabhängig vom Seiten-Filter.
+    task_ids = [t.id for t in all_tasks]
 
     pair_count: dict[tuple[int, int], int] = {}   # Anzahl Versuche je (Student, Aufgabe)
     pair_latest: dict[tuple[int, int], int] = {}   # id der neuesten Einreichung je Paar
@@ -1187,6 +1191,43 @@ async def get_my_points(
     all_scores = other_total_scores + [total_points]
     group_avg = round(sum(all_scores) / len(all_scores), 1)
 
+    # Challenges (benannte Filter — eigene Tasks-Menge aus all_tasks,
+    # dieselben Statistik-Formeln wie oben; s. docs/LLM-plans/challenges.md)
+    challenges_out = []
+    challenges = session.exec(
+        select(Challenge)
+        .where(Challenge.course_id == course_id)  # type: ignore[arg-type]
+        .order_by(Challenge.name.collate("NOCASE"))  # type: ignore[union-attr]
+    ).all()
+    for ch in challenges:
+        ch_tasks = [t for t in all_tasks if task_matches_challenge(t, ch.filter_text, ch.type_filter)]
+        if not ch_tasks:
+            continue  # keine matchenden Tasks → für Studenten unsichtbar
+        ch_max = sum(t.max_points for t in ch_tasks)
+        ch_total = sum(_points_for(user.id, t.id) for t in ch_tasks)
+        ch_other_scores = [
+            sum(_points_for(m.user_id, t.id) for t in ch_tasks)
+            for m in student_members
+            if m.user_id != user.id
+        ]
+        ch_below = sum(1 for s in ch_other_scores if s < ch_total)
+        ch_equal = sum(1 for s in ch_other_scores if s == ch_total)
+        ch_percentile = round((ch_below + 0.5 * ch_equal) / len(ch_other_scores) * 100) if ch_other_scores else 100
+        ch_all = ch_other_scores + [ch_total]
+        ch_avg = round(sum(ch_all) / len(ch_all), 1)
+        challenges_out.append({
+            "id": ch.id,
+            "name": ch.name,
+            "total_points": round(ch_total, 1),
+            "max_points": ch_max,
+            "percentage": round(ch_total / ch_max * 100, 1) if ch_max else 0,
+            "course_percentile": ch_percentile,
+            "group_avg": ch_avg,
+            # Client: Klick auf die Challenge setzt diesen Filter (Suche + Typ)
+            "filter_text": ch.filter_text or "",
+            "type_filter": ch.type_filter or "",
+        })
+
     return {
         "total_points": round(total_points, 1),
         "max_points": max_points,
@@ -1194,6 +1235,7 @@ async def get_my_points(
         "course_percentile": course_percentile,
         "group_avg": group_avg,
         "tasks": task_list,
+        "challenges": challenges_out,
     }
 
 

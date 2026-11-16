@@ -1,0 +1,18 @@
+{# Tutor-Aufgabenliste (Liste + Empty-State) — einzige Markup-Quelle für
+   tasks_tutor.html UND das Quiet-Live-Update-Fragment
+   (GET /api/courses/{id}/tasks/list-html). Kontext: course, tasks. #}
+<!-- Task List (Kacheln wie Skript-Kapitel; space-y nur ab sm: mobil
+     haben die Kacheln keinen Vertikalabstand) -->
+<div id="task-list" class="sm:space-y-4">
+  {% for task in tasks %}
+  {% include "course/task_tile_tutor.html" %}
+  {% endfor %}
+</div>
+
+{% if not tasks %}
+<!-- Empty State (analog Skript: Icon + Text, ohne Karte) -->
+<div class="text-center py-6">
+  <div class="text-4xl mb-3">📋</div>
+  <p class="text-gray-500 text-sm">Noch keine Aufgaben erstellt.</p>
+</div>
+{% endif %}

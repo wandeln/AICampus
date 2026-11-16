@@ -81,6 +81,14 @@ function initFilterChips(container, groups, onChange, initial) {
 
   return {
     get: () => Object.fromEntries(Object.entries(state).map(([k, s]) => [k, [...s]])),
+    // Gruppe auf exakt diese Werte setzen (leer = keine aktiv) — löst onChange aus
+    set: (groupId, values) => {
+      const s = state[groupId];
+      if (!s) return;
+      s.clear();
+      for (const v of values) s.add(v);
+      sync();
+    },
     clear: syncClear,
     hasActive: () => Object.values(state).some(s => s.size > 0),
   };

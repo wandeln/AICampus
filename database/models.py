@@ -287,6 +287,35 @@ class TaskDraft(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("task_id", "user_id", name="uq_draft_task_user"),)
 
 
+class Challenge(SQLModel, table=True):
+    """Benannter, gespeicherter Aufgaben-Filter je Kurs (z.B. „Coding-Hero"
+    = Suche „Übungsaufgabe" + Typ workspace). Studenten sehen in „Dein
+    Punktestand" je Challenge eigene Punkte/Ø/Perzentil über die
+    matchenden Tasks (Semantik: task_filter.py — multi_keyword_matches +
+    parse_type_filter). Neue Tabelle wird beim App-Start per create_all
+    angelegt."""
+    __tablename__ = "challenges"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    course_id: int = Field(foreign_key="courses.id", index=True)
+    name: str = Field(max_length=100)
+    filter_text: str = Field(default="")
+    type_filter: str = Field(default="", max_length=100)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+    __table_args__ = (UniqueConstraint("course_id", "name", name="uq_challenge_course_name"),)
+
+
+class ChallengeRead(SQLModel):
+    id: int
+    name: str
+    filter_text: str
+    type_filter: str
+    created_at: datetime
+    updated_at: datetime
+
+
 class TaskCreate(SQLModel):
     course_id: int
     title: str

@@ -10,6 +10,19 @@
 {% endblock %}
 
 {% block course_content %}
+  <!-- Challenges (benannte Aufgaben-Filter; Klick = Filter in Suche/Typ übernehmen) -->
+  <div class="card mb-6">
+    <div class="border border-gray-200 bg-gray-50/60 rounded-xl p-3">
+      <div class="flex items-center justify-between mb-3 px-1">
+        <h3 class="font-semibold text-gray-800 text-sm">🏆 Challenges</h3>
+        <button id="challenge-new-btn" class="text-indigo-600 hover:text-indigo-800 text-sm font-medium transition">
+          + Neue Challenge
+        </button>
+      </div>
+      <div id="challenges-list" class="space-y-1.5"></div>
+    </div>
+  </div>
+
   <!-- Filter -->
   <div class="card mb-6">
     <div class="flex items-center gap-4 flex-wrap">
@@ -29,89 +42,11 @@
     <p id="filter-active-hint" class="hidden text-xs text-gray-500 mt-3">ℹ️ Mit aktivem Filter ist die Drag-and-Drop-Reihenfolge-Anpassung deaktiviert — Filter löschen zum Umordnen.</p>
   </div>
 
-  <!-- Task List (Kacheln wie Skript-Kapitel; space-y nur ab sm: mobil
-       haben die Kacheln keinen Vertikalabstand) -->
-  <div id="task-list" class="sm:space-y-4">
-    {% for task in tasks %}
-    {# Kachel analog zu den Skript-Kapiteln: mobil full-bleed (-mx-4 hebt
-       das px-4 des Main-Containers auf, keine Rundung/Seitenränder),
-       ab sm: gewöhnliche Karte. #}
-    <div class="flex items-center justify-between gap-4 px-4 sm:px-6 py-4 bg-white border border-gray-200 shadow-sm -mx-4 border-x-0 border-t-0 rounded-none sm:mx-0 sm:border-t sm:border-x sm:rounded-xl overflow-clip"
-         id="task-row-{{ task.id }}" data-task-id="{{ task.id }}"
-         data-title="{{ task.title | e }}" data-type="{{ task.task_type }}">
-      <div class="flex items-center gap-3 flex-1 min-w-0">
-        <!-- Drag Handle -->
-        <div class="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 transition select-none p-2"
-             title="Ziehen zur Reihenfolge ändern">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="currentColor">
-            <circle cx="9" cy="6" r="1.5"/>
-            <circle cx="15" cy="6" r="1.5"/>
-            <circle cx="9" cy="12" r="1.5"/>
-            <circle cx="15" cy="12" r="1.5"/>
-            <circle cx="9" cy="18" r="1.5"/>
-            <circle cx="15" cy="18" r="1.5"/>
-          </svg>
-        </div>
-        <div class="flex-1">
-          <div class="flex items-center gap-3">
-            <a href="/courses/{{ course.id }}/tasks/{{ task.id }}"
-               class="text-lg font-semibold text-blue-600 hover:underline">
-              {{ task.title }}
-            </a>
-          </div>
-          <div class="text-sm text-gray-500 mt-1">
-            {{ task.max_points }} Punkte
-            {% if task.max_attempts is not none %}· {{ task.max_attempts }} Versuche{% endif %}
-            {% if task.deadline %}· <span class="{{ 'line-through text-gray-400' if deadline_expired(task.deadline) else '' }}">⏰ <span data-ts="{{ deadline_iso(task.deadline) }}"></span></span>{% endif %}
-            <span class="whitespace-nowrap px-2 py-0.5 rounded text-xs font-medium
-              {% if task.task_type == 'workspace' %}bg-indigo-100 text-indigo-700
-              {% elif task.task_type == 'mc' %}bg-emerald-100 text-emerald-700
-              {% elif task.task_type == 'upload' %}bg-amber-100 text-amber-700
-              {% elif task.task_type == 'extern' %}bg-rose-100 text-rose-700
-              {% else %}bg-gray-100 text-gray-600
-              {% endif %}" style="align-content: center;">
-              {{ '💻 Workspace' if task.task_type == 'workspace' else '🎯 Multiple Choice' if task.task_type == 'mc' else '📤 Upload' if task.task_type == 'upload' else '🔗 Extern' if task.task_type == 'extern' else '📄 Text' }}
-            </span>
-          </div>
-        </div>
-      </div>
-      <div class="flex items-center gap-4">
-        <button type="button"
-                onclick="toggleVisibility({{ task.id }}, this)"
-                class="text-gray-400 hover:text-blue-600 transition text-lg p-1 rounded hover:bg-gray-100"
-                title="{% if task.is_visible %}Aufgabe verstecken{% else %}Aufgabe freischalten{% endif %}">
-          {% if task.is_visible %}
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-          {% else %}
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
-          {% endif %}
-        </button>
-        <button type="button"
-                onclick="showDuplicateTaskModal(this)"
-                data-task-id="{{ task.id }}"
-                data-task-title="{{ task.title | e }}"
-                class="text-blue-500 hover:text-blue-700 transition text-lg p-1 rounded hover:bg-gray-100"
-                title="Aufgabe duplizieren">
-          📋
-        </button>
-        <button type="button"
-                onclick="confirmDeleteTask({{ task.id }}, '{{ task.title }}')"
-                class="text-red-500 hover:text-red-700 transition text-sm font-medium"
-                title="Aufgabe löschen">
-          🗑️
-        </button>
-      </div>
-    </div>
-    {% endfor %}
+  {# Aufgabe-Liste + Empty-State (Markup zentral in
+     task_list_fragment_tutor.html — identisch beim Quiet-Live-Update). #}
+  <div id="task-list-region">
+    {% include "course/task_list_fragment_tutor.html" %}
   </div>
-
-  {% if not tasks %}
-  <!-- Empty State (analog Skript: Icon + Text, ohne Karte) -->
-  <div class="text-center py-6">
-    <div class="text-4xl mb-3">📋</div>
-    <p class="text-gray-500 text-sm">Noch keine Aufgaben erstellt.</p>
-  </div>
-  {% endif %}
 
   <!-- Keine Treffer (nur bei aktivem Filter, per JS eingeblendet) -->
   <div id="filter-no-results" class="hidden text-center py-6">
@@ -155,6 +90,48 @@
     </div>
   </div>
 </div>
+
+<!-- ═══ Challenge-Formular (Neu / Bearbeiten) ═══ -->
+<div id="challenge-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 flex flex-col" style="max-height:85vh">
+    <div class="flex items-center justify-between px-6 pt-5">
+      <h2 id="challenge-modal-title" class="text-lg font-bold text-gray-800">Neue Challenge</h2>
+      <button id="challenge-close-btn" class="text-gray-400 hover:text-gray-600 text-xl leading-none p-1 transition">✕</button>
+    </div>
+    <div class="overflow-y-auto px-6 py-4">
+      <input type="hidden" id="challenge-id">
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Name <span class="text-red-500">*</span></label>
+          <input id="challenge-name" type="text" maxlength="100" placeholder="z.B. Coding-Hero"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1"
+                 title="Wie die Suche oben: alle Begriffe (leerzeichen-getrennt) müssen im Titel vorkommen.">Suche (Aufgabentitel)</label>
+          <input id="challenge-filter-text" type="text" placeholder="z.B. Übungsaufgabe"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Typ <span class="text-xs font-normal text-gray-400">(leer = alle)</span></label>
+          <div id="challenge-form-chips" class="space-y-2"></div>
+        </div>
+        <p id="challenge-preview" class="text-xs text-gray-500"></p>
+      </div>
+      <div class="flex justify-end gap-3 mt-5">
+        <button id="challenge-cancel-btn"
+                class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition">
+          Abbrechen
+        </button>
+        <button id="challenge-save-btn"
+                class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-indigo-700 transition font-semibold">
+          Speichern
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block extra_scripts %}
@@ -162,7 +139,7 @@
 <script src="{{ asset('js/task-filter.js') }}"></script>
 <script>
   // ─── Filter (client-seitig: nur die Liste wird gefiltert, keine Reload) ───
-  const taskListEl = document.getElementById('task-list');
+  let taskListEl = document.getElementById('task-list');
   let sortableInstance = null;
 
   // Filter-State über Live-Reloads hinweg (location.reload bei
@@ -171,8 +148,12 @@
   let storedFilter = {};
   try { storedFilter = JSON.parse(sessionStorage.getItem(filterStoreKey) || '{}'); } catch { storedFilter = {}; }
 
-  // Facetten-Chips: Typ (Multi-Select, innerhalb OR).
+  // Facetten-Chips: Sichtbarkeit (Single-Select) + Typ (Multi-Select, OR).
   const chipApi = initFilterChips(document.getElementById('filter-chips'), [
+    { id: 'visibility', label: 'Sichtbarkeit', multi: false, values: [
+      { value: 'visible', label: 'Sichtbar' },
+      { value: 'hidden', label: 'Versteckt' },
+    ]},
     { id: 'type', label: 'Typ', multi: true, values: [
       { value: 'text', label: 'Text' },
       { value: 'mc', label: 'MC' },
@@ -189,12 +170,17 @@
 
   function applyTaskFilter() {
     const filterValue = document.getElementById('filter-input').value.trim();
-    const typeValues = chipApi.get().type;
+    const chips = chipApi.get();
+    const typeValues = chips.type;
+    const visValues = chips.visibility;
     let visibleCount = 0;
     const rows = Array.from(taskListEl.querySelectorAll('[data-task-id]'));
     for (const row of rows) {
+      const visibleOk = visValues.length === 0 ||
+        (visValues.includes('visible') ? row.dataset.visible === '1' : row.dataset.visible === '0');
       const show = multiKeywordMatches(row.getAttribute('data-title') || '', filterValue) &&
-                   (typeValues.length === 0 || typeValues.includes(row.getAttribute('data-type')));
+                   (typeValues.length === 0 || typeValues.includes(row.getAttribute('data-type'))) &&
+                   visibleOk;
       row.classList.toggle('hidden', !show);
       if (show) visibleCount++;
     }
@@ -204,6 +190,7 @@
     taskListEl.classList.toggle('filtering', active);
     document.getElementById('filter-active-hint').classList.toggle('hidden', !active);
     document.getElementById('filter-no-results').classList.toggle('hidden', !(active && visibleCount === 0));
+    markActiveChallenge();
     // Für den nächsten Live-Reload merken
     try {
       sessionStorage.setItem(filterStoreKey, JSON.stringify({
@@ -219,6 +206,7 @@
     // Nach Live-Reload: Suchfeld wiederherstellen + Filter anwenden
     if (storedFilter.text) filterInput.value = storedFilter.text;
     if (storedFilter.text || chipApi.hasActive()) applyTaskFilter();
+    loadChallenges();
     filterInput.addEventListener('input', () => {
       clearTimeout(filterTimeout);
       filterTimeout = setTimeout(applyTaskFilter, 300);
@@ -237,7 +225,8 @@
   });
 
   // ─── Drag-and-Drop Reihenfolge (Filter deaktiviert sie per option('disabled')) ───
-  document.addEventListener('DOMContentLoaded', () => {
+  function initSortable() {
+    if (sortableInstance) { sortableInstance.destroy(); sortableInstance = null; }
     const taskList = document.getElementById('task-list');
     if (!taskList) return;
 
@@ -278,7 +267,26 @@
         }
       }
     });
-  });
+  }
+
+  document.addEventListener('DOMContentLoaded', initSortable);
+
+  // ─── Quiet-Live-Update: Aufgabe geändert (Titel, Punkte, ...) →
+  // servergerendertes List-Fragment einbinden, statt Page-Reload.
+  // Suche + Chips bleiben erhalten (außerhalb der Region); Filter wird
+  // danach neu angewendet. Fallback: kompletter Reload.
+  async function refreshTaskListQuiet() {
+    try {
+      const res = await fetch('/api/courses/' + courseId + '/tasks/list-html', { credentials: 'same-origin' });
+      if (!res.ok) { location.reload(); return; }
+      const html = await res.text();
+      document.getElementById('task-list-region').innerHTML = html;
+      taskListEl = document.getElementById('task-list');
+      initSortable();
+      applyTaskFilter();
+      loadChallenges();
+    } catch { location.reload(); }
+  }
 
   async function confirmDeleteTask(taskId, title) {
     const msg = 'Möchtest du "' + title + '" wirklich in den Papierkorb legen?\n\nTest-Cases, Einreichungen und Feedback bleiben erhalten. Der PROF kann die Aufgabe über Kurs-Einstellungen → Papierkorb wiederherstellen.';
@@ -370,42 +378,288 @@
     }
   }
 
-  // ─── Visibility Toggle ────────────────────────────────────────
-  async function toggleVisibility(taskId, button) {
-    try {
-      const res = await fetch('/api/tasks/' + taskId + '/visibility', {
-        method: 'PATCH',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_visible: button.title.includes('freischalten') }),
-      });
+    // ─── Visibility Toggle ────────────────────────────────────────
+    const EYE_ICONS = {
+      visible: '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
+      hidden: '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>',
+    };
 
-      const data = await res.json();
-      if (!res.ok) {
-        showToast(data.detail || 'Fehler beim Umschalten.', 'error');
-        return;
+    function applyVisibilityToRow(row, isNowVisible) {
+      const button = row.querySelector('button[onclick*="toggleVisibility"]');
+      if (button) {
+        button.innerHTML = isNowVisible ? EYE_ICONS.visible : EYE_ICONS.hidden;
+        button.title = isNowVisible ? 'Aufgabe verstecken' : 'Aufgabe freischalten';
       }
+      row.dataset.visible = isNowVisible ? '1' : '0';
+    }
 
-      // Update the icon
-      const isNowVisible = data.is_visible;
-      const icon = isNowVisible
-        ? '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>'
-        : '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
-      button.innerHTML = icon;
-      button.title = isNowVisible ? 'Aufgabe verstecken' : 'Aufgabe freischalten';
+    async function toggleVisibility(taskId, button) {
+     try {
+       const res = await fetch('/api/tasks/' + taskId + '/visibility', {
+         method: 'PATCH',
+         credentials: 'same-origin',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ is_visible: button.title.includes('freischalten') }),
+       });
 
-      showToast(data.message || 'Sichtbarkeit aktualisiert.', 'success');
-    } catch (err) {
-      showToast('Fehler: ' + err.message, 'error');
+       const data = await res.json();
+       if (!res.ok) {
+         showToast(data.detail || 'Fehler beim Umschalten.', 'error');
+         return;
+       }
+
+       // Sofort lokal anwenden (das SSE-Event pflegt die anderen Tabs);
+       // Challenge-Badges (matched_count) parallel nachladen.
+       const row = button.closest('[data-task-id]');
+       if (row) applyVisibilityToRow(row, data.is_visible);
+       applyTaskFilter();
+       loadChallenges();
+
+       showToast(data.message || 'Sichtbarkeit aktualisiert.', 'success');
+     } catch (err) {
+       showToast('Fehler: ' + err.message, 'error');
+     }
+   }
+
+    // SSE: Sichtbarkeit geändert (auch in anderen Tabs) → Zeile quiet
+    // aktualisieren, statt die Seite zu reloaden.
+    async function updateTaskRowVisibility(taskId) {
+      try {
+        const res = await fetch('/api/tasks/' + taskId, { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const task = await res.json();
+        const row = taskListEl.querySelector('[data-task-id="' + taskId + '"]');
+        if (!row) { location.reload(); return; } // Zeile fehlt (sonstige Änderung)
+        applyVisibilityToRow(row, task.is_visible);
+        applyTaskFilter();
+        loadChallenges();
+      } catch { /* Event verpufft — nächster Change holt es ein */ }
+    }
+
+   // ─── Challenges (benannte Aufgaben-Filter, inline) ────────────
+   const TYPE_LABELS = { text: 'Text', mc: 'MC', upload: 'Upload', workspace: 'Workspace', extern: 'Extern' };
+   const TYPE_VALUES = [
+     { value: 'text', label: 'Text' },
+     { value: 'mc', label: 'MC' },
+     { value: 'upload', label: 'Upload' },
+     { value: 'workspace', label: 'Workspace' },
+     { value: 'extern', label: 'Extern' },
+   ];
+
+   const challengesListEl = document.getElementById('challenges-list');
+   let challengesData = [];
+   let formChips = null;
+
+   function escapeHtml(s) {
+     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+   }
+
+   async function loadChallenges() {
+     try {
+       const res = await fetch('/api/courses/' + courseId + '/challenges', { credentials: 'same-origin' });
+       const data = await res.json();
+       if (!res.ok) throw new Error(data.detail || 'Fehler beim Laden.');
+       challengesData = data.challenges;
+       challengesListEl.innerHTML = '';
+       if (!challengesData.length) {
+         challengesListEl.innerHTML =
+           '<p class="text-sm text-gray-400 px-3 py-2">Noch keine Challenges — oben mit „+ Neue Challenge" anlegen.</p>';
+       } else {
+         for (const ch of challengesData) challengesListEl.appendChild(challengeItem(ch));
+       }
+       markActiveChallenge();
+     } catch (err) {
+       showToast('Challenges: ' + err.message, 'error');
+     }
+   }
+
+   function challengeFilterSummary(ch) {
+     const parts = [];
+     parts.push(ch.filter_text ? 'Suche „' + ch.filter_text + '“' : 'alle Titel');
+     parts.push(ch.type_filter
+       ? 'Typ: ' + ch.type_filter.split(',').filter(Boolean).map(t => TYPE_LABELS[t] || t).join(', ')
+       : 'alle Typen');
+     return parts.join(' · ');
+   }
+
+   function challengeItem(ch) {
+     const div = document.createElement('div');
+     div.dataset.chId = ch.id;
+     div.className = 'flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer border border-gray-200 bg-white hover:border-indigo-300 transition';
+     const count = ch.matched_count || 0;
+     div.innerHTML =
+       '<span class="flex-1 min-w-0 truncate text-sm font-medium text-gray-800">' + escapeHtml(ch.name) + '</span>' +
+       '<span class="hidden md:inline text-xs text-gray-400 truncate max-w-[35%]">' + escapeHtml(challengeFilterSummary(ch)) + '</span>' +
+       '<span class="shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ' +
+         (count ? 'bg-gray-100 text-gray-600' : 'bg-orange-100 text-orange-700') + '">' +
+         count + (count === 1 ? ' Aufgabe' : ' Aufgaben') + '</span>' +
+       '<span class="shrink-0 flex items-center gap-1">' +
+         '<button data-edit class="text-blue-500 hover:text-blue-700 text-sm px-1.5 py-0.5 rounded hover:bg-blue-100" title="Bearbeiten">✏️</button>' +
+         '<button data-del class="text-red-500 hover:text-red-700 text-sm px-1.5 py-0.5 rounded hover:bg-red-100" title="Löschen">🗑️</button>' +
+       '</span>';
+     div.addEventListener('click', () => applyChallenge(ch));
+     div.querySelector('[data-edit]').addEventListener('click', (e) => {
+       e.stopPropagation();
+       openChallengeForm(ch);
+     });
+     div.querySelector('[data-del]').addEventListener('click', async (e) => {
+       e.stopPropagation();
+       if (!confirm('Challenge „' + ch.name + '" wirklich löschen?')) return;
+       const res = await fetch('/api/courses/' + courseId + '/challenges/' + ch.id, {
+         method: 'DELETE',
+         credentials: 'same-origin',
+       });
+       if (!res.ok) {
+         const d = await res.json().catch(() => ({}));
+         showToast(d.detail || 'Löschen fehlgeschlagen.', 'error');
+         return;
+       }
+       showToast('Challenge gelöscht.', 'success');
+       loadChallenges();
+     });
+     return div;
+   }
+
+   // True, wenn Suche + Typ-Chips genau dem Challenge-Filter entsprechen.
+   function isChallengeActive(ch) {
+     const filterValue = document.getElementById('filter-input').value.trim();
+     const chips = chipApi.get();
+     const curTypes = chips.type.slice().sort().join(',');
+     const chTypes = (ch.type_filter || '').split(',').filter(Boolean).sort().join(',');
+     if ((ch.filter_text || '') !== filterValue || chTypes !== curTypes) return false;
+     // Challenge ohne Filter matcht alles → erst mit aktivem „Sichtbar"-Chip
+     // (dem sichtbaren Effekt des Klicks) als aktiv erkennen.
+     if (!ch.filter_text && !ch.type_filter) return chips.visibility.join(',') === 'visible';
+     return true;
+   }
+
+   // Klick auf eine Challenge: Filter (Suche + Typ-Chips + „Sichtbar") in der
+   // Task-Liste übernehmen; erneut anklicken → Filter wieder aufheben.
+   function applyChallenge(ch) {
+     if (isChallengeActive(ch)) {
+       document.getElementById('filter-input').value = '';
+       chipApi.clear();
+       return;
+     }
+     document.getElementById('filter-input').value = ch.filter_text || '';
+     chipApi.set('type', ch.type_filter ? ch.type_filter.split(',').filter(Boolean) : []);
+     chipApi.set('visibility', ['visible']);
+   }
+
+   // Zeile hervorheben, deren Filter genau dem aktuellen Seiten-Filter entspricht.
+   function markActiveChallenge() {
+     for (const ch of challengesData) {
+       const el = challengesListEl.querySelector('[data-ch-id="' + ch.id + '"]');
+       if (!el) continue;
+       const active = isChallengeActive(ch);
+       el.classList.toggle('bg-indigo-50', active);
+       el.classList.toggle('border-indigo-300', active);
+     }
+   }
+
+   const challengeModal = document.getElementById('challenge-modal');
+
+   function closeChallengeForm() {
+     challengeModal.classList.add('hidden');
+     document.body.style.overflow = '';
+   }
+
+   function openChallengeForm(ch) {
+     challengeModal.classList.remove('hidden');
+     document.body.style.overflow = 'hidden';
+     document.getElementById('challenge-modal-title').textContent = ch ? 'Challenge bearbeiten' : 'Neue Challenge';
+     document.getElementById('challenge-id').value = ch ? ch.id : '';
+     document.getElementById('challenge-name').value = ch ? ch.name : '';
+     // Prefill: beim Anlegen aus dem aktuellen Seiten-Filter übernehmen
+     document.getElementById('challenge-filter-text').value =
+       ch ? ch.filter_text : (document.getElementById('filter-input').value || '');
+     const initialTypes = ch && ch.type_filter
+       ? ch.type_filter.split(',').filter(Boolean)
+       : chipApi.get().type;
+     formChips = initFilterChips(
+       document.getElementById('challenge-form-chips'),
+       [{ id: 'type', label: null, multi: true, values: TYPE_VALUES }],
+       updateChallengePreview,
+       { type: initialTypes }
+     );
+     updateChallengePreview();
+     document.getElementById('challenge-name').focus();
+   }
+
+   // Live-Vorschau: wieviele Tasks der Seite matchen — wie serverseitig
+   // nur die sichtbaren (Studenten sehen Challenge-Punkte nur dafür).
+   function updateChallengePreview() {
+     const text = document.getElementById('challenge-filter-text').value;
+     const types = formChips ? formChips.get().type : [];
+     const rows = Array.from(taskListEl.querySelectorAll('[data-task-id]'));
+     const matched = rows.filter(r =>
+       r.dataset.visible === '1' &&
+       multiKeywordMatches(r.getAttribute('data-title') || '', text) &&
+       (types.length === 0 || types.includes(r.getAttribute('data-type')))
+     ).map(r => r.getAttribute('data-title') || '');
+     const el = document.getElementById('challenge-preview');
+     if (!matched.length) {
+       el.className = 'text-xs text-orange-600';
+       el.textContent = '⚠️ Keine Aufgaben matchen — die Challenge wäre für Studenten unsichtbar.';
+    } else {
+      el.className = 'text-xs text-gray-500';
+      el.textContent = matched.length + (matched.length === 1 ? ' Aufgabe matcht' : ' Aufgaben matchen') +
+        (matched.length <= 5 ? ': ' + matched.join(', ') : ' (erste: ' + matched.slice(0, 5).join(', ') + ' …)');
     }
   }
 
-  // ─── Live-Update (MCP): Aufgabe extern bearbeitet → Reload ───
-  // (übersprungen, solange das Duplizieren-Modal offen ist)
+  document.getElementById('challenge-new-btn').addEventListener('click', () => openChallengeForm(null));
+  document.getElementById('challenge-cancel-btn').addEventListener('click', closeChallengeForm);
+  document.getElementById('challenge-close-btn').addEventListener('click', closeChallengeForm);
+  challengeModal.addEventListener('click', (e) => {
+    if (e.target === challengeModal) closeChallengeForm();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !challengeModal.classList.contains('hidden')) closeChallengeForm();
+  });
+  document.getElementById('challenge-filter-text').addEventListener('input', updateChallengePreview);
+  document.getElementById('challenge-save-btn').addEventListener('click', async () => {
+    const id = document.getElementById('challenge-id').value;
+    const body = {
+      name: document.getElementById('challenge-name').value,
+      filter_text: document.getElementById('challenge-filter-text').value,
+      type_filter: formChips ? formChips.get().type.join(',') : '',
+    };
+    const res = await fetch('/api/courses/' + courseId + '/challenges' + (id ? '/' + id : ''), {
+      method: id ? 'PATCH' : 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(data.detail || 'Speichern fehlgeschlagen.', 'error');
+      return;
+    }
+    showToast(id ? 'Challenge aktualisiert.' : 'Challenge erstellt.', 'success');
+    closeChallengeForm();
+    if (!id) {
+      // Neu angelegt: der Filter stand beim Anlegen auf der Seite (Prefill)
+      // → zurücksetzen, damit die Zeile inaktiv ist und Klick = anwenden.
+      document.getElementById('filter-input').value = '';
+      chipApi.clear();
+    }
+    loadChallenges();
+  });
+
+  // ─── Live-Update (MCP) ───
+  // Challenge geändert/angelegt/gelöscht (auch selbst) → nur die
+  // Challenge-Liste neu laden. Aufgabe geändert → komplettes Reload
+  // (übersprungen, solange ein Modal offen ist).
   aicampusWatchContent(courseId, (data) => {
+    if (data.entity_type === "challenge") { loadChallenges(); return; }
     if (data.entity_type !== "task") return;
+    // Sichtbarkeits-Änderung: quiet (Zeile + Badges), auch im eigenen Tab
+    // — die lokale Update ist idempotent.
+    if (data.origin_type === "visibility") { updateTaskRowVisibility(data.entity_id); return; }
     if (!document.getElementById('duplicate-task-modal').classList.contains('hidden')) return;
-    location.reload();
+    if (!document.getElementById('challenge-modal').classList.contains('hidden')) return;
+    refreshTaskListQuiet();
   });
 </script>
 {% endblock %}

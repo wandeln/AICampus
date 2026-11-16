@@ -1,0 +1,69 @@
+{# Tutor-Task-Kachel (einzige Markup-Quelle: tasks_tutor.html UND
+   task_list_fragment_tutor.html). Kontext: task, course. #}
+<div class="flex items-center justify-between gap-4 px-4 sm:px-6 py-4 bg-white border border-gray-200 shadow-sm -mx-4 border-x-0 border-t-0 rounded-none sm:mx-0 sm:border-t sm:border-x sm:rounded-xl overflow-clip"
+      id="task-row-{{ task.id }}" data-task-id="{{ task.id }}"
+      data-title="{{ task.title | e }}" data-type="{{ task.task_type }}"
+      data-visible="{{ 1 if task.is_visible else 0 }}">
+  <div class="flex items-center gap-3 flex-1 min-w-0">
+    <!-- Drag Handle -->
+    <div class="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 transition select-none p-2"
+         title="Ziehen zur Reihenfolge ändern">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="currentColor">
+        <circle cx="9" cy="6" r="1.5"/>
+        <circle cx="15" cy="6" r="1.5"/>
+        <circle cx="9" cy="12" r="1.5"/>
+        <circle cx="15" cy="12" r="1.5"/>
+        <circle cx="9" cy="18" r="1.5"/>
+        <circle cx="15" cy="18" r="1.5"/>
+      </svg>
+    </div>
+    <div class="flex-1">
+      <div class="flex items-center gap-3">
+        <a href="/courses/{{ course.id }}/tasks/{{ task.id }}"
+           class="text-lg font-semibold text-blue-600 hover:underline">
+          {{ task.title }}
+        </a>
+      </div>
+      <div class="text-sm text-gray-500 mt-1">
+        {{ task.max_points }} Punkte
+        {% if task.max_attempts is not none %}· {{ task.max_attempts }} Versuche{% endif %}
+        {% if task.deadline %}· <span class="{{ 'line-through text-gray-400' if deadline_expired(task.deadline) else '' }}">⏰ <span data-ts="{{ deadline_iso(task.deadline) }}"></span></span>{% endif %}
+        <span class="whitespace-nowrap px-2 py-0.5 rounded text-xs font-medium
+          {% if task.task_type == 'workspace' %}bg-indigo-100 text-indigo-700
+          {% elif task.task_type == 'mc' %}bg-emerald-100 text-emerald-700
+          {% elif task.task_type == 'upload' %}bg-amber-100 text-amber-700
+          {% elif task.task_type == 'extern' %}bg-rose-100 text-rose-700
+          {% else %}bg-gray-100 text-gray-600
+          {% endif %}" style="align-content: center;">
+          {{ '💻 Workspace' if task.task_type == 'workspace' else '🎯 Multiple Choice' if task.task_type == 'mc' else '📤 Upload' if task.task_type == 'upload' else '🔗 Extern' if task.task_type == 'extern' else '📄 Text' }}
+        </span>
+      </div>
+    </div>
+  </div>
+  <div class="flex items-center gap-4">
+    <button type="button"
+            onclick="toggleVisibility({{ task.id }}, this)"
+            class="text-gray-400 hover:text-blue-600 transition text-lg p-1 rounded hover:bg-gray-100"
+            title="{% if task.is_visible %}Aufgabe verstecken{% else %}Aufgabe freischalten{% endif %}">
+      {% if task.is_visible %}
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+      {% else %}
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+      {% endif %}
+    </button>
+    <button type="button"
+            onclick="showDuplicateTaskModal(this)"
+            data-task-id="{{ task.id }}"
+            data-task-title="{{ task.title | e }}"
+            class="text-blue-500 hover:text-blue-700 transition text-lg p-1 rounded hover:bg-gray-100"
+            title="Aufgabe duplizieren">
+      📋
+    </button>
+    <button type="button"
+            onclick="confirmDeleteTask({{ task.id }}, '{{ task.title }}')"
+            class="text-red-500 hover:text-red-700 transition text-sm font-medium"
+            title="Aufgabe löschen">
+      🗑️
+    </button>
+  </div>
+</div>

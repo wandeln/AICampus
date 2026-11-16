@@ -1314,6 +1314,39 @@ async def course_page(
     return RedirectResponse(url=f"/courses/{course_id}/forum", status_code=302)
 
 
+@app.get("/api/courses/{course_id}/tasks/list-html")
+async def tasks_list_fragment(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Tutor: servergerendertes Aufgabenlisten-Fragment (Liste + Empty-State).
+
+    Dient dem Quiet-Live-Update der Tutor-Aufgabenliste: bei content_updated
+    tauscht die Seite nur diese HTML-Region aus, statt zu reloaden (Suche +
+    Chips bleiben erhalten)."""
+    course = session.get(Course, course_id)
+    if not course:
+        raise HTTPException(404, "Kurs nicht gefunden.")
+    membership = session.exec(
+        select(UserCourse)
+        .where(UserCourse.user_id == user.id)  # type: ignore[arg-type]
+        .where(UserCourse.course_id == course_id)  # type: ignore[arg-type]
+    ).first()
+    if not membership or membership.role_in_course not in (CourseRole.PROF, CourseRole.TUTOR):
+        raise HTTPException(403, "Keine Berechtigung.")
+    tasks = session.exec(
+        select(Task)
+        .where(Task.course_id == course_id)  # type: ignore[arg-type]
+        .order_by(Task.display_order.asc())  # type: ignore[attr-defined]
+    ).all()
+    return templates.TemplateResponse(
+        "course/task_list_fragment_tutor.html",
+        {"request": request, "course": course, "tasks": tasks},
+    )
+
+
 @app.get("/courses/{course_id}/tasks")
 async def tasks_page(
     course_id: int,

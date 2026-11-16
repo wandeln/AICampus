@@ -31,3 +31,12 @@ def parse_type_filter(raw: str) -> list[str]:
     'workspace' → ['workspace'], 'text,mc' → ['text', 'mc'], '' → [].
     """
     return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def task_matches_challenge(task, filter_text: str, type_filter: str) -> bool:
+    """Matcht `task` den Challenge-Filter? (AND: Titelsuche + Typen,
+    gleiche Semantik wie die Aufgabenlisten-Filter.)"""
+    if not multi_keyword_matches(task.title, filter_text):
+        return False
+    type_values = parse_type_filter(type_filter)
+    return not type_values or task.task_type.value in type_values

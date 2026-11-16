@@ -25,6 +25,8 @@ from sqlmodel import Session, SQLModel, delete, select
 
 from database.base import engine, get_session
 from database.models import (
+    Challenge,
+    ChallengeRead,
     ContentVersion,
     Course,
     CourseRole,
@@ -70,7 +72,7 @@ from services import upload_service
 from config import UPLOAD_MAX_FILE_BYTES
 from services.references_service import build_references_text
 from services.settings_resolver import get_effective_compute_config, get_effective_llm_config
-from services.task_filter import multi_keyword_matches, parse_type_filter
+from services.task_filter import multi_keyword_matches, parse_type_filter, task_matches_challenge
 from services.timeutil import deadline_from_local, deadline_iso, utc_iso
 from services.workspace_presets import (
     IMAGE_SELECTION_FIELDS,
@@ -407,6 +409,7 @@ async def get_task(
 
     if is_tutor:
         result["model_solution"] = task.model_solution
+        result["is_visible"] = task.is_visible
 
     return result
 
@@ -568,6 +571,140 @@ async def delete_task(
     notifications.push_content_updated(session, task_course_id, "task", task_id)
     sync_media_usages(session, task_course_id)
     return {"message": f"Aufgabe '{task_title}' in den Papierkorb gelegt."}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CHALLENGES (benannte Aufgaben-Filter, s. Challenge-Modell)
+# ═══════════════════════════════════════════════════════════════════
+
+def _validate_challenge_payload(
+    body: dict, session: Session, course_id: int, exclude_id: Optional[int] = None
+) -> dict:
+    """Name/filter_text/type_filter validieren → bereinigte Felder."""
+    name = str(body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "Challenge-Name darf nicht leer sein.")
+    if len(name) > 100:
+        raise HTTPException(400, "Challenge-Name zu lang (max. 100 Zeichen).")
+    dupes = session.exec(
+        select(Challenge)
+        .where(Challenge.course_id == course_id)  # type: ignore[arg-type]
+        .where(Challenge.name.collate("NOCASE") == name)  # type: ignore[union-attr]
+    ).all()
+    if any(c.id != exclude_id for c in dupes):
+        raise HTTPException(409, f"Challenge '{name}' existiert bereits in diesem Kurs.")
+    type_values = parse_type_filter(str(body.get("type_filter") or ""))
+    known = {tt.value for tt in TaskType}
+    unknown = [t for t in type_values if t not in known]
+    if unknown:
+        raise HTTPException(400, f"Unbekannter Aufgabentyp: {', '.join(unknown)}")
+    return {
+        "name": name,
+        "filter_text": str(body.get("filter_text") or "").strip(),
+        "type_filter": ",".join(type_values),
+    }
+
+
+def _visible_course_tasks(session: Session, course_id: int) -> list[Task]:
+    return list(session.exec(
+        select(Task)
+        .where(Task.course_id == course_id)  # type: ignore[arg-type]
+        .where(Task.is_visible == True)  # type: ignore[cmp-eql]
+        .order_by(Task.display_order.asc())  # type: ignore[attr-defined]
+    ).all())
+
+
+def _challenge_payload(ch: Challenge, all_tasks: list[Task]) -> dict:
+    matched_count = sum(
+        1 for t in all_tasks if task_matches_challenge(t, ch.filter_text, ch.type_filter)
+    )
+    return {
+        **ChallengeRead.model_validate(ch).model_dump(mode="json"),
+        "matched_count": matched_count,
+    }
+
+
+@router.get("/courses/{course_id}/challenges")
+def list_challenges(
+    course_id: int,
+    session: Session = Depends(get_session),
+    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF, CourseRole.TUTOR)),
+):
+    """Challenges des Kurses (mit Vorschau der matchenden Aufgaben)."""
+    _, _ = user_and_course
+    if not session.get(Course, course_id):
+        raise HTTPException(404, "Kurs nicht gefunden.")
+    challenges = session.exec(
+        select(Challenge)
+        .where(Challenge.course_id == course_id)  # type: ignore[arg-type]
+        .order_by(Challenge.name.collate("NOCASE"))  # type: ignore[union-attr]
+    ).all()
+    all_tasks = _visible_course_tasks(session, course_id)
+    return {"challenges": [_challenge_payload(c, all_tasks) for c in challenges]}
+
+
+@router.post("/courses/{course_id}/challenges")
+async def create_challenge(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF, CourseRole.TUTOR)),
+):
+    """Challenge anlegen (benannter Aufgaben-Filter)."""
+    _, _ = user_and_course
+    if not session.get(Course, course_id):
+        raise HTTPException(404, "Kurs nicht gefunden.")
+    data = _validate_challenge_payload(await request.json(), session, course_id)
+    ch = Challenge(course_id=course_id, **data)
+    session.add(ch)
+    session.commit()
+    session.refresh(ch)
+    notifications.push_content_updated(session, course_id, "challenge", ch.id)
+    return {"message": "Challenge erstellt.", "challenge": _challenge_payload(ch, _visible_course_tasks(session, course_id))}
+
+
+@router.patch("/courses/{course_id}/challenges/{challenge_id}")
+async def update_challenge(
+    course_id: int,
+    challenge_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF, CourseRole.TUTOR)),
+):
+    """Challenge umbenennen/Filter ändern."""
+    _, _ = user_and_course
+    ch = session.get(Challenge, challenge_id)
+    if not ch or ch.course_id != course_id:
+        raise HTTPException(404, "Challenge nicht gefunden.")
+    data = _validate_challenge_payload(await request.json(), session, course_id, exclude_id=ch.id)
+    ch.name = data["name"]
+    ch.filter_text = data["filter_text"]
+    ch.type_filter = data["type_filter"]
+    ch.updated_at = datetime.now(timezone.utc)
+    session.add(ch)
+    session.commit()
+    session.refresh(ch)
+    notifications.push_content_updated(session, course_id, "challenge", ch.id)
+    return {"message": "Challenge aktualisiert.", "challenge": _challenge_payload(ch, _visible_course_tasks(session, course_id))}
+
+
+@router.delete("/courses/{course_id}/challenges/{challenge_id}")
+def delete_challenge(
+    course_id: int,
+    challenge_id: int,
+    session: Session = Depends(get_session),
+    user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF, CourseRole.TUTOR)),
+):
+    """Challenge löschen (reine Konfiguration — hart, kein Papierkorb)."""
+    _, _ = user_and_course
+    ch = session.get(Challenge, challenge_id)
+    if not ch or ch.course_id != course_id:
+        raise HTTPException(404, "Challenge nicht gefunden.")
+    name = ch.name
+    session.delete(ch)
+    session.commit()
+    notifications.push_content_updated(session, course_id, "challenge", challenge_id)
+    return {"message": f"Challenge '{name}' gelöscht."}
 
 
 def _copy_workspace_content(session: Session, src: Task, dst: Task) -> None:
@@ -1029,6 +1166,8 @@ async def toggle_task_visibility(
     session.add(task)
     session.commit()
     session.refresh(task)
+    notifications.push_content_updated(session, task.course_id, "task", task.id,
+                                       origin_type="visibility")
     
     status_msg = "sichtbar" if task.is_visible else "versteckt"
     return {"message": f"Aufgabe ist jetzt {status_msg}.", "is_visible": task.is_visible}
