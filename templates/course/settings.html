@@ -14,6 +14,12 @@
       <button onclick="showSettingsTab('import')" class="settings-tab w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-tab="import">
         📦 Kurs-Material Import
       </button>
+      <button onclick="showSettingsTab('export')" class="settings-tab w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-tab="export">
+        📤 AICampus Export
+      </button>
+      <button onclick="showSettingsTab('aicampus-import')" class="settings-tab w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-tab="aicampus-import">
+        📥 AICampus Import
+      </button>
       <button onclick="showSettingsTab('compute')" class="settings-tab w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-tab="compute">
         💻 Compute / Workspace
       </button>
@@ -298,6 +304,36 @@
     </div>
   </div>
 
+  <!-- Tab: AICampus Export (Kurs-Materialien als ZIP) -->
+  <div id="settings-tab-export" class="settings-panel hidden">
+    <div class="max-w-4xl">
+      <div class="card py-6">
+        <h3 class="text-sm font-semibold text-gray-700">Kurs-Materialien exportieren</h3>
+        <p class="text-xs text-gray-400 mt-1 mb-4">
+          Erzeugt eine ZIP-Datei mit human-readable JSON + Dateien (Skript-Kapitel,
+          Slides, Übungsaufgaben, Medien, Quellen). Die ZIP kann über „AICampus
+          Import" in einen anderen Kurs importiert werden.
+        </p>
+        <div id="export-root" class="text-sm text-gray-400">Lädt…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: AICampus Import (ZIP aus AICampus-Export) -->
+  <div id="settings-tab-aicampus-import" class="settings-panel hidden">
+    <div class="max-w-4xl">
+      <div class="card py-6">
+        <h3 class="text-sm font-semibold text-gray-700">Kurs-Materialien importieren</h3>
+        <p class="text-xs text-gray-400 mt-1 mb-4">
+          Lädt eine ZIP aus dem „AICampus Export" eines anderen Kurses hoch und
+          importiert die ausgewählten Inhalte in diesen Kurs. Bestehende Inhalte
+          bleiben erhalten (neue Inhalte werden ans Ende der Reihenfolge angehängt).
+        </p>
+        <div id="import-transfer-root"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Tab: Compute / Workspace (Kurs-Engines + globale read-only) -->
   <div id="settings-tab-compute" class="settings-panel hidden">
     <div class="max-w-3xl">
@@ -432,7 +468,7 @@
 
   <script>
   function showSettingsTab(tab) {
-    if (tab !== 'settings' && tab !== 'analytics' && tab !== 'import' && tab !== 'compute' && tab !== 'trash') tab = 'settings';
+    if (!['settings', 'analytics', 'import', 'export', 'aicampus-import', 'compute', 'trash'].includes(tab)) tab = 'settings';
     document.querySelectorAll('.settings-panel').forEach((el) => el.classList.add('hidden'));
     document.getElementById('settings-tab-' + tab).classList.remove('hidden');
 
@@ -447,6 +483,10 @@
 
     // Analytics: Daten vom Server laden
     if (tab === 'analytics') loadCourseAnalytics();
+
+    // AICampus Export/Import: Daten beim ersten Öffnen laden
+    if (tab === 'export' && window.atExportEnsure) window.atExportEnsure();
+    if (tab === 'aicampus-import' && window.atImportEnsure) window.atImportEnsure();
 
     history.replaceState(null, '', tab === 'settings' ? location.pathname : '#' + tab);
   }
@@ -3467,5 +3507,327 @@
       showToast('Fehler: ' + err.message, 'error');
     }
   }
+  </script>
+
+  <script>
+  // ─── AICampus Export / Import (Kurs-Materialien als ZIP) ─────────
+  (function () {
+    'use strict';
+
+    const API = '/api/courses/' + courseId + '/transfer';
+    const SECTION_ORDER = ['script', 'slides', 'tasks', 'media', 'references'];
+    const SECTION_META = {
+      script:     { icon: '📖', label: 'Skript-Kapitel' },
+      slides:     { icon: '📽️', label: 'Slides' },
+      tasks:      { icon: '🧩', label: 'Übungsaufgaben' },
+      media:      { icon: '🖼️', label: 'Medien' },
+      references: { icon: '📚', label: 'Quellen' },
+    };
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : String(s);
+      return d.innerHTML;
+    }
+    function escAttr(s) { return esc(s).replace(/"/g, '&quot;'); }
+    function fmtBytes(n) {
+      if (n == null) return '';
+      if (n < 1024) return n + ' B';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+      return (n / 1024 / 1024).toFixed(1) + ' MB';
+    }
+
+    // ─── Widget: Sektions-Checkbox-Ansicht (Export & Import geteilt) ──
+    // mode: 'export' | 'import'
+    function makeWidget(rootId, mode) {
+      const root = document.getElementById(rootId);
+      let data = null;        // {sections: {key: [items]}}
+      let token = null;       // import: Staging-Token
+      let manifest = null;    // import: {version, source_course_name, …}
+      let report = null;      // import: letzter Import-Report
+      let selected = {};      // key → Set von Item-IDs (als String gespeichert)
+      let open = {};          // key → bool
+      let busy = false;
+      let loaded = false;
+
+      function selSet(key) {
+        if (!selected[key]) selected[key] = new Set();
+        return selected[key];
+      }
+      function initFromPreview(preview) {
+        data = preview;
+        selected = {}; open = {};
+        for (const key of SECTION_ORDER) {
+          open[key] = true;
+          const s = selSet(key);
+          for (const it of (data.sections[key] || [])) if (it.checked) s.add(String(it.id));
+        }
+      }
+      function totalSelected() {
+        return SECTION_ORDER.reduce((n, k) => n + selected[k].size, 0);
+      }
+
+      function itemRow(key, it) {
+        const id = String(it.id);
+        const checked = selected[key].has(id) ? 'checked' : '';
+        let badge = '';
+        if (key === 'media') {
+          badge = it.usage_count > 0
+            ? '<span class="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700 shrink-0">verwendet ×' + it.usage_count + '</span>'
+            : '<span class="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 shrink-0">nicht verwendet</span>';
+          if (it.file_present === false) badge += ' <span class="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 shrink-0">Datei fehlt</span>';
+        } else if (key === 'tasks') {
+          badge = '<span class="text-xs text-gray-400 shrink-0">' + esc(it.type || '') + '</span>';
+        } else if (key === 'references') {
+          badge = it.key ? '<code class="text-xs text-gray-500 shrink-0">' + esc(it.key) + '</code>' : '';
+        }
+        const size = (key === 'media' && it.size) ? '<span class="text-xs text-gray-400 shrink-0">' + fmtBytes(it.size) + '</span>' : '';
+        return '<label class="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer">' +
+          '<input type="checkbox" class="at-item" data-sec="' + key + '" data-id="' + escAttr(id) + '" ' + checked + '>' +
+          '<span class="truncate text-sm text-gray-700 flex-1">' + esc(it.title) + '</span>' +
+          badge + size +
+          '</label>';
+      }
+
+      function sectionBlock(key) {
+        const meta = SECTION_META[key];
+        const items = data.sections[key] || [];
+        const s = selSet(key);
+        const allChecked = items.length > 0 && items.every(it => s.has(String(it.id)));
+        let extra = '';
+        if (key === 'media' && items.length) {
+          extra = '<button type="button" class="at-usedonly text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 transition">Nur verwendete auswählen</button>';
+        }
+        const rows = items.length
+          ? items.map(it => itemRow(key, it)).join('')
+          : '<p class="text-sm text-gray-400 px-3 py-2">Keine Inhalte.</p>';
+        return '<details class="border border-gray-200 rounded-lg mb-2" data-sec="' + key + '" ' + (open[key] ? 'open' : '') + '>' +
+          '<summary class="flex items-center gap-2 px-3 py-2 cursor-pointer select-none bg-gray-50 rounded-t-lg">' +
+          '<span class="text-sm">' + meta.icon + '</span>' +
+          '<span class="text-sm font-semibold text-gray-700 flex-1">' + meta.label +
+            ' <span class="text-gray-400 font-normal">(' + s.size + '/' + items.length + ')</span></span>' +
+          extra +
+          '<label class="flex items-center gap-1 text-xs text-gray-500 cursor-pointer">' +
+            '<input type="checkbox" class="at-selall" data-sec="' + key + '" ' + (allChecked ? 'checked' : '') + '> alle</label>' +
+          '</summary>' +
+          '<div class="divide-y divide-gray-100 max-h-80 overflow-y-auto">' + rows + '</div>' +
+          '</details>';
+      }
+
+      function render() {
+        if (!data) return;
+        const n = totalSelected();
+        const mediaBytes = (data.sections.media || [])
+          .filter(it => selected.media.has(String(it.id)))
+          .reduce((sum, it) => sum + (it.size || 0), 0);
+        let action = '';
+        if (mode === 'export') {
+          action = '<div class="flex items-center justify-between pt-3 border-t border-gray-200">' +
+            '<span class="text-xs text-gray-500">' + n + ' Inhalte ausgewählt' +
+            (mediaBytes ? ' · Medien: ' + fmtBytes(mediaBytes) : '') + '</span>' +
+            '<button type="button" class="at-action bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition font-semibold" ' + (busy || !n ? 'disabled' : '') + '>' +
+            (busy ? 'Erzeugt…' : '📤 ZIP exportieren') + '</button></div>';
+        } else {
+          action = '<div class="flex items-center justify-between pt-3 border-t border-gray-200">' +
+            '<button type="button" class="at-newzip text-xs px-2.5 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 transition">ZIP erneut wählen</button>' +
+            '<button type="button" class="at-action bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700 transition font-semibold" ' + (busy || !n ? 'disabled' : '') + '>' +
+            (busy ? 'Importiert…' : '📥 In Kurs importieren (' + n + ')') + '</button></div>';
+        }
+        let metaLine = '';
+        if (mode === 'import' && manifest) {
+          metaLine = '<p class="text-xs text-gray-500 mb-3">Quelle: <strong>' + esc(manifest.source_course_name || 'unbekannter Kurs') +
+            '</strong> · Format-Version ' + esc(manifest.version) + '</p>';
+        }
+        root.innerHTML = metaLine + SECTION_ORDER.map(sectionBlock).join('') + action;
+      }
+
+      // ─── Events (Delegation) ──
+      root.addEventListener('click', (e) => {
+        const usedOnly = e.target.closest('.at-usedonly');
+        if (usedOnly) {
+          e.preventDefault();
+          const s = selSet('media');
+          s.clear();
+          for (const it of (data.sections.media || [])) if ((it.usage_count || 0) > 0) s.add(String(it.id));
+          render();
+          return;
+        }
+        if (e.target.closest('.at-action')) {
+          if (!busy) (mode === 'export' ? doExport() : doImport());
+          return;
+        }
+        if (e.target.closest('.at-newzip')) resetImport();
+      });
+      root.addEventListener('change', (e) => {
+        const el = e.target;
+        if (el.classList.contains('at-item')) {
+          const s = selSet(el.dataset.sec);
+          if (el.checked) s.add(el.dataset.id); else s.delete(el.dataset.id);
+          render();
+        } else if (el.classList.contains('at-selall')) {
+          const s = selSet(el.dataset.sec);
+          if (el.checked) for (const it of (data.sections[el.dataset.sec] || [])) s.add(String(it.id));
+          else s.clear();
+          render();
+        } else if (el.classList.contains('at-file') && el.files && el.files[0]) {
+          uploadZip(el.files[0]);
+        }
+      });
+      // Open-Zustand pro Sektion merken
+      root.addEventListener('toggle', (e) => {
+        const d = e.target.closest('details[data-sec]');
+        if (d) open[d.dataset.sec] = d.open;
+      }, true);
+
+      function collection() {
+        const out = {};
+        for (const key of SECTION_ORDER) out[key] = [...selSet(key)];
+        return out;
+      }
+      function setBusy(b) { busy = b; render(); }
+      function showError(msg) {
+        setBusy(false);
+        root.innerHTML = '<p class="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">⚠️ ' + esc(msg) + '</p>' + root.innerHTML;
+      }
+
+      // ─── Export ──
+      async function loadPreview() {
+        setBusy(true);
+        try {
+          const res = await fetch(API + '/export-preview', { credentials: 'same-origin' });
+          let d = {};
+          try { d = await res.json(); } catch (_) {}
+          if (!res.ok) throw new Error(d.detail || 'Fehler (' + res.status + ')');
+          initFromPreview(d);
+          loaded = true;
+          setBusy(false);
+          render();
+        } catch (err) {
+          setBusy(false);
+          root.innerHTML = '<p class="text-sm text-red-600">Fehler beim Laden: ' + esc(err.message) + '</p>';
+        }
+      }
+
+      async function doExport() {
+        setBusy(true);
+        try {
+          const res = await fetch(API + '/export', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(collection()),
+          });
+          if (!res.ok) {
+            let d = {};
+            try { d = await res.json(); } catch (_) {}
+            throw new Error(d.detail || 'Fehler (' + res.status + ')');
+          }
+          const blob = await res.blob();
+          const m = (res.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/);
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = (m && m[1]) || 'aicampus_export.zip';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+          setBusy(false);
+          showToast('Export erstellt (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB) — Download gestartet.', 'success');
+        } catch (err) {
+          setBusy(false);
+          showError('Export fehlgeschlagen: ' + err.message);
+        }
+      }
+
+      // ─── Import ──
+      function renderUpload() {
+        data = null; token = null; manifest = null;
+        root.innerHTML =
+          '<label class="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-300 rounded-xl py-10 cursor-pointer hover:bg-gray-50 transition">' +
+          '<span class="text-3xl">📥</span>' +
+          '<span class="text-sm font-medium text-gray-700">ZIP-Datei auswählen (aus einem AICampus-Export)</span>' +
+          '<span class="text-xs text-gray-400">max. 500 MB</span>' +
+          '<input type="file" accept=".zip,application/zip" class="at-file hidden">' +
+          '</label>' +
+          (report ? renderReport() : '');
+      }
+
+      function renderReport() {
+        if (!report) return '';
+        const counts = Object.entries(report.imported || {})
+          .filter(([, n]) => n > 0)
+          .map(([k, n]) => SECTION_META[k].label + ': <strong>' + n + '</strong>')
+          .join(' · ');
+        const warns = (report.warnings || []).map(w => '<li>' + esc(w) + '</li>').join('');
+        return '<div class="mt-4 bg-green-50 border border-green-200 rounded-lg px-4 py-3">' +
+          '<p class="text-sm text-green-800 font-medium">✅ Import abgeschlossen — ' + (counts || 'nichts') + '</p>' +
+          (warns ? '<ul class="text-xs text-amber-800 mt-2 list-disc pl-4 space-y-0.5">' + warns + '</ul>' : '') +
+          '</div>';
+      }
+
+      function resetImport() {
+        report = null;
+        renderUpload();
+      }
+
+      async function uploadZip(file) {
+        setBusyQuiet(true);
+        root.innerHTML = '<p class="text-sm text-gray-500 py-6">Lädt „' + esc(file.name) + '“…</p>';
+        try {
+          const fd = new FormData();
+          fd.append('file', file);
+          const res = await fetch(API + '/import-upload', { method: 'POST', credentials: 'same-origin', body: fd });
+          let d = {};
+          try { d = await res.json(); } catch (_) {}
+          if (!res.ok) throw new Error(d.detail || 'Fehler (' + res.status + ')');
+          token = d.token;
+          manifest = d.manifest;
+          report = null;
+          initFromPreview(d.preview);
+          setBusyQuiet(false);
+          render();
+        } catch (err) {
+          setBusyQuiet(false);
+          renderUpload();
+          showError('Upload fehlgeschlagen: ' + err.message);
+        }
+      }
+
+      function setBusyQuiet(b) { busy = b; }
+
+      async function doImport() {
+        setBusy(true);
+        try {
+          const res = await fetch(API + '/import', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(Object.assign({ token: token }, collection())),
+          });
+          let d = {};
+          try { d = await res.json(); } catch (_) {}
+          if (!res.ok) throw new Error(d.detail || 'Fehler (' + res.status + ')');
+          report = d;
+          setBusy(false);
+          renderUpload();
+          showToast('Import abgeschlossen.', 'success');
+        } catch (err) {
+          setBusy(false);
+          showError('Import fehlgeschlagen: ' + err.message);
+        }
+      }
+
+      return {
+        ensureLoaded() {
+          if (loaded || busy) return;
+          if (mode === 'export') loadPreview();
+          else if (!data) renderUpload();
+        },
+      };
+    }
+
+    const exportWidget = makeWidget('export-root', 'export');
+    const importWidget = makeWidget('import-transfer-root', 'import');
+    window.atExportEnsure = () => exportWidget.ensureLoaded();
+    window.atImportEnsure = () => importWidget.ensureLoaded();
+  })();
   </script>
 {% endblock %}

@@ -200,3 +200,9 @@ IMPORT_TIMEOUT_ANALYSIS = int(os.getenv("IMPORT_TIMEOUT_ANALYSIS", "180"))
 IMPORT_TIMEOUT_MEDIA = int(os.getenv("IMPORT_TIMEOUT_MEDIA", "120"))
 IMPORT_TIMEOUT_PLAN = int(os.getenv("IMPORT_TIMEOUT_PLAN", "900"))
 IMPORT_TIMEOUT_CONVERT = int(os.getenv("IMPORT_TIMEOUT_CONVERT", "600"))
+
+# ─── AICampus Transfer (Kurs-Materialien Export/Import, PROF/Admin) ──
+# Staging-Verzeichnis für Import-Zips: data/aicampus_transfer/course_{id}/{token}/
+# (upload.zip + extracted/). Größenlimits: IMPORT_MAX_* oben.
+TRANSFER_DIR = BASE_DIR / "data" / "aicampus_transfer"
+TRANSFER_DIR.mkdir(parents=True, exist_ok=True)

@@ -84,7 +84,7 @@ from services.slides_service import (
     slide_count,
 )
 
-from api import admin, agent_api, analytics as analytics_api, auth, course_members, dm, forum, importer, image_specs, media as media_api, materials as materials_api, mcp_context, mcp_oauth, mcp_server as mcp_server_api, mcp_tokens, notifications as notifications_api, push as push_api, references, review_workspace, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, versions as versions_api
+from api import admin, agent_api, analytics as analytics_api, auth, course_members, course_transfer, dm, forum, importer, image_specs, media as media_api, materials as materials_api, mcp_context, mcp_oauth, mcp_server as mcp_server_api, mcp_tokens, notifications as notifications_api, push as push_api, references, review_workspace, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, versions as versions_api
 
 
 def _calculate_percentile(my_score: float, other_scores: list[float]) -> int:
@@ -419,6 +419,7 @@ app.include_router(analytics_api.course_router)
 app.include_router(image_specs.router)
 app.include_router(tutor.router)
 app.include_router(course_members.router)
+app.include_router(course_transfer.router)  # /api/courses/{id}/transfer/… (Export/Import)
 app.include_router(student.router)
 app.include_router(review_workspace.router)  # /api/review/… (Review-Workspace)
 app.include_router(media_api.router)
