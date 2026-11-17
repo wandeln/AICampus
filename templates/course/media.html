@@ -28,7 +28,7 @@
                         file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700
                         hover:file:bg-blue-100">
           <p class="text-xs text-gray-400 mt-1">
-            PNG, JPG, WebP, GIF, SVG — max. 5 MB (SVG wird als Applet gespeichert) · Video (MP4/WebM) — max. 500 MB · Mehrere Dateien möglich
+            PNG, JPG, WebP, GIF — max. 20 MB · SVG — max. 5 MB (wird als Applet gespeichert) · Video (MP4/WebM) — max. 500 MB · Mehrere Dateien möglich
           </p>
         </div>
 
@@ -614,7 +614,8 @@
   // ─── Upload + LLM-Generierung (gemeinsam) ─────────────────────
 
   const ALLOWED_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"];
-  const MAX_SIZE = 5 * 1024 * 1024;
+  const MAX_SIZE_IMAGE = 20 * 1024 * 1024;   // Raster (PNG/JPG/WebP/GIF)
+  const MAX_SIZE_SVG = 5 * 1024 * 1024;      // SVG wird als Applet gespeichert
   const MAX_SIZE_VIDEO = 500 * 1024 * 1024;
   let objectUrl = null;
 
@@ -700,9 +701,11 @@
     if (!typeOk) {
       return "Dateityp nicht erlaubt. Erlaubt: PNG, JPG, WebP, GIF, SVG, MP4, WebM.";
     }
-    const maxSize = video ? MAX_SIZE_VIDEO : MAX_SIZE;
+    const isSvg = file.type === "image/svg+xml" || file.name.toLowerCase().endsWith(".svg");
+    const maxSize = video ? MAX_SIZE_VIDEO : (isSvg ? MAX_SIZE_SVG : MAX_SIZE_IMAGE);
     if (file.size > maxSize) {
-      return video ? "Video zu groß (max. 500 MB)." : "Datei zu groß (max. 5 MB).";
+      if (video) return "Video zu groß (max. 500 MB).";
+      return isSvg ? "SVG zu groß (max. 5 MB)." : "Bild zu groß (max. 20 MB).";
     }
     return null;
   }

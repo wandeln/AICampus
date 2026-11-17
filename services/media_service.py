@@ -32,7 +32,8 @@ from database.models import (
 )
 
 # ─── Upload-Limits & Whitelist ────────────────────────────────────
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB (Applets: HTML/SVG)
+MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MB (Raster-Bilder, z.B. animierte WebP-Teaser)
 MAX_APPLET_BYTES = 200 * 1024  # 200 KB (LLM-generiertes HTML, inkl. inline JS/CSS)
 MAX_AVATAR_BYTES = 2 * 1024 * 1024  # 2 MB (Profilbilder)
 ALLOWED_MEDIA: dict[str, str] = {
@@ -92,8 +93,8 @@ def save_upload(course_id: int, filename: str, data: bytes) -> tuple[str, str, i
         raise HTTPException(400, f"Dateityp nicht erlaubt. Erlaubt: {allowed}")
     if not data:
         raise HTTPException(400, "Datei ist leer.")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, f"Datei zu groß (max. {MAX_UPLOAD_BYTES // (1024 * 1024)} MB).")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(413, f"Datei zu groß (max. {MAX_IMAGE_BYTES // (1024 * 1024)} MB).")
 
     course_dir = media_dir_for_course(course_id)
     stored_name = f"{uuid.uuid4().hex}{ext}"
@@ -117,8 +118,8 @@ def replace_file(rel_path: str, filename: str, data: bytes) -> tuple[str, str, i
         raise HTTPException(400, f"Dateityp nicht erlaubt. Erlaubt: {allowed}")
     if not data:
         raise HTTPException(400, "Datei ist leer.")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, f"Datei zu groß (max. {MAX_UPLOAD_BYTES // (1024 * 1024)} MB).")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(413, f"Datei zu groß (max. {MAX_IMAGE_BYTES // (1024 * 1024)} MB).")
 
     p = (MEDIA_DIR / rel_path).resolve()
     if not p.is_relative_to(MEDIA_DIR.resolve()) or not p.is_file():
