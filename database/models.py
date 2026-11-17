@@ -1315,6 +1315,9 @@ class ScriptQuestionBase(SQLModel):
     quote_ctx: Optional[str] = Field(default=None, max_length=2000)
     # Startoffset der Quote innerhalb von quote_ctx (normalisierter String)
     quote_off: int = Field(default=0)
+    # Anonyme Frage: Name/Rolle/Avatar werden allen außer dem/der
+    # Fragesteller:in selbst ausgeblendet (student_id bleibt gespeichert)
+    is_anonymous: bool = Field(default=False)
     # "open" | "addressed" (von Tutoren/Profs umschaltbar)
     status: str = Field(default="open", max_length=20)
     created_at: datetime = Field(default_factory=datetime.now)

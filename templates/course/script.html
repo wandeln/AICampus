@@ -15,6 +15,10 @@
   /* Etwas Luft, wenn per scrollIntoView (block: 'start') hingescrollt wird */
   mark.sq-mark { scroll-margin-top: 1.5rem; }
   .sq-thread { scroll-margin-top: 0.5rem; }
+  /* Anonym-Umschalten: 🎭-Overlay auf dem Avatar erscheint bei Hover über
+     Avatar, Name ODER Rolle (nur bei eigenen Fragen vorhanden) */
+  .sq-anon-avatar .sq-anon-avatar-overlay { opacity: 0; transition: opacity 120ms; }
+  .sq-anon-toggle:hover .sq-anon-avatar-overlay { opacity: 1; }
   /* Mobil: kein Vertikalabstand zwischen Tab-Leiste und Kapitelliste
      (mb-6 der Leiste → 0; entspricht Tailwind-sm-Grenze 640px) */
   @media (max-width: 639px) {
@@ -116,8 +120,14 @@
         <button id="sq-quote-clear" type="button" class="text-gray-400 hover:text-gray-600 leading-none" title="Auswahl entfernen">✕</button>
       </div>
       <div class="flex items-end gap-2">
-        <textarea id="sq-input" rows="2" maxlength="2000" placeholder="Frage… (Markdown & LaTeX)" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
-        <button id="sq-send" type="button" class="bg-blue-600 hover:bg-blue-700 text-white w-10 h-10 rounded-lg text-lg transition shrink-0" title="Frage stellen">➤</button>
+        <!-- Höhe = beiden Buttons rechts (40 + 6 + 40 px); wächst beim Tippen weiter -->
+        <textarea id="sq-input" rows="2" maxlength="2000" placeholder="Frage… (Markdown & LaTeX)" style="height:86px" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+        <div class="flex flex-col items-center gap-1.5 shrink-0">
+          <button id="sq-anon-chip" type="button" title="Frage anonym stellen" class="w-10 h-10 rounded-full border border-gray-300 bg-white flex items-center justify-center transition hover:bg-gray-50">
+            <span class="text-lg leading-none">👤</span>
+          </button>
+          <button id="sq-send" type="button" class="bg-blue-600 hover:bg-blue-700 text-white w-10 h-10 rounded-lg text-lg transition shrink-0" title="Frage stellen">➤</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1661,7 +1671,9 @@
     const size = sizeCls || 'w-8 h-8';
     if (u.avatar) return `<img src="${u.avatar}" alt="" class="${size} rounded-full object-cover shrink-0">`;
     const isLLM = u.role === 'LLM';
-    return `<div class="${size} rounded-full ${isLLM ? 'bg-purple-100' : 'bg-gray-200'} flex items-center justify-center shrink-0 text-sm">${isLLM ? '🤖' : '👤'}</div>`;
+    // Emoji groß genug, dass es die Scheibe wie ein Foto füllt
+    const emojiCls = size === 'w-7 h-7' ? 'text-base' : 'text-lg';
+    return `<div class="${size} rounded-full ${isLLM ? 'bg-purple-100' : 'bg-gray-200'} flex items-center justify-center shrink-0 ${emojiCls}">${isLLM ? '🤖' : '👤'}</div>`;
   }
 
   // Status-Chip: für Fragesteller/Staff ein Dropdown (offen / behandelt),
@@ -1729,11 +1741,31 @@
     const jumpable = !!(q.quote && q.section_id != null);
     const jumpCls = jumpable ? ' cursor-pointer transition' : '';
     const jumpTitle = jumpable ? ' title="Zur Stelle im Skript springen"' : '';
+    // Anonyme Frage: für alle (auch die/der Autor:in — deren Payload hat
+    // noch die echten Daten) 👤-Avatar + „anonym". Umschaltbar nur von der/
+    // dem Autor:in selbst: Hover über Avatar, Name ODER Rolle blendet ein
+    // 🎭-Overlay auf dem Avatar ein, Klick wechselt.
+    const isAnon = !!q.student.anonymous;
+    const avatarHtml = sqAvatarHtml(isAnon ? { avatar: null, role: 'STUDENT' } : q.student, 'w-8 h-8');
+    // Eigene Frage: kein title auf dem Namen (sonst würde der Klarnamen
+    // als Tooltip doppelte angezeigt) — der Wrapper-Title „Anonymisieren
+    // — Name ausblenden" gilt für Avatar, Name und Rolle.
+    const nameHtml = isAnon
+      ? '<span class="text-sm font-semibold text-gray-500 min-w-0 truncate">anonym</span>'
+      : `<span class="text-sm font-semibold text-gray-800 min-w-0 truncate"${q.student.can_toggle_anonymous ? '' : ` title="${sqEscapeHtml(q.student.name)}"`}>${sqEscapeHtml(q.student.name)}</span>`;
+    const chipHtml = isAnon
+      ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-500 shrink-0">anonym</span>'
+      : `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${roleClass} shrink-0">${sqEscapeHtml(q.student.role)}</span>`;
+    let identityHtml;
+    if (q.student.can_toggle_anonymous) {
+      const t = isAnon ? 'Deanonymisieren — Name wieder sichtbar machen' : 'Anonymisieren — Name ausblenden';
+      identityHtml = `<div class="sq-anon-toggle flex items-center gap-2 cursor-pointer select-none" data-id="${q.id}" title="${t}"><div class="sq-anon-avatar relative shrink-0">${avatarHtml}<div class="sq-anon-avatar-overlay absolute inset-0 rounded-full bg-black/50 flex items-center justify-center text-sm">🎭</div></div>${nameHtml}${chipHtml}</div>`;
+    } else {
+      identityHtml = `${avatarHtml}${nameHtml}${chipHtml}`;
+    }
     el.innerHTML = `
-      <div class="flex items-center gap-2">
-        ${sqAvatarHtml(q.student, 'w-7 h-7')}
-        <span class="text-sm font-semibold text-gray-800 min-w-0 truncate" title="${sqEscapeHtml(q.student.name)}">${sqEscapeHtml(q.student.name)}</span>
-        <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${roleClass} shrink-0">${sqEscapeHtml(q.student.role)}</span>
+      <div class="flex items-center gap-2 flex-wrap">
+        ${identityHtml}
         ${sqStatusBadge(q)}
         <span class="text-[11px] text-gray-400 ml-auto shrink-0">${sqTimeLabel(q.created_at)}</span>
         ${q.can_delete ? `<button type="button" class="sq-delete opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition text-sm leading-none shrink-0" data-id="${q.id}" title="Frage löschen">✕</button>` : ''}
@@ -1789,11 +1821,12 @@
     el.className = 'sq-thread bg-white rounded-xl border border-blue-200 p-3';
     el.dataset.sqId = tempId;
     const roleClass = SQ_ROLE_STYLES[sqMe.role] || 'bg-gray-100 text-gray-600';
+    const isAnon = sqAnonOn();
     el.innerHTML = `
       <div class="flex items-center gap-2 flex-wrap">
-        ${sqAvatarHtml(sqMe, 'w-7 h-7')}
-        <span class="text-sm font-semibold text-gray-800">${sqEscapeHtml(sqMe.name)}</span>
-        <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${roleClass}">${sqEscapeHtml(sqMe.role)}</span>
+        ${isAnon ? sqAvatarHtml({ avatar: null, role: 'STUDENT' }, 'w-8 h-8') : sqAvatarHtml(sqMe, 'w-8 h-8')}
+        <span class="text-sm font-semibold ${isAnon ? 'text-gray-500' : 'text-gray-800'}">${isAnon ? 'anonym' : sqEscapeHtml(sqMe.name)}</span>
+        <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${isAnon ? 'bg-gray-100 text-gray-500' : roleClass}">${isAnon ? 'anonym' : sqEscapeHtml(sqMe.role)}</span>
         <span class="text-[11px] text-gray-400 ml-auto shrink-0">gerade eben</span>
       </div>
       ${selection && selection.quote ? `<div class="mt-2 bg-yellow-50 border-l-4 border-yellow-300 rounded-r-lg px-2.5 py-1.5 text-xs text-gray-600 break-words">📖 „${sqEscapeHtml(selection.quote)}“${selection.sectionTitle ? ` <span class="text-gray-400">— ${sqEscapeHtml(selection.sectionTitle)}</span>` : ''}</div>` : ''}
@@ -1813,7 +1846,7 @@
     const question = input.value.trim();
     if (!question) return;
     input.value = '';
-    input.style.height = 'auto';
+    input.style.height = '86px';
 
     const list = document.getElementById('sq-body-mine');
     const tempId = 'temp-' + Date.now();
@@ -1834,6 +1867,7 @@
           quote: sqSelection && sqSelection.quote ? sqSelection.quote : '',
           quote_ctx: sqSelection && sqSelection.quoteCtx ? sqSelection.quoteCtx : null,
           quote_off: sqSelection && sqSelection.quoteOff ? sqSelection.quoteOff : 0,
+          is_anonymous: sqAnonOn(),
         }),
       });
       if (!res.ok) {
@@ -1891,6 +1925,30 @@
       }
     });
     container.addEventListener('click', async (e) => {
+      const anonBtn = e.target.closest('.sq-anon-toggle');
+      if (anonBtn) {
+        const qid = anonBtn.dataset.id;
+        const q = sqData.find((x) => String(x.id) === qid);
+        if (!q) return;
+        const next = !q.student.anonymous;
+        try {
+          const res = await fetch('/api/script-questions/' + qid, {
+            method: 'PATCH',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_anonymous: next }),
+          });
+          if (res.ok) {
+            await sqLoad();
+          } else {
+            const data = await res.json().catch(() => ({}));
+            showToast(data.detail || 'Anonymität konnte nicht geändert werden.', 'error');
+          }
+        } catch (err) {
+          showToast('Fehler: ' + err.message, 'error');
+        }
+        return;
+      }
       const delBtn = e.target.closest('.sq-delete');
       if (delBtn) {
         if (!confirm('Diese Frage inkl. aller Antworten wirklich löschen?')) return;
@@ -2036,6 +2094,26 @@
     sqApplyMarks();
   });
 
+  // ─── Composer: Anonym-Chip (persistiert pro Kurs) ─────────────
+  // Wer einmal anonym fragt, will es vermutlich beim nächsten Mal auch.
+  const sqAnonKey = 'aicampus-script-anon-' + courseId;
+  const sqAnonChip = document.getElementById('sq-anon-chip');
+  function sqAnonOn() { return localStorage.getItem(sqAnonKey) === 'on'; }
+  function sqAnonChipStyle() {
+    const on = sqAnonOn();
+    sqAnonChip.classList.toggle('border-purple-300', on);
+    sqAnonChip.classList.toggle('bg-purple-100', on);
+    sqAnonChip.classList.toggle('text-purple-700', on);
+    sqAnonChip.classList.toggle('border-gray-300', !on);
+    sqAnonChip.classList.toggle('bg-white', !on);
+    sqAnonChip.classList.toggle('text-gray-500', !on);
+  }
+  sqAnonChip.addEventListener('click', () => {
+    localStorage.setItem(sqAnonKey, sqAnonOn() ? 'off' : 'on');
+    sqAnonChipStyle();
+  });
+  sqAnonChipStyle();
+
   // ─── Composer: Auswahl-Bezug (Quote) ──────────────────────────
   function sqUpdateQuoteChip() {
     const chip = document.getElementById('sq-quote-chip');
@@ -2057,8 +2135,9 @@
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sqSend(); }
   });
   sqInput.addEventListener('input', () => {
+    // Basis-Höhe 86px (= Button-Säule rechts) beibehalten, wachsen bis 120px
     sqInput.style.height = 'auto';
-    sqInput.style.height = Math.min(sqInput.scrollHeight, 120) + 'px';
+    sqInput.style.height = Math.min(Math.max(sqInput.scrollHeight, 86), 120) + 'px';
   });
 
   // Text-Auswahl im Skript erfassen (nur neue, nicht-leere Auswahl —

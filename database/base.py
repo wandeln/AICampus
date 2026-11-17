@@ -156,6 +156,7 @@ def migrate_schema():
         "script_questions": {
             "quote_ctx": "VARCHAR(2000)",  # Kontext um die Quote (eindeutige Ortung)
             "quote_off": "INTEGER",  # Startoffset der Quote innerhalb von quote_ctx
+            "is_anonymous": "BOOLEAN DEFAULT 0",  # Name ausgeblendet (außer für Autor)
         },
         "user_courses": {
             "annotation": "TEXT",  # Freie Anmerkung je Mitglied (z.B. Übungsgruppe)

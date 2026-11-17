@@ -15,8 +15,10 @@ Die Fragen werden persistiert (inkl. optionaler Text-Auswahl „quote“), damit
 Tutoren/PROFs schwierige Stellen im Skript identifizieren und es verbessern
 können. Der Status ist von Tutoren/PROFs auf „addressed“ umschaltbar.
 
-Sichtbarkeit: Fragesteller und Antwortende werden immer mit Klarnamen, Rolle
-und Avatar angezeigt (siehe load_questions_payload).
+Sichtbarkeit: Fragesteller und Antwortende werden mit Klarnamen, Rolle und
+Avatar angezeigt — außer bei anonymen Fragen: dort wird Name/Rolle/Avatar
+allen außer dem/der Fragesteller:in selbst ausgeblendet (auch vor Staff;
+student_id bleibt in der DB gespeichert, siehe load_questions_payload).
 Fragen zu versteckten Kapiteln können nur Tutoren/PROFs stellen; sie werden
 Studierenden nicht angezeigt (siehe load_questions_payload).
 
@@ -24,7 +26,8 @@ Endpoints:
 - GET    /courses/{course_id}/script-questions
 - POST   /courses/{course_id}/script-questions   (alle Kurs-Mitglieder)
 - POST   /script-questions/{question_id}/responses
-- PATCH  /script-questions/{question_id}         (Autor oder Staff: Status)
+- PATCH  /script-questions/{question_id}         (Status: Autor oder Staff;
+                                                   Anonymität: nur Autor)
 - DELETE /script-questions/{question_id}         (Autor oder Staff)
 """
 
@@ -79,10 +82,14 @@ class ScriptQuestionCreate(SQLModel):
     # der Quote innerhalb des Kontexts; wird verworfen, wenn inkonsistent.
     quote_ctx: Optional[str] = Field(default=None, max_length=2000)
     quote_off: int = Field(default=0, ge=0)
+    # Anonym stellen: Name/Rolle/Avatar ausgeblendet (außer für sich selbst)
+    is_anonymous: bool = False
 
 
-class ScriptQuestionStatusUpdate(SQLModel):
-    status: str = Field(min_length=1, max_length=20)
+class ScriptQuestionUpdate(SQLModel):
+    # Beide Felder optional — der PATCH wendet an, was gesetzt ist.
+    status: Optional[str] = Field(default=None, min_length=1, max_length=20)
+    is_anonymous: Optional[bool] = None
 
 
 class ScriptQuestionResponseCreate(SQLModel):
@@ -361,7 +368,10 @@ def _followup_thread_text(
         name = u.name if u else "unknown"
         return f"{name} ({roles.get(user_id) or 'STUDENT'})"
 
-    lines = [f"FRAGE — {speaker(q.student_id)}: {q.question[:_FOLLOWUP_QUESTION_CHARS]}"]
+    # Anonyme Frage: der/die Fragesteller:in bleibt im Prompt namenlos,
+    # damit die KI niemanden deanonymisieren kann.
+    questioner = "anonym (STUDENT)" if q.is_anonymous else speaker(q.student_id)
+    lines = [f"FRAGE — {questioner}: {q.question[:_FOLLOWUP_QUESTION_CHARS]}"]
     for r in responses[-_FOLLOWUP_RESPONSE_LIMIT:]:
         prefix = "AICampus (KI)" if (r.source == "llm" or r.user_id is None) else speaker(r.user_id)
         lines.append(f"{prefix}: {r.content[:_FOLLOWUP_RESPONSE_CHARS]}")
@@ -441,11 +451,18 @@ def load_questions_payload(
             continue
         is_mine = q.student_id == viewer.id
         student = users.get(q.student_id)
-        student_info = {
-            "name": student.name if student else "unknown",
-            "role": roles.get(q.student_id) or "STUDENT",
-            "avatar": _avatar_url(student),
-        }
+        # Anonyme Frage: Name/Rolle/Avatar nur für den/die Autor:in selbst
+        # (auch nicht für Staff — deanonymisierungsfrei bleiben)
+        if q.is_anonymous and not is_mine:
+            student_info = {"name": "anonym", "role": "STUDENT", "avatar": None}
+        else:
+            student_info = {
+                "name": student.name if student else "unknown",
+                "role": roles.get(q.student_id) or "STUDENT",
+                "avatar": _avatar_url(student),
+            }
+        student_info["anonymous"] = q.is_anonymous
+        student_info["can_toggle_anonymous"] = is_mine
 
         q_responses = []
         for r in responses_by_question.get(q.id, []):
@@ -552,6 +569,7 @@ async def create_script_question(
         quote=quote,
         quote_ctx=quote_ctx,
         quote_off=quote_off,
+        is_anonymous=bool(data.is_anonymous),
     )
     session.add(q)
     session.commit()
@@ -637,28 +655,50 @@ async def add_script_question_response(
 
 
 @router.patch("/script-questions/{question_id}")
-async def update_script_question_status(
+async def update_script_question(
     question_id: int,
-    data: ScriptQuestionStatusUpdate,
+    data: ScriptQuestionUpdate,
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Frage als „behandelt“ markieren / wieder „offen“ (Autor oder Staff)."""
+    """Status (offen/behandelt) und/oder Anonymität einer Frage ändern.
+
+    Status: Autor ODER Staff. Anonymität: nur der/die Autor:in selbst.
+    """
     q = session.get(ScriptQuestion, question_id)
     if not q:
         raise HTTPException(404, "Frage nicht gefunden.")
-    if not _is_staff(session, user, q.course_id) and q.student_id != user.id:
-        raise HTTPException(403, "Nur der Fragesteller (oder ein Tutor/ein PROF) kann den Status ändern.")
-    if data.status not in ("open", "addressed"):
-        raise HTTPException(400, "Status muss 'open' oder 'addressed' sein.")
+    is_author = q.student_id == user.id
+    staff = _is_staff(session, user, q.course_id)
+    if data.status is None and data.is_anonymous is None:
+        raise HTTPException(400, "Nichts zu ändern (status und/oder is_anonymous setzen).")
 
-    q.status = data.status
+    if data.status is not None:
+        if not is_author and not staff:
+            raise HTTPException(403, "Nur der Fragesteller (oder ein Tutor/ein PROF) kann den Status ändern.")
+        if data.status not in ("open", "addressed"):
+            raise HTTPException(400, "Status muss 'open' oder 'addressed' sein.")
+        q.status = data.status
+
+    if data.is_anonymous is not None:
+        if not is_author:
+            raise HTTPException(403, "Nur der/die Fragesteller:in selbst kann die Anonymität ändern.")
+        q.is_anonymous = bool(data.is_anonymous)
+
     q.updated_at = datetime.now(timezone.utc)
     session.add(q)
     session.commit()
     session.refresh(q)
 
-    return {"message": "Status aktualisiert.", "status": q.status}
+    # Live: offene Fragen-Dialoge laden nach (Name wird ggf. einge-/ausgeblendet)
+    notifications.push_content_updated(session, q.course_id, "script_question", q.id)  # type: ignore[arg-type]
+
+    result: dict[str, Any] = {"message": "Frage aktualisiert."}
+    if data.status is not None:
+        result["status"] = q.status
+    if data.is_anonymous is not None:
+        result["is_anonymous"] = q.is_anonymous
+    return result
 
 
 @router.delete("/script-questions/{question_id}")
