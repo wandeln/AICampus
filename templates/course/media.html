@@ -47,12 +47,22 @@
 
         <ul id="upload-queue" class="hidden mt-2 space-y-1 text-xs max-h-40 overflow-y-auto"></ul>
 
-        <button id="media-llm-generate" type="button"
-                class="w-full bg-purple-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-purple-700 transition font-semibold">
-          🤖 Medium generieren
-        </button>
+        <div class="grid grid-cols-1 gap-2">
+          <button type="button" data-llm-format="html"
+                  class="media-llm-generate w-full bg-purple-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-purple-700 transition font-semibold">
+            🤖 Interaktives Applet generieren
+          </button>
+          <button type="button" data-llm-format="svg"
+                  class="media-llm-generate w-full bg-purple-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-purple-700 transition font-semibold">
+            🤖 Vektorgrafik generieren
+          </button>
+          <button type="button" data-llm-format="image"
+                  class="media-llm-generate w-full bg-purple-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-purple-700 transition font-semibold">
+            🤖 Rastergrafik generieren
+          </button>
+        </div>
         <p class="text-xs text-gray-400" style="margin-top: 4px">
-          Erzeugt ein Medium im Media-Studio (interaktives Applet oder generiertes Bild — Format dort wählen).
+          Öffnet das Media-Studio mit dem gewählten Format (HTML-Applet, SVG oder Bild).
         </p>
       </div>
 
@@ -607,8 +617,10 @@
   document.getElementById("duplicate-modal-confirm").addEventListener("click", duplicateApplet);
   document.getElementById("edit-modal-save").addEventListener("click", saveMediaEdit);
   document.getElementById("edit-modal-generate").addEventListener("click", (e) => generateEditMetadata(e.currentTarget));
-  document.getElementById("media-llm-generate").addEventListener("click", () => {
-    window.location.href = `/courses/${courseId}/applets/new`; // Media-Studio (neu; Format im Studio wählen)
+  document.querySelectorAll(".media-llm-generate").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      window.location.href = `/courses/${courseId}/applets/new?format=${btn.dataset.llmFormat}`; // Media-Studio mit Format vorgewählt
+    });
   });
 
   // ─── Upload + LLM-Generierung (gemeinsam) ─────────────────────
