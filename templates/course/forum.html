@@ -24,6 +24,33 @@
   </svg>
 {%- endmacro %}
 
+{# Eine Kanal-Zeile (Sidebar). Zeile = Div (Button darf nicht in <a> liegen).
+   Gemutet: gedimmt, Ungelesen-Badge grau statt rot. #}
+{% macro channel_row(ch) -%}
+<div class="forum-channel flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm transition
+            {% if active_channel and active_channel.id == ch.id %}bg-blue-50 text-blue-700 font-semibold
+            {% elif ch.unread_count %}font-semibold text-gray-900 hover:bg-gray-100
+            {% else %}text-gray-600 hover:bg-gray-100{% endif %}
+            {% if ch.muted %}opacity-60{% endif %}"
+     data-channel-id="{{ ch.id }}" data-muted="{{ '1' if ch.muted else '0' }}">
+  <a href="?channel={{ ch.id }}" class="flex items-center gap-1.5 flex-1 min-w-0">
+    <span class="text-gray-400 select-none">#</span>
+    <span class="flex-1 truncate">{{ ch.name }}</span>
+    {% if ch.unread_count %}
+    <span class="channel-unread inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full {% if ch.muted %}bg-gray-400{% else %}bg-red-500{% endif %} text-white text-[10px] font-bold leading-none shrink-0">
+      {{ ch.unread_count if ch.unread_count <= 99 else '99+' }}
+    </span>
+    {% endif %}
+    {% if ch.last_message_label %}<span class="text-[10px] text-gray-400 shrink-0">{{ ch.last_message_label }}</span>{% endif %}
+  </a>
+  <button type="button" class="forum-channel-mute w-5 h-5 shrink-0 flex items-center justify-center rounded text-xs text-gray-400 hover:bg-gray-200/60 transition"
+          data-channel-id="{{ ch.id }}"
+          title="{{ 'Kanal unmuten (wieder Benachrichtigungen erhalten)' if ch.muted else 'Kanal muten (keine Benachrichtigungen mehr)' }}">
+    {{ bell_icon(ch.muted) }}
+  </button>
+</div>
+{%- endmacro %}
+
 {% block extra_head %}
 <style>
   /* Mobil: Forum oben an die Tab-Leiste attachen (mb-6 der Leiste → 0;
@@ -55,39 +82,35 @@
         class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 text-lg leading-none transition">+</button>
     </div>
     <div class="forum-scroll flex-1 overflow-y-auto p-2 space-y-0.5">
-      {% for ch in forum_channels %}
-      {# Zeile = Div (Button darf nicht in <a> verschachtelt werden).
-         Gemutete Kanäle: gedimmt, Ungelesen-Badge grau statt rot
-         (Glocke + Forum-Tab-Badge bleiben abgemeldet). #}
-      <div class="forum-channel flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm transition
-                  {% if active_channel and active_channel.id == ch.id %}bg-blue-50 text-blue-700 font-semibold
-                  {% elif ch.unread_count %}font-semibold text-gray-900 hover:bg-gray-100
-                  {% else %}text-gray-600 hover:bg-gray-100{% endif %}
-                  {% if ch.muted %}opacity-60{% endif %}"
-           data-channel-id="{{ ch.id }}" data-muted="{{ '1' if ch.muted else '0' }}">
-        <a href="?channel={{ ch.id }}"
-           class="flex items-center gap-1.5 flex-1 min-w-0">
-          <span class="text-gray-400 select-none">#</span>
-          <span class="flex-1 truncate">{{ ch.name }}</span>
-          {# Ungelesen-Badge. Ist der Chat des aktiven Kanals sichtbar (Desktop
-             oder ?channel=), entfernt das Initial-Script das Badge vor dem ersten
-             Paint und markiert den Kanal als gelesen; auf Mobil ohne ?channel=
-             ist nur die Liste zu sehen und das Badge bleibt stehen. #}
-          {% if ch.unread_count %}
-          <span class="channel-unread inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full {% if ch.muted %}bg-gray-400{% else %}bg-red-500{% endif %} text-white text-[10px] font-bold leading-none shrink-0">
-            {{ ch.unread_count if ch.unread_count <= 99 else '99+' }}
-          </span>
-          {% endif %}
-          {% if ch.last_message_label %}<span class="text-[10px] text-gray-400 shrink-0">{{ ch.last_message_label }}</span>{% endif %}
-        </a>
-        <button type="button" class="forum-channel-mute w-5 h-5 shrink-0 flex items-center justify-center rounded text-xs text-gray-400 hover:bg-gray-200/60 transition"
-                data-channel-id="{{ ch.id }}"
-                 title="{{ 'Kanal unmuten (wieder Benachrichtigungen erhalten)' if ch.muted else 'Kanal muten (keine Benachrichtigungen mehr)' }}">
-          {{ bell_icon(ch.muted) }}
-        </button>
-      </div>
+      {% set active_channels = forum_channels | selectattr('muted', 'equalto', false) | list %}
+      {% set muted_channels = forum_channels | selectattr('muted', 'equalto', true) | list %}
+      {% set muted_unread_total = muted_channels | map(attribute='unread_count') | sum %}
+      {% if forum_channels %}
+      {% for ch in active_channels %}
+        {{ channel_row(ch) }}
       {% endfor %}
-      {% if not forum_channels %}
+
+      {# Stummgeschaltete Kanäle: nach unten, aufklappbar (default offen).
+         Chevron sitzt links, wo bei den anderen Kanälen das "#" ist; das Badge
+         zeigt die Gesamtzahl der noch ungelesenen Nachrichten in den
+         stummgeschalteten Kanälen. #}
+      <div id="muted-section-toggle"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-gray-500 select-none cursor-pointer transition hover:bg-gray-100 mt-1{% if not muted_channels %} hidden{% endif %}"
+        data-open="1" title="Stummgeschaltete Kanäle ein-/ausblenden">
+        <svg id="muted-section-chevron" class="w-4 h-4 shrink-0 text-gray-400 transition-transform rotate-90" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        <span class="flex-1 truncate font-medium">Stummgeschaltete</span>
+        {% if muted_unread_total %}
+        <span id="muted-unread-total" class="muted-unread-total inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gray-400 text-white text-[10px] font-bold leading-none shrink-0">
+          {{ muted_unread_total if muted_unread_total <= 99 else '99+' }}
+        </span>
+        {% endif %}
+      </div>
+      <div id="muted-section-list" class="space-y-0.5{% if not muted_channels %} hidden{% endif %}">
+        {% for ch in muted_channels %}
+          {{ channel_row(ch) }}
+        {% endfor %}
+      </div>
+      {% else %}
       <p class="px-2.5 py-2 text-xs text-gray-400">Noch keine Kanäle vorhanden.</p>
       {% endif %}
     </div>
@@ -192,6 +215,11 @@
   const activeChannelMuted = {% if active_channel and active_channel.muted %}true{% else %}false{% endif %};
   const forumBase = `/api/courses/${courseId}/forum`;
   const currentUserId = {{ current_user.id }};
+  // Ausgangs-Zustand aller Kanäle (Ungelesen-Zähler pro Kanal) — wird beim
+  // Pollen/SSE-Refresh durch setChannelBadge fortgeschrieben.
+  const initialChannels = {{ forum_channels | tojson }};
+  const channelUnread = {};
+  for (const ch of initialChannels) channelUnread[ch.id] = ch.unread_count || 0;
 
   const forumList = document.getElementById('forum-messages');
   const forumInput = document.getElementById('forum-input');
@@ -605,14 +633,39 @@
   // Zusätzlich: „read“-Events (z. B. „Alle als gelesen markieren“ in
   // der Glocke, auch aus anderem Tab) → Kanal-Badges + Forum-Tab-Badge
   // serverseitig neu laden.
+  // Gesamt-Badge im "Stummgeschaltete"-Header: Summe der noch ungelesenen
+  // Nachrichten über alle gemuteten Kanäle (analog zu den einzelnen Kanal-Badges).
+  function updateMutedTotalBadge() {
+    const toggle = document.getElementById('muted-section-toggle');
+    if (!toggle) return;
+    let total = 0;
+    document.querySelectorAll('.forum-channel[data-muted="1"]').forEach((row) => {
+      total += channelUnread[row.dataset.channelId] || 0;
+    });
+    let badge = document.getElementById('muted-unread-total');
+    if (!total) {
+      if (badge) badge.remove();
+      return;
+    }
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.id = 'muted-unread-total';
+      badge.className = 'muted-unread-total inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gray-400 text-white text-[10px] font-bold leading-none shrink-0';
+      toggle.appendChild(badge);
+    }
+    badge.textContent = total > 99 ? '99+' : String(total);
+  }
+
   // Sidebar-Badge eines Kanals auf Server-Stand setzen (0 → entfernen).
   function setChannelBadge(channelId, count) {
+    channelUnread[channelId] = count || 0;
     const row = document.querySelector(`.forum-channel[data-channel-id="${channelId}"]`);
-    if (!row) return;
+    if (!row) { updateMutedTotalBadge(); return; }
     let badge = row.querySelector('.channel-unread');
     if (!count) {
       if (badge) badge.remove();
       if (!row.classList.contains('bg-blue-50')) row.classList.remove('font-semibold', 'text-gray-900');
+      updateMutedTotalBadge();
       return;
     }
     if (!badge) {
@@ -625,6 +678,7 @@
     }
     badge.textContent = count > 99 ? '99+' : String(count);
     if (!row.classList.contains('bg-blue-50')) row.classList.add('font-semibold', 'text-gray-900');
+    updateMutedTotalBadge();
   }
 
   // Forum-Tab-Badge = Summe der Ungelesen über alle nicht-gemuteten Kanäle
@@ -790,6 +844,24 @@
         // enthaltenen Ungelesen hier korrigieren (Sidebar-Badge bleibt).
         reduceForumTabBadge(parseInt(badge.textContent.replace('+', ''), 10));
       }
+      // Muten → Zeile in den "Stummgeschaltete"-Block (unten) verschieben;
+      // Unmuten → zurück an die aktiven Kanäle (vor dem Block).
+      const mutedList = document.getElementById('muted-section-list');
+      const mutedToggleEl = document.getElementById('muted-section-toggle');
+      if (mutedList && mutedToggleEl) {
+        if (nowMuted) {
+          mutedList.appendChild(row);
+          mutedList.classList.remove('hidden');
+          mutedToggleEl.classList.remove('hidden');
+        } else {
+          mutedToggleEl.before(row);
+          if (!mutedList.querySelector('.forum-channel')) {
+            mutedList.classList.add('hidden');
+            mutedToggleEl.classList.add('hidden');
+          }
+        }
+      }
+      updateMutedTotalBadge();
     }
     document
       .querySelectorAll(`.forum-channel-mute[data-channel-id="${channelId}"], .forum-channel-mute-head[data-channel-id="${channelId}"]`)
@@ -806,6 +878,19 @@
       toggleChannelMute(parseInt(btn.dataset.channelId, 10));
     });
   });
+
+  // "Stummgeschaltete"-Dropdown: Block ein-/ausklappen (Chevron dreht sich).
+  const mutedSectionToggle = document.getElementById('muted-section-toggle');
+  if (mutedSectionToggle) {
+    mutedSectionToggle.addEventListener('click', () => {
+      const open = mutedSectionToggle.dataset.open === '1';
+      mutedSectionToggle.dataset.open = open ? '0' : '1';
+      const list = document.getElementById('muted-section-list');
+      const chevron = document.getElementById('muted-section-chevron');
+      if (list) list.classList.toggle('hidden', open);
+      if (chevron) chevron.classList.toggle('rotate-90', !open);
+    });
+  }
 
   // ─── Initial-Render ──────────────────────────────────────────
   if (activeChannelId != null) {
