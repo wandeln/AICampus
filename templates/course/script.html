@@ -87,7 +87,8 @@
           title="Frage zum Skript stellen">?</button>
 
   <!-- Fragen-Dialog: eigene + alle Fragen, Composer mit Auswahl-Bezug, Markierungs-Modus -->
-  <div id="sq-dialog" class="hidden fixed bottom-24 right-6 z-40 w-[440px] max-w-[calc(100vw-2rem)] h-[70vh] max-h-[640px] bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-clip">
+  <!-- bottom-28 = über dem "?"-FAB (bottom-10 + 56px) mit ~16px Abstand -->
+  <div id="sq-dialog" class="hidden fixed bottom-28 right-6 z-40 w-[440px] max-w-[calc(100vw-2rem)] h-[70vh] max-h-[640px] bg-white rounded-2xl shadow-2xl border border-gray-200 flex flex-col overflow-clip">
     <div class="flex items-center gap-2 px-4 py-2.5 border-b border-gray-100 bg-gray-50">
       <label class="flex items-center gap-1.5 cursor-pointer select-none shrink-0" title="Fragen im Skript markieren – ob eigene oder alle hängt von der Registerkarte ab">
         <span class="text-xs text-gray-600">Markierungen</span>
