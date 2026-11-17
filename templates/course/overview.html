@@ -63,7 +63,7 @@
   <!-- Overview Table -->
   <div id="table-container" class="table-container overflow-x-auto rounded-lg border border-gray-200">
     <table class="min-w-[100%] border-collapse" id="overview-table">
-      <thead id="table-header">
+      <thead id="table-header" class="relative z-20 bg-gray-100" style="will-change: transform">
         <!-- Wird dynamisch per JS gefüllt -->
       </thead>
       <tbody id="table-body">
@@ -157,6 +157,26 @@
   function mean(arr) {
     return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
   }
+
+  // ─── Sticky Kopfzeile ───────────────────────────────────────
+  // CSS-sticky geht hier nicht: overflow-x:auto am Container macht ihn zur
+  // Scrollfläche, dann klebt der Kopf nicht am Viewport. Stattdessen wird
+  // der Kopf per translateY unter die Tab-Leiste verschoben, solange die
+  // Tabelle hochgescrollt ist (begrenzt auf die Tabellenhöhe).
+  const tableHead = document.getElementById('table-header');
+  function stickyHeader() {
+    const table = document.getElementById('overview-table');
+    const bar = document.getElementById('course-tab-bar');
+    const barBottom = bar ? bar.getBoundingClientRect().bottom : 0;
+    const shift = Math.min(
+      Math.max(0, barBottom - table.getBoundingClientRect().top),
+      table.offsetHeight - tableHead.offsetHeight
+    );
+    tableHead.style.transform = shift > 0 ? 'translateY(' + shift + 'px)' : '';
+  }
+  window.addEventListener('scroll', stickyHeader, { passive: true });
+  window.addEventListener('resize', stickyHeader);
+  new ResizeObserver(stickyHeader).observe(document.getElementById('overview-table'));
 
   // ─── Load Overview Data ─────────────────────────────────────
   // Immer Volldaten (alle Studenten x alle Aufgaben); die Filter laufen
