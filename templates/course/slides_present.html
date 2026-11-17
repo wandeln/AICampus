@@ -847,7 +847,12 @@ async function aicampusDoMount() {
 
   // Auto-Fit: Folienkörper (alles nach der Überschrift) auf die Folie
   // skalieren — synchron, vor dem ersten Render (s. fitSlides in slides.js).
-  fitSlides(slidesEl, SLIDE_W, SLIDE_H);
+  // NUR PRESENT: im Print sind die Metriken (Code ohne Max-Höhe, etc.) erst
+  // bekannt, wenn Reveal html.print-pdf gesetzt hat — der Screen-Fit wäre
+  // reine Verworfen-Arbeit. Der Print wird bei Class-Set gefitet (doPrintFit).
+  if (!/print-pdf/.test(window.location.search)) {
+    fitSlides(slidesEl, SLIDE_W, SLIDE_H);
+  }
 
   // PDF-Export: die print-pdf-CSS-Regeln (u. a. Code-Blöcke ohne Max-Höhe)
   // ändern die Inhaltshöhen → sobald Reveal html.print-pdf setzt, ALLE
@@ -1001,7 +1006,11 @@ async function aicampusDoMount() {
           }, 100);
         });
       }
-      if (_sec) fitSlideSection(_sec, SLIDE_W, SLIDE_H);
+      if (_sec) {
+        // Applet-Höhen sind neu → Fit-Cache der Startfolie ist veraltet.
+        aicampusInvalidateSlideFit(_sec);
+        fitSlideSection(_sec, SLIDE_W, SLIDE_H);
+      }
     } catch (e) { /* Applet-Problem darf den Mount nicht brechen */ }
     _root.style.visibility = "";
     document.getElementById("present-loading")?.remove();
@@ -1114,9 +1123,31 @@ async function aicampusDoMount() {
         s.style.left = Math.round((pageW - SLIDE_W) / 2) + "px";
       });
     };
-    let printed = false;
+    // Applet-Höhen abwarten: die Applets (eigene /media/-HTML) melden ihre
+    // Höhe erst ~1–4 s nach ihrem eigenen Load, und der Renderer setzt sie
+    // erst nach der Stabilisierungsphase (4× Heartbeat) an. Ohne Warten
+    // würde der PDF-Export die Default-Höhe erfassen (in Present korrekt,
+    // im PDF "falsch" klein/groß). Das Deck ist bis hierher verdeckt → die
+    // Wartezeit ist unsichtbar. Cap: hängende Applets dürfen den Export
+    // nicht blockieren (10 s > Stabilisierungs-Caps der Applets).
+    const waitAppletHeights = () => new Promise((resolve) => {
+      const own = [...document.querySelectorAll("iframe.aicampus-applet")]
+        .filter((f) => f.src.startsWith(location.origin + "/media/"));
+      if (!own.length) return resolve();
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        if (own.every((f) => f.__appletHApplied) || Date.now() - t0 > 10000) {
+          clearInterval(iv);
+          resolve();
+        }
+      }, 100);
+    });
+    let printStarted = false, printed = false;
     const doPrint = () => {
-      if (!printed) {
+      if (printStarted) return;
+      printStarted = true;
+      waitAppletHeights().then(() => {
+        if (printed) return;
         printed = true;
         fixPdfLayout();
         // Safety-Net: finales Refit mit den JETZT (nach dem Font-/Bild-Wait
@@ -1129,7 +1160,7 @@ async function aicampusDoMount() {
         document.getElementById("reveal-root").style.visibility = "";
         document.getElementById("present-loading")?.remove();
         window.print();
-      }
+      });
     };
     reveal.on("pdf-ready", doPrint);
     setTimeout(doPrint, 800); // Fallback, falls das Event nicht ankommt

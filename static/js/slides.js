@@ -34,8 +34,11 @@
  * - fitSlides(slidesEl, W, H) / fitSlideSection / aicampusRefitSlideOf →
  *                            Auto-Fit: Folienkörper (alles nach der ersten
  *                            Überschrift) wird per --slides-body-scale auf
- *                            die Folie herunterskaliert (Details: Kommentar
- *                            im Hauptteil).
+ *                            die Folie herunterskaliert. Pro Folie ein
+ *                            Fit-Cache (Geometrie + CSS-Modus + Font-Epoche)
+ *                            → gleichbleibende Folien kosten bei Refit-
+ *                            Pässen 0 bzw. 1 Layout (Details: Kommentar im
+ *                            Hauptteil).
  * - buildSlideSection(slide, footerText, slidePos) → <section> für Reveal
  *                            (Inhalt + Sprechernotiz als <aside class="notes");
  *                            slidePos = { deckId, h } (Folien-Block-Index) →
@@ -436,10 +439,27 @@ async function renderSlideInto(slide, container, slidePos) {
 // brauchen deutlich kleinere Skalen, um überhaupt zu passen — Letztausgang,
 // bevor der Inhalt über die Folie ragt.
 const SLIDE_FIT_MIN = 0.45;
-// Bisektions-Schritte zwischen „zu groß" und „passt" (~1% Skala-Genauigkeit).
-// Rechenleistung vernachlässigbar: jeder Schritt = 1 gezwungenes Layout einer
-// 960×540-Box, der ganze Loop ist synchron (kein Paint dazwischen).
-const SLIDE_FIT_BISECT = 6;
+// Bisektions-Schritte zwischen „zu groß" und „passt". Das Bracket kommt
+// aus der 2-Punkte-Schätzung (deutlich enger als die alte Grobsuche ab 1.0)
+// → 4 Schritte reichen für ~1–2% Skala-Genauigkeit. Jeder Schritt = 1
+// gezwungenes Layout einer 960×540-Box.
+const SLIDE_FIT_BISECT = 4;
+// Zweiter Messpunkt der 2-Punkte-Höhenschätzung (s. fitSlideSection).
+const SLIDE_FIT_S2 = 0.6;
+
+// Fit-Epochen: ein Font-Load-Batch (loadingdone) ändert die Glyphen-Metriken
+// → alle gemessenen Inhaltshöhen sind potenziell veraltet. Der Fit-Cache
+// (pro Section-Element, s. u.) ist u. a. auf diese Epoche keyen; Image-Load
+// und Applet-Höhen invalidieren dagegen nur die betroffene Folie.
+let slideFitFontEpoch = 0;
+
+/** Fit-Cache einer Folie invalidieren — bei asynchronen Inhalts-/Höhen-
+ *  änderungen, die der Cache nicht kennt (Image-Load, Applet-Höhen-
+ *  Message). Das nächste fitSlideSection macht dann einen vollen Fit. */
+function aicampusInvalidateSlideFit(el) {
+  const section = el && el.closest ? el.closest("section") : null;
+  if (section) delete section.__aicampusFit;
+}
 
 function _slideFitAvailable(section, title) {
   const cs = getComputedStyle(section);
@@ -471,6 +491,11 @@ function _slideFitAvailable(section, title) {
 function _shrinkWideCodeIn(section) {
   let shrank = false;
   section.querySelectorAll("pre").forEach((pre) => {
+    // Immer vom URSPRÜNGLICHEN CSS-Font neu berechnen (idempotent): ein
+    // vorheriger Shrink (ggf. mit Fallback-Font, bevor der KaTeX-Webfont im
+    // Layout aktiv war — die Fallback-Glyphen sind ~2× breiter) wäre sonst
+    // eine Einweg-Entscheidung, die den Code im Endfont zu klein lässt.
+    pre.style.removeProperty("font-size");
     const code = pre.querySelector("code");
     const el = code && getComputedStyle(code).display === "block" ? code : pre;
     if (el.clientWidth <= 0 || el.scrollWidth <= el.clientWidth + 1) return;
@@ -481,14 +506,48 @@ function _shrinkWideCodeIn(section) {
   return shrank;
 }
 
+/** Gibt es in der Folie Code, dessen längste Zeile breiter als die Box ist?
+ *  (Billige X-Check für den Fit-Cache-Fast-Path — pro <pre> ein gezwungenes
+ *  Layout, nur Folien mit Code sind betroffen.) */
+function _hasWideCodeIn(section) {
+  for (const pre of section.querySelectorAll("pre")) {
+    const code = pre.querySelector("code");
+    const el = code && getComputedStyle(code).display === "block" ? code : pre;
+    if (el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1) return true;
+  }
+  return false;
+}
+
 /** Auto-Fit für EINE Folie: --slides-body-scale so setzen, dass der
  *  Folienkörper (inkl. aller versteckter Fragments — die bleiben im
  *  Layout) in den Folienraum unterhalb des Titels passt. Synchron.
- *  Pro Runde: überbreite Code-Boxen shrinken, dann Y-Bisektion — der
- *  Shrink macht den Körper kürzer (die Skala darf wachsen) und ein
+ *
+ *  Fit-Cache (section.__aicampusFit): der Fit ist teuer (mehrere
+ *  erzwungene Layouts), und das Mount-Prozedere fitet ein Deck mehrfach
+ *  (Present: initial + nach Font-Batches; Print: bei Class-Set +
+ *  doPrint). Solange sich nichts geändert hat — Geometrie (W/H UND avail:
+ *  im Print wandern die Sections vor setupPDF noch in die .pdf-page-Box,
+ *  deren Padding avail ändert → Cache-Hit wäre eine zu große Skala),
+ *  CSS-Modus (Print-CSS ändert alle Code-Höhen) und Font-Epoche — ist das
+ *  Ergebnis gültig → Cache-Hit = 0 Layouts. Nur Font-Batches (Epoche-Bump)
+ *  erfordern mehr als nichts: eine einzelne Messung bei der alten Skala —
+ *  passt sie noch (und kein Code wurde durch neue Fonts breiter) → Skala
+ *  behalten (font-swap verschiebt Höhen nur um paar px; re-bisektieren
+ *  wäre sichtbar nichts wert). Alles andere = voller Fit.
+ *
+ *  Voller Fit, pro Runde: überbreite Code-Boxen shrinken (immer NEU vom
+ *  ursprünglichen CSS-Font — idempotent, s. _shrinkWideCodeIn), dann Y-Fit
+ *  — der Shrink macht den Körper kürzer (die Skala darf wachsen) und eine
  *  wachsende Skala kann bei em-Code neuen Breiten-Überlauf erzeugen
- *  (nächste Runde fängt ihn). Max. 3 Runden; ohne Shrink bricht die
- *  erste Bisektion ab. */
+ *  (nächste Runde fängt ihn). Max. 3 Runden.
+ *
+ *  Y-Fit: 2-Punkte-Linien-Schätzung (Höhen bei Skala 1 und 0.6) liefert
+ *  ein enges Bracket um das Optimum — enger als die alte ×0.8-Grobsuche
+ *  ab 1.0, die auf dichten Folien 4+ Messungen brauchte. Die Höhe ist
+ *  nur durch Text-Umbruch leicht superlinear → die Schätzung ist
+ *  konservativ (liegt unter dem Optimum); die Bisektion im Bracket findet
+ *  das echte Maximum. Extrem dichte Folien (selbst 0.6 passt nicht)
+ *  fallen auf die alte Grobsuche ab. */
 function fitSlideSection(section, W, H) {
   const mp = section.querySelector(":scope > .markdown-preview");
   const body = mp && mp.querySelector(":scope > .aicampus-slide-body");
@@ -512,6 +571,7 @@ function fitSlideSection(section, W, H) {
     Math.abs(section.clientHeight - H) <= 1 &&
     Math.abs(section.clientWidth - W) <= 1;
   const setImp = (p, v) => section.style.setProperty(p, v, "important");
+  const mode = document.documentElement.classList.contains("print-pdf") ? 1 : 0;
   if (!inPlace) {
     setImp("display", "block");
     setImp("visibility", "hidden");
@@ -520,6 +580,27 @@ function fitSlideSection(section, W, H) {
     section.style.setProperty("top", "0");
     setImp("width", W + "px");
     setImp("height", H + "px");
+    // PRINT: bis setupPDF die Section in die .pdf-page-Box verschoben hat
+    // (2 Frames nach Class-Set) matchen die Regeln „.pdf-page > section"
+    // (Padding, box-sizing, text-align) und die layout-center-Flex-Regel
+    // NICHT → finale Geometrie hier per Inline-Styles erzwingen (Restore
+    // läuft unten über prevStyle). Sonst läuft der Fit auf falscher
+    // avail/Breite: der doPrint-Pass müsste alles neu fiten, und Applets
+    // melden für die falsche Boxbreite eine zu kleine Höhe.
+    const parent = section.parentElement;
+    if (mode === 1 && !(parent && parent.classList.contains("pdf-page"))) {
+      setImp("box-sizing", "border-box");
+      setImp("padding", "calc(1.5em * var(--slides-padding-scale, 1)) calc(2.5em * var(--slides-padding-scale, 1)) calc(2.4em * var(--slides-padding-scale, 1))");
+      if (section.classList.contains("layout-center")) {
+        setImp("display", "flex");
+        setImp("flex-direction", "column");
+        setImp("justify-content", "center");
+        setImp("align-items", "center");
+        setImp("text-align", "center");
+      } else {
+        setImp("text-align", "left");
+      }
+    }
   }
   const avail = _slideFitAvailable(section, title);
   let best = null;
@@ -536,35 +617,70 @@ function fitSlideSection(section, W, H) {
       section.style.setProperty("--slides-body-scale", String(sc));
       return body.scrollHeight <= avail + 0.5; // +0.5px: Subpixel-Rundung
     };
+    const cached = section.__aicampusFit;
+    // Cache-Hit: nichts geändert (inkl. avail — s. u.) → gültig, 0 Layouts.
+    if (cached && cached.mode === mode && cached.w === W && cached.h === H &&
+        cached.avail === Math.round(avail) && cached.epoch === slideFitFontEpoch) {
+      return;
+    }
+    // Nur die Font-Epoche ist neu (gleiche Geometrie/Modus): eine Messung
+    // bei der alten Skala genügt — noch passt (und kein überbreiter Code,
+    // und kein bereits geshrinkter Code) → behalten. (Verändertes avail ist
+    // hier automatisch abgedeckt: fits() misst gegen die AKTUELLE avail.)
+    // Geschrunkener Code (Inline-Font aus einem früheren Shrink) zählt NICHT:
+    // seine px-Größe gilt für den Font, der beim damaligen Shrink lag — neue
+    // Fonts → Shrink muss neu berechnet werden (voller Fit).
+    if (cached && cached.mode === mode && cached.w === W && cached.h === H &&
+        fits(cached.scale) && !_hasWideCodeIn(section) &&
+        ![...section.querySelectorAll("pre")].some(p => p.style.getPropertyValue("font-size") !== "")) {
+      section.__aicampusFit = { mode, w: W, h: H, avail: Math.round(avail), epoch: slideFitFontEpoch, scale: cached.scale };
+      return;
+    }
     for (let round = 0; round < 3; round++) {
       const shrank = _shrinkWideCodeIn(section);
-      if (fits(1)) {
+      const h1 = (section.style.setProperty("--slides-body-scale", "1"), body.scrollHeight);
+      if (h1 <= avail + 0.5) {
         best = 1;
       } else {
-        // 1 passt nicht. Grobsuche nach einer passenden Obergrenze (×0.8-
-        // Schritte; lo = größt bekannte zu-große Skala). Kein lineares
-        // s·avail/h: die Zeilen-Umbruch-Neupackung macht die Höhe
-        // SUPERLINEAR in der Skala → die lineare Korrektur landete deutlich
-        // unter dem Optimum (Text wurde unnötig klein).
-        let lo = 1;
-        let hi = null;
-        while (lo > SLIDE_FIT_MIN) {
-          const sc = Math.max(SLIDE_FIT_MIN, lo * 0.8);
-          if (fits(sc)) { hi = sc; break; }
-          lo = sc;
-        }
-        if (hi !== null) {
-          // Bisektion: die Höhe ist monoton steigend in der Skala
-          // (kleiner → kleiner) → „passt" ist ein monotones Prädikat →
-          // konvergiert gegen die größte passende Skala (lo > hi immer,
-          // dazwischen liegt der Umbruch).
-          for (let i = 0; i < SLIDE_FIT_BISECT && lo - hi > 0.002; i++) {
+        section.style.setProperty("--slides-body-scale", String(SLIDE_FIT_S2));
+        const h2 = body.scrollHeight;
+        if (h2 <= avail + 0.5) {
+          // Skala 1 zu groß, S2 passt: 2-Punkte-Schätzung der Inhaltshöhe
+          // (gerade Linie durch (1, h1) und (S2, h2)) → s0, dann enges
+          // Bracket: passt s0 → Optimum in [s0, 1), sonst in (S2, s0].
+          const slope = (h1 - h2) / (1 - SLIDE_FIT_S2);
+          const s0 = slope < 0.5
+            ? SLIDE_FIT_S2
+            : Math.min(0.999, Math.max(SLIDE_FIT_MIN, SLIDE_FIT_S2 + (avail - h2) / slope));
+          let lo, hi;
+          if (fits(s0)) { lo = 1; hi = s0; } else { lo = s0; hi = SLIDE_FIT_S2; }
+          // Bisektion: die Höhe ist monoton steigend in der Skala →
+          // „passt" ist monoton → konvergiert gegen die größte passende
+          // Skala (lo = zu groß, hi = passt, immer lo > hi).
+          for (let i = 0; i < SLIDE_FIT_BISECT && lo - hi > 0.004; i++) {
             const mid = (lo + hi) / 2;
             if (fits(mid)) hi = mid; else lo = mid;
           }
           best = hi;
+        } else {
+          // Selbst S2 passt nicht (sehr hoher Inhalt, selten): Grobsuche
+          // ABWÄRTS ab S2 (×0.8; lo = größt bekannte zu-große Skala).
+          let lo = SLIDE_FIT_S2;
+          let hi = null;
+          while (lo > SLIDE_FIT_MIN) {
+            const sc = Math.max(SLIDE_FIT_MIN, lo * 0.8);
+            if (fits(sc)) { hi = sc; break; }
+            lo = sc;
+          }
+          if (hi !== null) {
+            for (let i = 0; i < SLIDE_FIT_BISECT && lo - hi > 0.002; i++) {
+              const mid = (lo + hi) / 2;
+              if (fits(mid)) hi = mid; else lo = mid;
+            }
+            best = hi;
+          }
+          s = SLIDE_FIT_MIN; // auch MIN zu groß → Letztausgang MIN
         }
-        s = SLIDE_FIT_MIN; // auch MIN zu groß → Letztausgang MIN
       }
       if (!shrank) break;
     }
@@ -579,6 +695,7 @@ function fitSlideSection(section, W, H) {
   if (section.style.getPropertyValue("--slides-body-scale") !== final) {
     section.style.setProperty("--slides-body-scale", final);
   }
+  section.__aicampusFit = { mode, w: W, h: H, avail: Math.round(avail), epoch: slideFitFontEpoch, scale: parseFloat(final) };
 }
 
 /** Macrotask-Yield: Event-Loop an Eingaben/Rendering abgeben — für
@@ -603,7 +720,8 @@ function fitSlides(slidesEl, W, H) {
 
 /** Folie, die `el` enthält, neu fiten — für asynchrone Höhenänderungen
  *  nach dem initialen Fit (Image-Load, Applet-Höhen-Message). W/H kommen
- *  aus dem dataset von fitSlides. */
+ *  aus dem dataset von fitSlides. Cache-Invalidierung davor: die Änderung
+ *  kennt der Fit-Cache nicht → voller Fit statt Cache-Hit. */
 function aicampusRefitSlideOf(el) {
   const section = el && el.closest ? el.closest("section") : null;
   const slidesEl = section ? section.closest(".slides") : null;
@@ -612,6 +730,7 @@ function aicampusRefitSlideOf(el) {
   const W = parseFloat(slidesEl.dataset.slideFitW);
   const H = parseFloat(slidesEl.dataset.slideFitH);
   if (!isFinite(W) || !isFinite(H)) return;
+  aicampusInvalidateSlideFit(section);
   fitSlideSection(section, W, H);
 }
 
@@ -626,13 +745,17 @@ document.addEventListener("load", (e) => {
 // Formel-Höhen (paar px) → ohne Refit passen dichte Folien danach nicht.
 // "loadingdone" feuert nach JEDEM Font-Load-Batch (fonts.ready wäre ein
 // One-Shot, der vor dem KaTeX-Rendering schon gefeuert haben kann).
+// Epoche bumpen: die Fit-Caches sind damit „nur Fonts veraltet" → jeder
+// Refit kostet eine einzige Messung bei der alten Skala (statt voller
+// Bisektion), es sei denn, die Folie passt nicht mehr / Code breiter.
 if (document.fonts && document.fonts.addEventListener) {
   document.fonts.addEventListener("loadingdone", () => {
-    // Chunked (Yield pro Folie): die Bisektion pro Folie ist ein gezwungenes
-    // Layout — synchron über ein großes Deck wäre das eine mehrsekündige
-    // Freeze-Strecke (v. a. beim ersten Render, wenn die KaTeX-Fonts hier
-    // nachladen). fitPending-Marken auflösen: diese Folien sind damit
-    // gefitet und brauchen den Lazy-/Background-Fit nicht mehr.
+    slideFitFontEpoch++;
+    // Chunked (Yield pro Folie): jeder Refit ist ein gezwungenes Layout —
+    // synchron über ein großes Deck wäre das eine Freeze-Strecke (v. a.
+    // beim ersten Render, wenn die KaTeX-Fonts hier nachladen).
+    // fitPending-Marken auflösen: diese Folien sind damit gefitet und
+    // brauchen den Lazy-/Background-Fit nicht mehr.
     (async () => {
       for (const slidesEl of document.querySelectorAll(".slides[data-slide-fit-w]")) {
         const W = parseFloat(slidesEl.dataset.slideFitW);

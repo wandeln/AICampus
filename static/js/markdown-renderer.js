@@ -817,6 +817,7 @@ window.addEventListener('message', (event) => {
       // nicht die (neutralisierte) Fit-Messung.
       const fig = f.closest("figure");
       if (inSlides && d.fillsBox && !maxH && fig) {
+        f.__appletHApplied = true; // Print: doPrint wartet darauf
         fig.classList.add("aicampus-applet-fill");
         f.style.height = "";
         const zwrap = f.parentElement && f.parentElement.classList.contains("aicampus-applet-zoom")
@@ -848,6 +849,7 @@ window.addEventListener('message', (event) => {
       f.style.height = inSlides
         ? `calc(${h}px * var(--slides-body-scale, 1))`
         : `${h}px`;
+      f.__appletHApplied = true; // Print: doPrint wartet darauf
       // Gezoomte Applets stehen in einem .aicampus-applet-zoom-Wrapper, dessen
       // Höhe der sichtbaren (geskalten) Höhe folgen muss (transform ändert
       // nicht die Iframe-Layout-Box). Ebenfalls variablebasiert: würde hier
