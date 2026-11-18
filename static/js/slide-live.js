@@ -223,21 +223,24 @@
   }
 
   // Plugin-Hooks (s. plugin.js, AICAMPUS PATCH „Live-Notizen“)
+  // Whiteboard (mode 1) ist global: Pseudo-Folie WB, f = Seitennummer (event.board)
+  const WB = "_wb";
+  L.WB = WB;
   L.onEvent = (mode, idx, ev) => {
-    const uid = L.uidFor(idx.h, idx.v);
+    const uid = mode === 1 ? WB : L.uidFor(idx.h, idx.v);
     if (!uid) return;
-    const f = idx.f == null ? -1 : idx.f;
+    const f = mode === 1 ? (ev.board || 0) : (idx.f == null ? -1 : idx.f);
     const key = rowKey(uid, mode, f);
     let p = pending.get(key);
     if (!p) pending.set(key, (p = { uid, mode, f, events: [] }));
     p.events.push(ev);
     if (!pendTimer) pendTimer = setTimeout(flushPending, 120);
   };
-  L.onRemove = (mode, idx, sids) => {
-    const uid = L.uidFor(idx.h, idx.v);
+  L.onRemove = (mode, idx, sids) => {   // mode 1: idx.f = Seitennummer
+    const uid = mode === 1 ? WB : L.uidFor(idx.h, idx.v);
     if (!uid) return;
     flushPending();
-    const f = idx.f == null ? -1 : idx.f;
+    const f = mode === 1 ? (idx.f || 0) : (idx.f == null ? -1 : idx.f);
     sendOp({ kind: "remove", slide: uid, mode, f, sids }, rowKey(uid, mode, f));
   };
   L.onResetAll = () => {
@@ -324,6 +327,14 @@
       revs.clear();
       for (const row of d.rows) {
         revs.set(rowKey(row.uid, row.mode, row.f), row.rev);
+        if (row.uid === WB) {            // globales Whiteboard: alle Seiten in EINEN Eintrag
+          if (!row.events.length) continue;
+          let d = storage[1].data.find((x) => x.slide.h === 0 && x.slide.v === 0);
+          if (!d) storage[1].data.push((d = { slide: { h: 0, v: 0 }, events: [], duration: 0 }));
+          for (const e of row.events) d.events.push(Object.assign({ board: row.f }, e, { time: d.events.length }));
+          d.duration = d.events.length;
+          continue;
+        }
         const hv = L.hvFor(row.uid);
         if (!hv || !row.events.length) continue;
         const slide = { h: hv.h, v: hv.v };

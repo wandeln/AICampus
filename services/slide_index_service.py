@@ -37,6 +37,7 @@ from database.models import (
 from services.slides_service import _DIRECTIVE, _split_slides, _split_vertical
 
 ORPHAN_DAYS = 30
+WB_UID = "_wb"  # Pseudo-Folie des globalen Whiteboards: mode 1, f = Seitennummer (0-basiert)
 MAX_EVENTS_PER_OP = 600
 MAX_EVENTS_PER_ROW = 20000
 EVENT_TYPES = {"draw", "erase", "strokeend", "clear"}
@@ -222,8 +223,8 @@ def row_dict(r: SlideAnnotation) -> dict:
 
 
 def load_all(session: Session, deck: CourseMaterial) -> list[dict]:
-    """Alle Zeilen der aktuell vorhandenen Folien (Orphans ausgenommen)."""
-    uids = get_slide_uids(session, deck)
+    """Alle Zeilen der aktuell vorhandenen Folien + des globalen Whiteboards (Orphans ausgenommen)."""
+    uids = get_slide_uids(session, deck) + [WB_UID]
     rows = session.exec(select(SlideAnnotation).where(
         SlideAnnotation.deck_id == deck.id, SlideAnnotation.slide_uid.in_(uids))).all()  # type: ignore[attr-defined]
     return [row_dict(r) for r in rows]

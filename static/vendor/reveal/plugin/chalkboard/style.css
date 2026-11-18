@@ -45,6 +45,13 @@ div.boardhandle > ul > li {
   margin: 10px;
 }
 
+/* AICAMPUS PATCH: Whiteboard-Seitennummer zwischen den Pfeilen */
+div.boardhandle li.boardnum {
+  color: #fff;
+  font-size: 16px;
+  text-align: center;
+}
+
 /* AICAMPUS PATCH: fixe Spaltenbreite + linke Ausrichtung (Zoom-Anker links)
    → Farbfeld/Schwamm sitzen am linken Rand und wachsen aktiv nach rechts.
    6px horizontaler Margin (statt 10px) → schmaleres Panel, konstante Breite. */

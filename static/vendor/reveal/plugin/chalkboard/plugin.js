@@ -425,6 +425,7 @@ const initChalkboard = function ( Reveal ) {
 	};
 
 	function switchBoard( boardIdx ) {
+		boardIdx = Math.max( 0, Math.min( 999, boardIdx ) ); // AICAMPUS PATCH: Seiten 1…1000
 		selectBoard( boardIdx, true );
 		// broadcast
 		var message = new CustomEvent( messageType );
@@ -511,7 +512,7 @@ const initChalkboard = function ( Reveal ) {
 				var handle = document.createElement( 'div' );
 				handle.classList.add( 'boardhandle' );
 				// AICAMPUS PATCH: Unicode-Pfeile statt Font Awesome
-				handle.innerHTML = '<ul><li><a id="previousboard" href="#" title="Previous board">&#8593;</a></li><li><a id="nextboard" href="#" title="Next board">&#8595;</a></li></ul>';
+				handle.innerHTML = '<ul><li><a id="previousboard" href="#" title="Vorherige Seite">&#8593;</a></li><li class="boardnum" title="Whiteboard-Seite">' + ( ( board || 0 ) + 1 ) + '</li><li><a id="nextboard" href="#" title="Nächste Seite">&#8595;</a></li></ul>';
 				handle.querySelector( '#previousboard' ).addEventListener( 'click', function ( e ) {
 					e.preventDefault();
 					switchBoard( board - 1 );
@@ -752,7 +753,10 @@ const initChalkboard = function ( Reveal ) {
 	 */
 	function getSlideData( indices, id ) {
 		if ( id == undefined ) id = mode;
-		if ( !indices ) indices = slideIndices;
+		// AICAMPUS PATCH: das Whiteboard (id 1) ist global — ein Datensatz
+		// für alle Folien (Seiten = event.board).
+		if ( id == 1 ) indices = { h: 0, v: 0 };
+		else if ( !indices ) indices = slideIndices;
 		var data;
 		for ( var i = 0; i < storage[ id ].data.length; i++ ) {
 			if ( storage[ id ].data[ i ].slide.h === indices.h && storage[ id ].data[ i ].slide.v === indices.v && storage[ id ].data[ i ].slide.f === indices.f ) {
@@ -779,8 +783,9 @@ const initChalkboard = function ( Reveal ) {
 		if ( !indices ) indices = slideIndices;
 		var duration = 0;
 		for ( var id = 0; id < 2; id++ ) {
+			var ind = id == 1 ? { h: 0, v: 0 } : indices; // Whiteboard global
 			for ( var i = 0; i < storage[ id ].data.length; i++ ) {
-				if ( storage[ id ].data[ i ].slide.h === indices.h && storage[ id ].data[ i ].slide.v === indices.v && storage[ id ].data[ i ].slide.f === indices.f ) {
+				if ( storage[ id ].data[ i ].slide.h === ind.h && storage[ id ].data[ i ].slide.v === ind.v && storage[ id ].data[ i ].slide.f === ind.f ) {
 					duration = Math.max( duration, storage[ id ].data[ i ].duration );
 					break;
 				}
@@ -1180,12 +1185,19 @@ const initChalkboard = function ( Reveal ) {
 
 		board = boardIdx;
 		redrawChalkboard( boardIdx );
-		if ( record ) {
-			recordEvent( { type: 'selectboard' } );
-		}
+		// AICAMPUS PATCH: die aktuelle Whiteboard-Seite ist Sitzungszustand
+		// (global über alle Folien) → kein selectboard-Event mehr.
+	}
+
+	// AICAMPUS PATCH: Seitennummer im Board-Handle
+	function updateBoardNum() {
+		document.querySelectorAll( '.boardhandle .boardnum' ).forEach( function ( el ) {
+			el.textContent = board + 1;
+		} );
 	}
 
 	function redrawChalkboard( boardIdx ) {
+		updateBoardNum();
 		clearCanvas( 1 );
 		var slideData = getSlideData( slideIndices, 1 );
 		var index = 0;
@@ -1377,10 +1389,9 @@ const initChalkboard = function ( Reveal ) {
 			if ( d > timestamp ) timestamp = d;
 		}
 		slideStart = Date.now() - timestamp;
-		var keepBoard = ( finalMode === 1 ) ? board : 0; // AICAMPUS PATCH: Board über Replay behalten
 		closeChalkboard();
 		mode = 0;
-		board = 0;
+		// AICAMPUS PATCH: aktuelle Whiteboard-Seite bleibt über Replay/Folienwechsel
 		for ( var id = 0; id < 2; id++ ) {
 			clearCanvas( id );
 			var slideData = getSlideData( slideIndices, id );
@@ -1399,10 +1410,6 @@ const initChalkboard = function ( Reveal ) {
 //console.log("Mode: " + finalMode + "/" + mode );
 		if ( finalMode != undefined ) {
 			mode = finalMode;
-		}
-		if ( keepBoard ) {
-			board = keepBoard;
-			redrawChalkboard( board );
 		}
 		if ( mode == 1 ) showChalkboard();
 //console.log("playback (ok)");
@@ -1447,9 +1454,6 @@ const initChalkboard = function ( Reveal ) {
 			break;
 		case 'clear':
 			clearCanvas( id );
-			break;
-		case 'selectboard':
-			selectBoard( event.board );
 			break;
 		case 'draw':
 			drawLine( id, event, timestamp );
@@ -1625,6 +1629,7 @@ const initChalkboard = function ( Reveal ) {
 	var redoStack = {};
 
 	function redoKey() {
+		if ( mode == 1 ) return "wb-" + board; // Whiteboard: je Seite
 		return slideIndices.h + "-" + slideIndices.v + "-" + slideIndices.f + "-" + mode;
 	}
 
@@ -1636,14 +1641,15 @@ const initChalkboard = function ( Reveal ) {
 		var slideData = getSlideData( undefined, mode );
 		var events = slideData.events;
 		var i = events.length - 1;
-		while ( i >= 0 && !mySid( events[ i ].sid ) ) i--;
+		// Whiteboard: nur Events der aktuellen Seite (Undo bleibt auf der Seite)
+		while ( i >= 0 && !( mySid( events[ i ].sid ) && ( mode != 1 || ( events[ i ].board || 0 ) === board ) ) ) i--;
 		if ( i < 0 ) return;
 		var sid = events[ i ].sid;
 		var removed = events.filter( function ( e ) { return e.sid === sid; } );
 		slideData.events = events.filter( function ( e ) { return e.sid !== sid; } );
 		var stack = redoStack[ redoKey() ] || ( redoStack[ redoKey() ] = [] );
 		stack.push( removed );
-		window.aicampusLive.onRemove( mode, slideIndices, [ sid ] );
+		window.aicampusLive.onRemove( mode, mode == 1 ? { h: 0, v: 0, f: removed[ 0 ].board || 0 } : slideIndices, [ sid ] );
 		replayCurrent();
 	}
 
@@ -1971,7 +1977,6 @@ const initChalkboard = function ( Reveal ) {
 			slideStart = Date.now() - getSlideDuration();
 			slideIndices = Reveal.getIndices();
 			closeChalkboard();
-			board = 0;
 			clearCanvas( 0 );
 			clearCanvas( 1 );
 			if ( !playback ) {
@@ -1994,7 +1999,6 @@ const initChalkboard = function ( Reveal ) {
 			slideStart = Date.now() - getSlideDuration();
 			slideIndices = Reveal.getIndices();
 			closeChalkboard();
-			board = 0;
 			clearCanvas( 0 );
 			clearCanvas( 1 );
 			if ( Reveal.isAutoSliding() ) {
@@ -2014,7 +2018,6 @@ const initChalkboard = function ( Reveal ) {
 			slideStart = Date.now() - getSlideDuration();
 			slideIndices = Reveal.getIndices();
 			closeChalkboard();
-			board = 0;
 			clearCanvas( 0 );
 			clearCanvas( 1 );
 			if ( Reveal.isAutoSliding() ) {
@@ -2257,7 +2260,8 @@ const initChalkboard = function ( Reveal ) {
 		}
 		var indices = { h: op.h, v: op.v, f: op.f };
 		var sd = getSlideData( indices, op.mode );
-		var current = slideIndices.h === op.h && slideIndices.v === op.v && slideIndices.f === op.f;
+		// Whiteboard (mode 1) ist global → betrifft immer die aktuelle Ansicht; op.f = Seite
+		var current = op.mode === 1 || ( slideIndices.h === op.h && slideIndices.v === op.v && slideIndices.f === op.f );
 		if ( op.kind === 'append' ) {
 			var t = sd.events.length ? sd.events[ sd.events.length - 1 ].time : 0;
 			op.events.forEach( function ( e ) {
@@ -2269,16 +2273,18 @@ const initChalkboard = function ( Reveal ) {
 			if ( current ) {
 				if ( op.events.some( function ( e ) { return e.type === 'clear'; } ) ) {
 					replayCurrent();
-				} else if ( mode == op.mode || op.mode == 0 ) {
+				} else {
 					op.events.forEach( function ( e ) {
-						if ( !( op.mode == 1 && ( mode != 1 || e.board !== board ) ) ) playEvent( op.mode, e, sd.duration );
+						if ( !( op.mode == 1 && ( e.board || 0 ) !== board ) ) playEvent( op.mode, e, sd.duration );
 					} );
 				}
 			}
 		} else if ( op.kind === 'replace' ) {
 			// kompletter Zeilen-Ersatz (Resync nach Gap/Reconnect)
-			sd.events = op.events.map( function ( e, i ) { e.time = i; return e; } );
-			sd.duration = sd.events.length;
+			var fresh = op.events.map( function ( e, i ) { e.time = i; return e; } );
+			// Whiteboard: nur die Seite op.f ersetzen, andere Seiten bleiben
+			sd.events = op.mode === 1 ? sd.events.filter( function ( e ) { return ( e.board || 0 ) !== op.f; } ).concat( fresh ) : fresh;
+			sd.duration = Math.max( sd.events.length, sd.duration );
 			if ( current ) replayCurrent();
 		} else if ( op.kind === 'remove' ) {
 			var gone = {};
@@ -2294,6 +2300,7 @@ const initChalkboard = function ( Reveal ) {
 	this.getBoard = function () { return board; };
 	this.toggleNotesCanvas = toggleNotesCanvas;
 	this.toggleChalkboard = toggleChalkboard;
+	this.switchBoard = switchBoard;   // AICAMPUS PATCH: Seite wechseln (Pfeiltasten)
 	this.colorIndex = colorIndex;
 	this.colorNext = colorNext;
 	this.colorPrev = colorPrev;

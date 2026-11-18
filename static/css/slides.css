@@ -1442,6 +1442,7 @@ html.print-pdf body.present-mode .present-shell .reveal {
 .reveal .slive-root { position: absolute; inset: 0; pointer-events: none; z-index: 24; }
 .reveal .slive-root canvas { position: absolute; left: 0; top: 0; }
 .reveal .slive-wb { position: absolute; inset: 0; z-index: 26; background-repeat: repeat; }
+.reveal .slive-wb .boardhandle { pointer-events: auto; }
 .reveal .slive-laser-box { position: absolute; inset: 0; pointer-events: none; z-index: 41; overflow: hidden; }
 .reveal .slive-trail { position: absolute; left: 0; top: 0; }
 .reveal .slive-laser {

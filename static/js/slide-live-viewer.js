@@ -27,7 +27,7 @@
   // Auge: dieselben Icons wie der Sichtbarkeits-Schalter (Kapitel/Folien/Aufgaben, script.html)
   const EYE = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
   const EYE_OFF = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
-  const BOARD = '<svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="9" rx="1"></rect><path d="M8 11.5v2.5M5 14h6"></path></svg>';
+  const BOARD = '<svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="9" rx="1"></rect><path d="M1.5 13.5h13"></path></svg>';
 
   /**
    * opts: { reveal, root (#reveal-root), tutor, deckId, assetBoard (Whiteboard-Textur-URL),
@@ -51,7 +51,7 @@
     let wbManual = false;           // Student hat „Whiteboard“ selbst geöffnet
     let followUid = null;           // User-ID des gefolgten Tutors
     let navLock = 0;                // programmatische Navigation läuft (kein Auto-Unfollow)
-    let stage = null, notes = null, wb = null, grid = null, laserBox = null;
+    let stage = null, notes = null, wb = null, wbNum = null, grid = null, laserBox = null;
     let nctx = null, wctx = null;
 
     // ── DOM ──────────────────────────────────────────────────────────
@@ -83,7 +83,11 @@
         render();
         if (visible) ensureLoaded();
       });
-      boardBtn.addEventListener("click", () => { wbManual = !wbManual; refreshUi(); render(); });
+      boardBtn.addEventListener("click", () => {
+        if (wbState().show) { wbManual = false; followUid = null; }  // zurück zu den Slides, Folgen beenden
+        else wbManual = true;
+        refreshUi(); render();
+      });
       ui.append(toggleBtn, boardBtn);
     }
     ui.appendChild(select);
@@ -103,7 +107,15 @@
       wbWrap.style.backgroundImage = `url("${opts.assetBoard}")`;
       grid = document.createElement("canvas");
       wb = document.createElement("canvas");
-      wbWrap.append(grid, wb);
+      // Seiten-Leiste: identisches Markup + CSS wie beim Tutor (chalkboard/style.css, .boardhandle)
+      const wbNav = document.createElement("div");
+      wbNav.className = "boardhandle";
+      wbNav.innerHTML = '<ul><li><a href="#" title="Vorherige Seite">&#8593;</a></li><li class="boardnum" title="Whiteboard-Seite">1</li><li><a href="#" title="Nächste Seite">&#8595;</a></li></ul>';
+      const [up, down] = wbNav.querySelectorAll("a");
+      up.addEventListener("click", (e) => { e.preventDefault(); stepBoard(-1); });
+      down.addEventListener("click", (e) => { e.preventDefault(); stepBoard(1); });
+      wbNum = wbNav.querySelector(".boardnum");
+      wbWrap.append(grid, wb, wbNav);
       stage.append(notes, wbWrap);
       // vor den UI-Elementen einfügen (Overlay unter den Buttons)
       root.insertBefore(stage, ui);
@@ -187,15 +199,18 @@
       return { h: i.h || 0, v: i.v || 0, f: i.f == null ? -1 : i.f, uid: L.uidFor(i.h || 0, i.v || 0) };
     }
     const row = (uid, mode, f) => (cache.get(uid) || new Map()).get(mode + "|" + f);
+    // Whiteboard ist global (Pseudo-Folie L.WB, eine Zeile je Seite)
+    const wbRows = () => [...(cache.get(L.WB) || new Map()).entries()].filter(([k]) => k.startsWith("1|")).map(([, r]) => r);
+    const wbHasInk = () => wbRows().some((r) => r.events.length > 0);
 
-    // Whiteboard sichtbar? (Tutor-Presence auf dieser Folie/Fragment ODER manuell)
-    function wbState(p) {
-      const t = L.presence.find((e) => e.slide === p.uid && (e.f == null ? -1 : e.f) === p.f && e.mode === 1
-        && e.uid !== opts.selfUserId);
-      if (t) return { show: true, board: t.board };
-      const r = row(p.uid, 1, p.f);
-      if (wbManual && r) return { show: true, board: board };
-      return { show: false, board };
+    // Whiteboard sichtbar? Folgen: wie der gefolgte Tutor (im Whiteboard + dessen Seite).
+    // Sonst nur, wenn der Student es selbst per Button geöffnet hat.
+    function wbState() {
+      if (followUid != null) {
+        const t = L.presence.find((e) => e.uid === followUid);
+        return t && t.mode === 1 ? { show: true, board: t.board || 0 } : { show: false, board };
+      }
+      return wbManual && wbHasInk() ? { show: true, board } : { show: false, board };
     }
 
     function render() {
@@ -205,41 +220,70 @@
       notes.style.display = on ? "" : "none";
       nctx.clearRect(0, 0, G.w, G.h);
       wctx.clearRect(0, 0, G.w, G.h);
-      const ws_ = on ? wbState(p) : { show: false };
+      const ws_ = on ? wbState() : { show: false };
       stage._wb.style.display = ws_.show ? "" : "none";
       if (!on) return;
       const r0 = row(p.uid, 0, p.f);
       if (r0) for (const e of r0.events) { if (e.type === "clear") nctx.clearRect(0, 0, G.w, G.h); else drawEvent(nctx, 0, e, G); }
       if (ws_.show) {
         board = ws_.board;
-        const r1 = row(p.uid, 1, p.f);
+        wbNum.textContent = String(board + 1);
+        const r1 = row(L.WB, 1, board);
         if (r1) for (const e of r1.events) {
-          if ((e.board || 0) !== board) continue;
           if (e.type === "clear") wctx.clearRect(0, 0, G.w, G.h); else drawEvent(wctx, 1, e, G);
         }
       }
+    }
+
+    // Whiteboard-Seite wechseln (Pfeil-Buttons / ↑ ↓): nur bis zur letzten beschriebenen Seite;
+    // beendet das Folgen (Student bleibt im Whiteboard, auf eigener Seite)
+    function stepBoard(d) {
+      if (!wbState().show) return;
+      const pages = [...(cache.get(L.WB) || new Map()).entries()]
+        .filter(([k, r]) => k.startsWith("1|") && r.events.length).map(([k]) => Number(k.slice(2)));
+      const nb = board + d;
+      if (nb < 0 || nb > Math.max(0, board, ...pages)) return;
+      if (followUid != null) { followUid = null; wbManual = true; }
+      board = nb;
+      refreshUi();
+      render();
+    }
+    const onKey = (e) => {
+      if ((e.keyCode !== 38 && e.keyCode !== 40) || e.altKey || e.ctrlKey || e.metaKey
+        || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target?.tagName || "") || !visible || !L.shared || !wbState().show) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      stepBoard(e.keyCode === 40 ? 1 : -1);
+    };
+    if (!tutor) {
+      document.addEventListener("keydown", onKey, true);
+      offs.push(() => document.removeEventListener("keydown", onKey, true));
     }
 
     // ── Laden ────────────────────────────────────────────────────────
     async function ensureLoaded() {
       if (tutor || !visible || !L.shared) return;
       const p = pos();
-      if (!p.uid || cache.has(p.uid)) return;
-      L.beginLoad(p.uid);
+      if (!p.uid) return;
+      await Promise.all([p.uid, L.WB].map(loadUid));   // Folie + globales Whiteboard
+      refreshUi();
+      render();
+    }
+    async function loadUid(uid) {
+      if (cache.has(uid)) return;
+      L.beginLoad(uid);
       try {
-        const r = await fetch(`/api/courses/${opts.courseId}/slides/${opts.deckId}/annotations/slide?uid=${encodeURIComponent(p.uid)}`,
+        const r = await fetch(`/api/courses/${opts.courseId}/slides/${opts.deckId}/annotations/slide?uid=${encodeURIComponent(uid)}`,
           { credentials: "same-origin" });
         if (!r.ok) throw new Error(r.status);
         const d = await r.json();
         const m = new Map();
         for (const x of d.rows) m.set(x.mode + "|" + x.f, { rev: x.rev, events: x.events });
-        cache.set(p.uid, m);
-        L.markLoaded(p.uid, d.rows);
+        cache.set(uid, m);
+        L.markLoaded(uid, d.rows);
       } catch (e) {
-        L.endLoad(p.uid);
+        L.endLoad(uid);
       }
-      refreshUi();
-      render();
     }
 
     // ── UI-Zustand ───────────────────────────────────────────────────
@@ -253,10 +297,9 @@
         toggleBtn.innerHTML = visible ? EYE : EYE_OFF;
         toggleBtn.title = visible ? "Notizen des Dozenten ausblenden" : "Notizen des Dozenten einblenden";
         toggleBtn.classList.toggle("slive-off", !visible);
-        const p = pos();
-        const hasWb = visible && L.shared && p.uid && (row(p.uid, 1, p.f)?.events.length || 0) > 0;
-        boardBtn.style.display = hasWb ? "" : "none";
-        boardBtn.classList.toggle("slive-on", wbManual);
+        const wbOn = visible && L.shared && wbState().show;
+        boardBtn.style.display = visible && L.shared && (wbHasInk() || wbOn) ? "" : "none";
+        boardBtn.classList.toggle("slive-on", wbOn);
       }
       // Folgen-Dropdown: eine Zeile je Tutor (außer mir); Studierende nur wenn freigegeben
       const others = L.presence.filter((e) => e.uid !== opts.selfUserId);
@@ -289,6 +332,7 @@
     select.addEventListener("change", () => {
       followUid = select.value === "" ? null : Number(select.value);
       goToFollowed();
+      refreshUi(); render();   // auch ohne Navigation: Whiteboard-Zustand des Tutors übernehmen
     });
     const onNav = () => {
       if (followUid != null && !navLock) {
@@ -433,7 +477,8 @@
         const gone = m.events.some((e) => e.type === "clear");
         r.events.push(...m.events);
         const p = pos();
-        if (!gone && p.uid === m.slide && p.f === m.f && visible && L.shared && (m.mode === 0 || wbState(p).show)) {
+        const here = m.mode === 1 ? m.slide === L.WB : (p.uid === m.slide && p.f === m.f);
+        if (!gone && here && visible && L.shared && (m.mode === 0 || wbState().show)) {
           const G = geo();
           for (const e of m.events) {
             if (m.mode === 1 && (e.board || 0) !== board) continue;
