@@ -1460,6 +1460,7 @@ html.print-pdf body.present-mode .present-shell .reveal {
   border: 0; border-radius: 50%; background: transparent; color: #000; cursor: pointer; opacity: 0.55;
   transition: opacity 0.2s ease, background-color 0.2s ease;
 }
+.reveal .slive-btn:focus, .reveal .slive-btn:focus-visible { outline: none; }
 .reveal .slive-btn:hover { opacity: 1; background: rgba(0, 0, 0, 0.06); }
 .reveal .slive-btn.slive-off { opacity: 0.35; }
 .reveal .slive-btn.slive-on { opacity: 1; background: rgba(37, 99, 235, 0.15); color: #2563eb; }

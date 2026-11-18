@@ -91,6 +91,8 @@
       ui.append(toggleBtn, boardBtn);
     }
     ui.appendChild(select);
+    // Fokus nach Klick abgeben: kein Fokusrahmen, und Leertaste/Enter/Pfeile gehen nicht an den Button
+    ui.addEventListener("click", (e) => e.target.closest?.("button")?.blur());
 
     // Laser-Overlay (Tutor + Student): Punkte + Spur
     laserBox = document.createElement("div");
