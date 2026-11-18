@@ -127,7 +127,7 @@ const initChalkboard = function ( Reveal ) {
 			cursor: 'url(' + path + 'img/boardmarker-orange.png), auto'
 		},
 		{
-			color: 'rgba(150,0,20150,1)',
+			color: 'rgba(150,0,150,1)', // AICAMPUS PATCH: Tippfehler (20150) → gültige Farbe
 			cursor: 'url(' + path + 'img/boardmarker-purple.png), auto'
 		},
 		{
@@ -669,14 +669,37 @@ const initChalkboard = function ( Reveal ) {
 		if ( event.type === 'clear' && slideData.events.length && slideData.events[ slideData.events.length - 1 ].type === 'clear' ) {
 			return;
 		}
-		var i = slideData.events.length;
-		while ( i > 0 && event.time < slideData.events[ i - 1 ].time ) {
-			i--;
+		// AICAMPUS PATCH (Live-Notizen): immer hinten anhängen (der Server
+		// ordnet nach Ankunft; Zeitstempel Mehrerer Tutoren sind nicht
+		// vergleichbar) und Gruppen-ID `sid` vergeben (ein Stroke / eine
+		// Radierer-Sitzung / ein clear) — Basis für Undo je Autor.
+		if ( liveActive() && LIVE_TYPES[ event.type ] ) {
+			event.sid = ( event.type === 'draw' || event.type === 'erase' || event.type === 'strokeend' )
+				? ( strokeSid || ( strokeSid = newSid() ) ) : newSid();
 		}
-		slideData.events.splice( i, 0, event );
+		slideData.events.push( event );
 		slideData.duration = Math.max( slideData.duration, Date.now() - slideStart ) + 1;
+		if ( liveActive() && LIVE_TYPES[ event.type ] ) {
+			window.aicampusLive.onEvent( mode, slideIndices, event );
+		}
 
 		storageChanged();
+	}
+
+	// AICAMPUS PATCH (Live-Notizen): Hilfen. Nur draw/erase/strokeend/clear
+	// werden geteilt; open/close/selectboard bleiben persönlicher Zustand.
+	var LIVE_TYPES = { draw: 1, erase: 1, strokeend: 1, clear: 1 };
+	var strokeSid = null;
+	var replayTimeout = null;
+	var sidCounter = 0;
+	function liveActive() {
+		return !!( window.aicampusLive && window.aicampusLive.active );
+	}
+	function newSid() {
+		return window.aicampusLive.userKey + '-' + Date.now().toString( 36 ) + ( ++sidCounter ).toString( 36 );
+	}
+	function mySid( sid ) {
+		return typeof sid === 'string' && sid.indexOf( window.aicampusLive.userKey + '-' ) === 0;
 	}
 
 	/**
@@ -939,9 +962,17 @@ const initChalkboard = function ( Reveal ) {
 	 ** Drawings
 	 ******************************************************************/
 
+	// AICAMPUS PATCH: Stift-/Kreide-/Radierer-Größe skaliert mit der Folie
+	// (Referenz: Skala 1.5 ≈ 1440 px Breite = bisherige Pixelwerte). Muss mit
+	// static/js/slide-live-viewer.js (PEN_REF) + dem Laser (slides_present.html)
+	// übereinstimmen.
+	function penK() {
+		return drawingCanvas[ 0 ].scale / 1.5;
+	}
+
 	function drawWithBoardmarker( context, fromX, fromY, toX, toY, colorIdx ) {
 		if ( colorIdx == undefined ) colorIdx = color[ mode ];
-		context.lineWidth = boardmarkerWidth;
+		context.lineWidth = boardmarkerWidth * penK();
 		context.lineCap = 'round';
 		context.strokeStyle = boardmarkers[ colorIdx ].color;
 		context.beginPath();
@@ -952,7 +983,7 @@ const initChalkboard = function ( Reveal ) {
 
 	function drawWithChalk( context, fromX, fromY, toX, toY, colorIdx ) {
 		if ( colorIdx == undefined ) colorIdx = color[ mode ];
-		var brushDiameter = chalkWidth;
+		var brushDiameter = chalkWidth * penK();
 		context.lineWidth = brushDiameter;
 		context.lineCap = 'round';
 		context.fillStyle = chalks[ colorIdx ].color; // 'rgba(255,255,255,0.5)';
@@ -987,12 +1018,13 @@ const initChalkboard = function ( Reveal ) {
 		// sonst 20px versetzt radieren.
 		context.save();
 		context.beginPath();
-		context.arc( x, y, eraser.radius, 0, 2 * Math.PI, false );
+		var er = eraser.radius * penK();
+		context.arc( x, y, er, 0, 2 * Math.PI, false );
 		context.clip();
-		context.clearRect( x - eraser.radius - 1, y - eraser.radius - 1, eraser.radius * 2 + 2, eraser.radius * 2 + 2 );
+		context.clearRect( x - er - 1, y - er - 1, er * 2 + 2, er * 2 + 2 );
 		context.restore();
 		if ( mode == 1 && grid ) {
-			redrawGrid( x, y, eraser.radius );
+			redrawGrid( x, y, er );
 		}
 	}
 
@@ -1344,6 +1376,7 @@ const initChalkboard = function ( Reveal ) {
 			if ( d > timestamp ) timestamp = d;
 		}
 		slideStart = Date.now() - timestamp;
+		var keepBoard = ( finalMode === 1 ) ? board : 0; // AICAMPUS PATCH: Board über Replay behalten
 		closeChalkboard();
 		mode = 0;
 		board = 0;
@@ -1366,6 +1399,10 @@ const initChalkboard = function ( Reveal ) {
 		if ( finalMode != undefined ) {
 			mode = finalMode;
 		}
+		if ( keepBoard ) {
+			board = keepBoard;
+			redrawChalkboard( board );
+		}
 		if ( mode == 1 ) showChalkboard();
 //console.log("playback (ok)");
 
@@ -1385,6 +1422,12 @@ const initChalkboard = function ( Reveal ) {
 	function playEvent( id, event, timestamp ) {
 //console.log( timestamp +" / " + JSON.stringify(event));
 //console.log( id + ": " + timestamp +" / " +  event.time +" / " + event.type +" / " + mode );
+		// AICAMPUS PATCH (Live-Notizen): selectboard-Events werden nicht
+		// geteilt → im Whiteboard nur Events des aktuellen Boards zeichnen.
+		if ( id == 1 && event.board !== undefined && event.board !== board &&
+			( event.type === 'draw' || event.type === 'erase' || event.type === 'clear' ) ) {
+			return;
+		}
 		switch ( event.type ) {
 		case 'open':
 			if ( timestamp <= event.time ) {
@@ -1434,6 +1477,7 @@ const initChalkboard = function ( Reveal ) {
 	};
 
 	function startErasing( x, y ) {
+		strokeSid = null; // AICAMPUS PATCH: neue Gruppe (Live-Notizen)
 		drawing = false;
 		erasing = true;
 		erasePoint( x, y );
@@ -1474,6 +1518,7 @@ const initChalkboard = function ( Reveal ) {
 	}
 
 	function startDrawing( x, y ) {
+		strokeSid = null; // AICAMPUS PATCH: neue Gruppe (Live-Notizen)
 		drawing = true;
 
 		var ctx = drawingCanvas[ mode ].context;
@@ -1535,6 +1580,7 @@ const initChalkboard = function ( Reveal ) {
 	// entfernt. readOnly (Laser-Modus) blockiert NUR die Zeichen-Eingaben;
 	// Undo bearbeitet nur die Event-Historie + Replay → auch im Laser-Modus.
 	function undo() {
+		if ( liveActive() ) return undoLive();
 		var slideData = getSlideData( undefined, mode );
 		var events = slideData.events;
 		if ( !events.length ) return;
@@ -1581,11 +1627,54 @@ const initChalkboard = function ( Reveal ) {
 		return slideIndices.h + "-" + slideIndices.v + "-" + slideIndices.f + "-" + mode;
 	}
 
+	// AICAMPUS PATCH (Live-Notizen): Undo/Redo je Autor. Entfernt die letzte
+	// Gruppe (sid) des EIGENEN Users — Striche anderer Tutoren bleiben, auch
+	// wenn sie dazwischen liegen. Mit dem Server ausgetauscht als remove (per
+	// sid) bzw. append (Redo hängt die Gruppe hinten wieder an).
+	function undoLive() {
+		var slideData = getSlideData( undefined, mode );
+		var events = slideData.events;
+		var i = events.length - 1;
+		while ( i >= 0 && !mySid( events[ i ].sid ) ) i--;
+		if ( i < 0 ) return;
+		var sid = events[ i ].sid;
+		var removed = events.filter( function ( e ) { return e.sid === sid; } );
+		slideData.events = events.filter( function ( e ) { return e.sid !== sid; } );
+		var stack = redoStack[ redoKey() ] || ( redoStack[ redoKey() ] = [] );
+		stack.push( removed );
+		window.aicampusLive.onRemove( mode, slideIndices, [ sid ] );
+		replayCurrent();
+	}
+
+	function replayCurrent() {
+		// Mitten im eigenen Strich nicht neu rendern (Canvas-Clear würde die Tinte
+		// kurz löschen / den Strich unterbrechen) → nach dem Strich nachholen.
+		if ( drawing || erasing ) {
+			clearTimeout( replayTimeout );
+			replayTimeout = setTimeout( replayCurrent, 150 );
+			return;
+		}
+		stopPlayback();
+		clearCanvas( mode );
+		startPlayback( getSlideDuration(), mode );
+		updateStorage();
+	}
+
 	function redo() {
 		var stack = redoStack[ redoKey() ];
 		if ( !stack || !stack.length ) return;
 		var removed = stack.pop();
 		var slideData = getSlideData( undefined, mode );
+		if ( liveActive() ) {
+			// hinten anhängen (Zeit hochzählen), dem Server als append melden
+			var t = slideData.events.length ? slideData.events[ slideData.events.length - 1 ].time : 0;
+			removed.forEach( function ( e ) { e.time = Math.max( t + 1, e.time ); t = e.time; } );
+			slideData.events.push.apply( slideData.events, removed );
+			slideData.duration = Math.max( slideData.duration, t + 1 );
+			removed.forEach( function ( e ) { window.aicampusLive.onEvent( mode, slideIndices, e ); } );
+			replayCurrent();
+			return;
+		}
 		slideData.events.push.apply( slideData.events, removed );
 		slideData.duration = Math.max.apply( null, slideData.events.map( function ( e ) { return e.time; } ) ) + 1;
 		stopPlayback();
@@ -2116,7 +2205,7 @@ const initChalkboard = function ( Reveal ) {
 
 	function resetStorage( force ) {
 		// AICAMPUS PATCH: wie bei resetSlide — KeyboardEvent ist truthy.
-		var ok = force === true || confirm( "Please confirm to delete all chalkboard drawings!" );
+		var ok = force === true || force === 'remote' || confirm( liveActive() ? "ALLE Zeichnungen aller Folien löschen? Gilt für alle Tutoren und Studierende und kann nicht rückgängig gemacht werden!" : "Please confirm to delete all chalkboard drawings!" );
 		if ( ok ) {
 			stopPlayback();
 			slideStart = Date.now();
@@ -2141,6 +2230,7 @@ const initChalkboard = function ( Reveal ) {
 			if ( config.storage ) {
 				sessionStorage.setItem( config.storage, null )
 			}
+			if ( liveActive() && force !== 'remote' ) window.aicampusLive.onResetAll(); // AICAMPUS PATCH
 			// broadcast
 			var message = new CustomEvent( messageType );
 			message.content = {
@@ -2155,6 +2245,52 @@ const initChalkboard = function ( Reveal ) {
 		}
 	};
 
+	// AICAMPUS PATCH (Live-Notizen): Op eines anderen Tutors anwenden (der
+	// Aufrufer löst slide_uid → h/v auf). op: {kind, mode, h, v, f, events, sids}
+	// bzw. {kind:'reset_all'}. Schreibt in `storage` (jede Folie) und zeichnet
+	// nur, wenn es die aktuelle Folie betrifft.
+	function applyRemote( op ) {
+		if ( op.kind === 'reset_all' ) {
+			resetStorage( 'remote' );
+			return;
+		}
+		var indices = { h: op.h, v: op.v, f: op.f };
+		var sd = getSlideData( indices, op.mode );
+		var current = slideIndices.h === op.h && slideIndices.v === op.v && slideIndices.f === op.f;
+		if ( op.kind === 'append' ) {
+			var t = sd.events.length ? sd.events[ sd.events.length - 1 ].time : 0;
+			op.events.forEach( function ( e ) {
+				e.time = Math.max( t + 1, e.time || 0 );
+				t = e.time;
+				sd.events.push( e );
+			} );
+			sd.duration = Math.max( sd.duration, t + 1 );
+			if ( current ) {
+				if ( op.events.some( function ( e ) { return e.type === 'clear'; } ) ) {
+					replayCurrent();
+				} else if ( mode == op.mode || op.mode == 0 ) {
+					op.events.forEach( function ( e ) {
+						if ( !( op.mode == 1 && ( mode != 1 || e.board !== board ) ) ) playEvent( op.mode, e, sd.duration );
+					} );
+				}
+			}
+		} else if ( op.kind === 'replace' ) {
+			// kompletter Zeilen-Ersatz (Resync nach Gap/Reconnect)
+			sd.events = op.events.map( function ( e, i ) { e.time = i; return e; } );
+			sd.duration = sd.events.length;
+			if ( current ) replayCurrent();
+		} else if ( op.kind === 'remove' ) {
+			var gone = {};
+			op.sids.forEach( function ( s ) { gone[ s ] = 1; } );
+			sd.events = sd.events.filter( function ( e ) { return !gone[ e.sid ]; } );
+			if ( current ) replayCurrent();
+		}
+		storageChanged();
+	}
+
+	this.applyRemote = applyRemote;
+	this.getMode = function () { return mode; };   // AICAMPUS PATCH (Presence)
+	this.getBoard = function () { return board; };
 	this.toggleNotesCanvas = toggleNotesCanvas;
 	this.toggleChalkboard = toggleChalkboard;
 	this.colorIndex = colorIndex;

@@ -1433,3 +1433,42 @@ html.print-pdf body.present-mode .present-shell .reveal {
     display: none !important;
   }
 }
+
+/* ─── Live-Notizen (static/js/slide-live-viewer.js) ───────────────────
+   Student-Overlay (Stift + Whiteboard), Laser anderer Tutoren, Toggle-/
+   Folgen-Leiste. Z-Indizes wie das Chalkboard-Plugin (24/26), Laser/UI
+   darüber. Nie im PDF. */
+.reveal .slive-root { position: absolute; inset: 0; pointer-events: none; z-index: 24; }
+.reveal .slive-root canvas { position: absolute; left: 0; top: 0; }
+.reveal .slive-wb { position: absolute; inset: 0; z-index: 26; background-repeat: repeat; }
+.reveal .slive-laser-box { position: absolute; inset: 0; pointer-events: none; z-index: 41; overflow: hidden; }
+.reveal .slive-trail { position: absolute; left: 0; top: 0; }
+.reveal .slive-laser {
+  position: absolute; left: 0; top: 0; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
+  background: radial-gradient(circle, #fff 0%, #ffb3b3 35%, #ff3b3b 80%);
+  box-shadow: 0 0 10px 3px rgba(255, 59, 59, 0.6), 0 0 26px 12px rgba(255, 59, 59, 0.28);
+  display: none;
+}
+.reveal .slive-ui {
+  position: absolute; left: 12px; top: 12px; z-index: 40;   /* links oben (Tutor + Student) */
+  display: flex; align-items: center; gap: 6px;
+}
+.reveal .slive-btn {
+  display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0;
+  border: 0; border-radius: 50%; background: transparent; color: #000; cursor: pointer; opacity: 0.55;
+  transition: opacity 0.2s ease, background-color 0.2s ease;
+}
+.reveal .slive-btn:hover { opacity: 1; background: rgba(0, 0, 0, 0.06); }
+.reveal .slive-btn.slive-off { opacity: 0.35; }
+.reveal .slive-btn.slive-on { opacity: 1; background: rgba(37, 99, 235, 0.15); color: #2563eb; }
+.reveal .slive-select {
+  width: max-content; max-width: none; field-sizing: content; font-size: 12px; padding: 2px 4px; border: 0; border-radius: 6px; cursor: pointer;
+  background: transparent; color: #000; opacity: 0.35; transition: opacity 0.2s ease, background-color 0.2s ease;
+}
+.reveal .slive-select:hover, .reveal .slive-select:focus { opacity: 0.9; background: rgba(255, 255, 255, 0.85); outline: none; }
+.reveal .slive-select option { color: #111; background: #fff; }
+.reveal .slive-toast {
+  position: absolute; left: 50%; bottom: 70px; transform: translateX(-50%); z-index: 60;
+  background: rgba(17, 24, 39, 0.92); color: #fff; padding: 6px 14px; border-radius: 999px; font-size: 13px;
+}
+html.print-pdf .reveal :is(.slive-root, .slive-ui, .slive-laser-box, .slive-toast) { display: none; }

@@ -28,7 +28,7 @@ from database.models import (
     UserCourse,
 )
 from services.auth_service import get_current_user, require_course_access
-from services import trash_service
+from services import slide_index_service, trash_service
 from services import version_service
 from services.media_service import sync_media_usages
 from services.slides_service import SlideError, parse_slides, slide_count, strip_slide_notes
@@ -132,6 +132,10 @@ async def get_material(
         # Sprechernotizen nicht an Nicht-Tutoren ausliefern → landen auch
         # nicht im DOM der Präsentation/Vorschau.
         d["content"] = strip_slide_notes(material.content)
+    if material.material_type == MaterialType.SLIDES:
+        # Folien-IDs für Live-Notizen (Reihenfolge = Blatt-Folien); gleicht den
+        # Folien-Index bei geändertem Inhalt zuerst ab. Atomar zum Content.
+        d["slide_uids"] = slide_index_service.get_slide_uids(session, material)
     return d
 
 

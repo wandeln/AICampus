@@ -65,6 +65,10 @@ body.aicampus-laser * {
 .palette li[data-laser] {
   color: #ff3b3b;
 }
+.slive-offline {
+  position: fixed; left: 50%; top: 10px; transform: translateX(-50%); z-index: 60;
+  background: #b91c1c; color: #fff; padding: 4px 12px; border-radius: 999px; font-size: 13px;
+}
 .palette li[data-laser] .cb-swatch {
   border-radius: 50%;
   background: radial-gradient(circle, #ffd7d7 0%, #ff3b3b 80%);
@@ -160,6 +164,10 @@ body.aicampus-laser * {
 {% block extra_scripts %}
 <script src="{{ asset('js/content-live.js') }}"></script>
 <script src="{{ asset('js/slides.js') }}"></script>
+{# Live-Notizen (Stift/Whiteboard/Laser): WS-Sync-Kern + Viewer (Studierende,
+   Laser, Folgen) — docs/LLM-plans/slide-annotations-live-share.md #}
+<script src="{{ asset('js/slide-live.js') }}"></script>
+<script src="{{ asset('js/slide-live-viewer.js') }}"></script>
 <script src="{{ asset('vendor/reveal/reveal.js') }}"></script>
 {# Highlight-Plugin (Code-Highlighting + data-line-numbers/Per-Line-Reveal;
    nutzt das global geladene highlight.js aus base.html) #}
@@ -182,6 +190,9 @@ body.aicampus-laser * {
   const FOOTER_ENABLED = {{ "true" if slides_theme.footer else "false" }};
   const SLIDE_THEME = {{ slides_theme | tojson }}; // aufgelöstes Theme (Seitenverhältnis …)
   const HAS_NOTES = {{ "true" if is_tutor else "false" }}; // Notes-Plugin nur für Tutoren/Profs
+  const USER_ID = {{ current_user.id }};
+  const LIVE_OFF = /[?&]nolive\b/.test(location.search); // Diagnose: Live-Notizen komplett aus (?nolive)
+  const LIVE_BOARD_BG = {{ asset('vendor/reveal/plugin/chalkboard/img/blackboard.png') | tojson }};
 </script>
 <script>
 // Vollbild auf Dokumentebene umschalten (Browser-Fullscreen API).
@@ -273,26 +284,50 @@ document.querySelector("#reveal-root .slides-fullscreen-btn")?.addEventListener(
 // Fullscreen- und Navigations-Buttons): manche Stifte/Trackpads produzieren
 // Doppelklicks → Toggles würden an/aus an/aus (Netto-Nichts) oder die Folie
 // doppelt springen. Zweiter Klick aufs GLEICHE Control innerhalb des
-// Fensters wird verschluckt. Das Fenster ist länger als ein echter
-// Doppelklick, weil der 2. Klick-EVENT oft erst NACH der (synchronen)
-// Übergangs-Initialisierung des 1. Klicks verarbeitet wird — gemessene
-// verarbeitete Lücken: ~440–700 ms. Delegation + Capture auf #reveal-root:
+// Fensters (WINDOW_MS, in Event-Zeit e.timeStamp gemessen — verspätet
+// verarbeitete Doppel-Events haben trotzdem einen winzigen Abstand, schnelles
+// echtes Tippen nicht) wird verschluckt. Delegation + Capture auf #reveal-root:
 // läuft vor ALLEN Ziel-Listenern (eigene + Reveal's Controls) und überlebt
 // Live-Remounts (das .controls-Element wird dabei neu angelegt).
 (function () {
   const root = document.getElementById("reveal-root");
   if (!root) return;
   const lastT = new WeakMap();
-  const WINDOW_MS = 750;
+  const WINDOW_MS = 150; // gemessen in Event-Zeit (e.timeStamp), nicht in Verarbeitungszeit
   root.addEventListener("click", (e) => {
     const el = e.target.closest(".slides-pen-btn, .slides-overview-btn, .slides-fullscreen-btn, .controls button, .cb-actions button");
     if (!el) return;
-    const now = Date.now();
-    if (now - (lastT.get(el) || 0) < WINDOW_MS) {
+    // Event-Zeit statt Date.now(): verspätet verarbeitete Doppel-Events haben
+    // trotzdem einen winzigen Abstand, schnelles echtes Tippen (>~150 ms) nicht.
+    const now = e.timeStamp;
+    if (lastT.has(el) && now - lastT.get(el) < WINDOW_MS) {
       e.stopImmediatePropagation();
       e.preventDefault();
     } else {
       lastT.set(el, now);
+    }
+  }, true);
+
+  // Reveal's Navigationspfeile reagieren auf touchstart UND click. Normal
+  // unterdrückt preventDefault am touchstart den Folge-Click; bei manchen
+  // Touch-/Stift-Geräten kommt er trotzdem → 1× beim Aufsetzen, 1× beim
+  // Loslassen (bei langem Drücken entsprechend später). Der Click nach einem
+  // touchstart auf denselben Pfeil ist immer so ein Duplikat → verschlucken.
+  const touch = { el: null, down: false, tEnd: 0 };
+  const ctl = (e) => e.target.closest && e.target.closest(".controls button, .controls [class*='navigate-']");
+  root.addEventListener("touchstart", (e) => {
+    const el = ctl(e);
+    if (!el) return;
+    touch.el = el; touch.down = true; touch.tStart = Date.now();
+  }, true);
+  const touchEnded = () => { if (touch.el) { touch.down = false; touch.tEnd = Date.now(); } };
+  root.addEventListener("touchend", touchEnded, true);
+  root.addEventListener("touchcancel", touchEnded, true);
+  root.addEventListener("click", (e) => {
+    const el = ctl(e);
+    if (el && touch.el === el && ((touch.down && Date.now() - touch.tStart < 10000) || Date.now() - touch.tEnd < 1500)) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
     }
   }, true);
 })();
@@ -366,9 +401,19 @@ const aicampusLaser = HAS_NOTES ? (function () {
   // dürfte sonst den Stroke an ihre Position zurücksetzen (Segment in deren
   // Richtung, z.B. zur Bildschirmecke) und per Up/End den laufenden Stroke
   // unterbrechen.
+  // Live: Laserposition an den Deck-Raum (Studierende + andere Tutoren)
+  const liveLaser = (on) => {
+    const L = window.aicampusLive;
+    if (!L || !aicampusCurrentReveal) return;
+    const i = aicampusCurrentReveal.getIndices();
+    try { L.sendLaser(mx, my, pressed, on, window.innerWidth, window.innerHeight, { h: i.h || 0, v: i.v || 0 }); } catch (e) {}
+  };
+  // Punkt-/Spurgröße skaliert mit der Folie (wie Stift, Referenz-Skala 1.5)
+  const penK = () => Math.min(window.innerWidth / aicampusSlideDims.w, window.innerHeight / aicampusSlideDims.h) / 1.5;
+  const placeDot = () => { dot.style.transform = `translate(${mx}px, ${my}px) scale(${penK()})`; };
   const laserTo = (x, y) => {
     mx = x; my = y;
-    dot.style.transform = `translate(${mx}px, ${my}px)`;
+    placeDot();
     // Spur wie beim Stift: nur, während gedrückt/gezeichnet wird.
     // Punkte dezimieren (>=1.5px).
     if (active && pressed && pts.length) {
@@ -378,6 +423,7 @@ const aicampusLaser = HAS_NOTES ? (function () {
         if (pts.length > 8000) pts.splice(0, 4000);
       }
     }
+    if (active) liveLaser(true);
   };
   // Neuer Stroke am REALEN Startpunkt der Eingabe (x,y) — nicht an der
   // zuletzt bekannten Position: bei Touch ist der Finger woanders, und ein
@@ -392,13 +438,20 @@ const aicampusLaser = HAS_NOTES ? (function () {
     strokeId = id ?? -1;
     strokeLastT = Date.now();
     pressed = true;
-    if (active) pts = x != null ? [{ x, y }] : [];
+    if (active) {
+      pts = x != null ? [{ x, y }] : [];
+      // Touch/Stift: kein Hover → mx/my wären noch die ALTE Position (Punkt
+      // + übertragene Linie würden vom alten Ort zum Startpunkt springen)
+      if (x != null) { mx = x; my = y; placeDot(); }
+      liveLaser(true);
+    }
   };
   const strokeUp = (id) => {
     if (strokeId != null && id != null && id !== strokeId) return; // anderer Finger
     strokeId = null;
     pressed = false;
     strokeEndT = performance.now();
+    if (active) liveLaser(true);
   };
   document.addEventListener("pointermove", (e) => {
     if (pressed && strokeId != null) {
@@ -460,7 +513,7 @@ const aicampusLaser = HAS_NOTES ? (function () {
       }
     }
     ctx.strokeStyle = `rgba(255,59,59,${alpha})`;
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 4 * penK();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
@@ -500,6 +553,7 @@ const aicampusLaser = HAS_NOTES ? (function () {
   function setActive(on) {
     if (on === active) return;
     active = on;
+    liveLaser(on);
     dot.style.display = on ? "block" : "none";
     document.body.classList.toggle("aicampus-laser", on);
     setTrail(on);
@@ -770,8 +824,69 @@ const aicampusLaser = HAS_NOTES ? (function () {
 // Deck (neu) mounten: Inhalt laden → Sections → neue Reveal-Instanz.
 // isLive = Live-Remount via MCP: die Folie des Nutzers bleibt erhalten;
 // Lade-Fehler/leeres Deck → Reload (sauberer Zustand, Hash bleibt erhalten).
+// ── Live-Notizen, Tutor-Seite (einmalig verdrahtet; überlebt Remounts) ─────
+// Remote-Ops anderer Tutoren → Plugin; Presence (Folie/Whiteboard/Board) →
+// Server; Offline-Hinweis; Resync nach Reconnect.
+let aicampusLiveBound = false;
+function aicampusLiveTutorBind() {
+  if (aicampusLiveBound) return;
+  aicampusLiveBound = true;
+  const L = window.aicampusLive;
+  const toPlugin = (m) => {
+    const hv = L.hvFor(m.slide);
+    if (!hv || !window.RevealChalkboard) return;
+    RevealChalkboard.applyRemote({
+      kind: m.kind, mode: m.mode, h: hv.h, v: hv.v,
+      f: m.f >= 0 ? m.f : (L.hasFrag(m.slide) ? -1 : undefined),
+      events: m.events, sids: m.sids,
+    });
+  };
+  L.on("remote-op", (m) => {
+    if (m.kind === "reset_all") { if (window.RevealChalkboard) RevealChalkboard.applyRemote({ kind: "reset_all" }); return; }
+    toPlugin(m);
+  });
+  // Zeilen vom Server übernehmen, deren rev vom lokalen Stand abweicht
+  const resync = async (uid) => {
+    try {
+      await L.flush();
+      const rows = await L.fetchRows(uid);
+      for (const r of rows) {
+        const key = L.rowKey(r.uid, r.mode, r.f);
+        if ((L.revs.get(key) || 0) === r.rev) continue;
+        L.revs.set(key, r.rev);
+        toPlugin({ kind: "replace", slide: r.uid, mode: r.mode, f: r.f, events: r.events });
+      }
+    } catch (e) { console.warn("[live] Resync fehlgeschlagen", e); }
+  };
+  L.on("gap", (d) => resync(d.uid));
+  let opened = false;
+  L.on("open", () => { if (opened) { L.resendView(); resync(null); } opened = true; });
+
+  // Presence: Folie/Fragment/Whiteboard/Board + Tab-Sichtbarkeit (~3×/s, nur bei Änderung)
+  setInterval(() => {
+    const r = aicampusCurrentReveal;
+    if (!r || !window.RevealChalkboard) return;
+    const i = r.getIndices();
+    L.sendView({ h: i.h || 0, v: i.v || 0, f: i.f, mode: RevealChalkboard.getMode(),
+      board: RevealChalkboard.getBoard(), active: !document.hidden });
+  }, 300);
+
+  // Offline-Hinweis (Striche werden nicht gespeichert)
+  const badge = document.createElement("div");
+  badge.className = "slive-offline";
+  badge.textContent = "⚠ Offline – Notizen werden nicht gespeichert";
+  badge.style.display = "none";
+  document.body.appendChild(badge);
+  L.on("status", (st) => { badge.style.display = st === "offline" && L.active ? "" : "none"; });
+}
+
+let aicampusLiveInited = false;
+let aicampusSlideDims = { w: 960, h: 540 }; // Folien-Config-Raum (Laser-/Stiftgröße)
 async function aicampusDoMount() {
   const isLive = aicampusCurrentReveal != null;
+  // Live-Notizen: ausstehende Striche vor dem Remount zum Server (der Mount
+  // seedet das Plugin danach frisch aus dem Serverstand).
+  if (isLive && HAS_NOTES) { try { await aicampusLive.flush(); } catch (e) {} }
   // Live-Remount: Folie des Nutzers merken + alte Instanz destroyen
   let posH = 0, posV = 0;
   if (isLive) {
@@ -782,19 +897,20 @@ async function aicampusDoMount() {
   const shell = document.getElementById("present-shell");
 
   // Deck-Inhalt laden
-  let content;
+  let content, slideUids = null;
   try {
     const res = await fetch(`/api/courses/${courseId}/materials/${DECK_ID}`, { credentials: "same-origin" });
     if (!res.ok) throw new Error("Nicht geladen");
     const data = await res.json();
     content = data.content || "";
+    slideUids = data.slide_uids || null; // Folien-IDs der Live-Notizen
   } catch (e) {
     if (isLive) { location.reload(); return; }
     shell.innerHTML = '<div class="present-message">Fehler beim Laden des Slide-Decks.</div>';
     return;
   }
 
-  const slides = await parseSlides(content);
+  const slides = await parseSlides(content, slideUids);
   if (slides.length === 0) {
     if (isLive) { location.reload(); return; }
     shell.innerHTML = '<div class="present-message">Dieses Deck enthält noch keine Folien.</div>';
@@ -827,6 +943,18 @@ async function aicampusDoMount() {
   const ratio = (SLIDE_THEME && SLIDE_THEME.aspect_value) || 16 / 9;
   const SLIDE_W = 960;
   const SLIDE_H = Math.round(SLIDE_W / ratio);
+  aicampusSlideDims = { w: SLIDE_W, h: SLIDE_H };
+
+  // Live-Notizen: uid ↔ (h,v); Tutor: Serverstand ins Plugin-Storage seeden
+  // (vor Reveal-/Plugin-Init, das `config.storage` synchron liest).
+  if (!/print-pdf/.test(window.location.search) && !LIVE_OFF) {
+    aicampusLive.setDeck(slidesEl);
+    if (!aicampusLiveInited) {
+      aicampusLiveInited = true;
+      aicampusLive.init({ courseId, deckId: DECK_ID, tutor: HAS_NOTES, userId: USER_ID, slideW: SLIDE_W, slideH: SLIDE_H });
+    }
+    if (HAS_NOTES) await aicampusLive.seedTutor("aicampus-chalkboard-" + courseId + "-" + DECK_ID);
+  }
 
   // KaTeX-Webfonts VOR dem Fit fertig laden: der Build (KaTeX-Rendering)
   // hat sie angefordert — misst der Fit mit Fallback-Fonts, ist die Skala
@@ -1016,6 +1144,15 @@ async function aicampusDoMount() {
     document.getElementById("present-loading")?.remove();
   }
   aicampusCurrentReveal = reveal;
+  // Live-Notizen: Viewer (Studierende) bzw. Laser/Folgen (Tutoren)
+  if (!/print-pdf/.test(window.location.search) && !LIVE_OFF) {
+    aicampusLiveViewer.mount({
+      reveal, root: document.getElementById("reveal-root"), tutor: HAS_NOTES,
+      deckId: DECK_ID, courseId, slideW: SLIDE_W, slideH: SLIDE_H,
+      assetBoard: LIVE_BOARD_BG, selfUserId: USER_ID,
+    });
+    if (HAS_NOTES) aicampusLiveTutorBind();
+  }
   // Laser-Pointer (nur Tutoren): Taste L + Color-Picker-Feld am frischen
   // Chalkboard-Container verdrahten (s. aicampusLaser oben).
   aicampusLaser?.bind();

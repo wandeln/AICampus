@@ -1748,3 +1748,51 @@ class McpClientContext(SQLModel, table=True):
     slide_count: Optional[int] = Field(default=None)
     slide_text: Optional[str] = Field(default=None, max_length=2000)
     updated_at: datetime = Field(default_factory=datetime.now, index=True)
+
+# ═══════════════════════════════════════════════════════════════════
+# SLIDE-NOTIZEN (Stift/Whiteboard, live geteilt — docs/LLM-plans/slide-annotations-live-share.md)
+# ═══════════════════════════════════════════════════════════════════
+# Bewusst OHNE FK auf course_materials: Zeilen dürfen Deck-Löschungen
+# überleben (Soft Delete) und blockieren keine Hard-Deletes.
+
+class SlideIndex(SQLModel, table=True):
+    """Folien-Index pro Deck: stabile slide_uid + Inhalts-Hash je Blatt-Folie
+    (Reihenfolge = Reveal-Zählung). Notizen hängen an der slide_uid; der
+    Abgleich passiert lazy in slide_index_service.get_slide_uids()."""
+
+    __tablename__ = "slide_indexes"
+
+    deck_id: int = Field(primary_key=True)
+    uids: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    hashes: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    # [{uid, hash, at}] — Folien, die verschwunden sind, deren Notizen aber
+    # noch existieren (Revive bei Edit-Undo/Restore, ≤ 30 Tage)
+    orphans: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+
+
+class SlideAnnotation(SQLModel, table=True):
+    """Event-Log einer Folie: Modus 0 = Folien-Stift, 1 = Whiteboard
+    (je Fragment-Index f). events = Liste der Chalkboard-Events."""
+
+    __tablename__ = "slide_annotations"
+    __table_args__ = (UniqueConstraint("deck_id", "mode", "slide_uid", "f", name="uq_slide_annotation"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    deck_id: int = Field(index=True)
+    mode: int = Field(default=0)
+    slide_uid: str = Field(max_length=40, index=True)
+    f: int = Field(default=-1)
+    events: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    rev: int = Field(default=0)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class SlideAnnotationShare(SQLModel, table=True):
+    """Freigabe der Notizen eines Decks an Studierende."""
+
+    __tablename__ = "slide_annotation_shares"
+
+    deck_id: int = Field(primary_key=True)
+    shared: bool = Field(default=False)
+    updated_at: datetime = Field(default_factory=datetime.now)
+    updated_by: Optional[int] = Field(default=None)

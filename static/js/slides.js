@@ -240,17 +240,31 @@ function _collectCitedKeys(content) {
   return keys;
 }
 
-async function parseSlides(content) {
+async function parseSlides(content, slideUids) {
   if (!content || !content.trim()) return [];
   // Manuell geschriebene Quellen-Folien (altes Import-Prompt-Format,
   // "class: quellen") verwerfen — die auto-Quellen-Folie unten ersetzt sie
   // (sonst würden beide erscheinen).
-  let slides = _splitSlideBlocks(content)
-    .map((segs, i) =>
-      segs.length === 1
+  // Live-Notizen: slideUids = vom Server gelieferte uids je Blatt-Folie (in
+  // Block-/Segment-Reihenfolge, VOR dem Verwerfen alter Quellen-Folien).
+  // Längen-Mismatch → keine uids (Notizen für dieses Deck aus).
+  const blocks = _splitSlideBlocks(content);
+  const leafTotal = blocks.reduce((n, segs) => n + segs.length, 0);
+  const uids = Array.isArray(slideUids) && slideUids.length === leafTotal ? slideUids : null;
+  if (slideUids && !uids) console.warn("[slides] slide_uids passen nicht zum Deck — Live-Notizen deaktiviert.");
+  let leaf = 0;
+  let slides = blocks
+    .map((segs, i) => {
+      const s = segs.length === 1
         ? _parseSlideBlock(segs[0], i + 1)
-        : _parseStackBlock(segs, i + 1)
-    )
+        : _parseStackBlock(segs, i + 1);
+      if (uids) {
+        if (segs.length === 1) s.uid = uids[leaf];
+        else s.children.forEach((c, j) => { c.uid = uids[leaf + j]; });
+      }
+      leaf += segs.length;
+      return s;
+    })
     .map((s) => {
       if (!s.children.length || s.css_class === "quellen") return s;
       const kept = s.children.filter((c) => c.css_class !== "quellen");
@@ -273,6 +287,7 @@ async function parseSlides(content) {
       layout: "topleft",
       transition: null,
       css_class: "quellen",
+      uid: uids ? "auto-sources" : undefined,
       notes: null,
       background: null,
       columns: ["# Quellen\n\n" + citedKeys.map((k) => "- @bibentry:" + k).join("\n")],
@@ -847,6 +862,7 @@ async function buildSlideSection(slide, footerText, slidePos) {
   // faden ein/aus, der Inline-Transform-Zoom bleibt erhalten.
   const transition = slide.transition || SLIDE_DEFAULT_TRANSITION;
   if (footerText) section.setAttribute("data-footer", footerText);
+  if (slide.uid) section.setAttribute("data-slide-uid", slide.uid); // Live-Notizen (slide_uid)
   const pos = slidePos ? { ...slidePos, v: 0 } : null;
   await renderSlideInto(slide, section, pos);
   // Folien-Hintergrund (background: ![Titel](…)):
