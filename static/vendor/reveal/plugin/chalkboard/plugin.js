@@ -534,6 +534,13 @@ const initChalkboard = function ( Reveal ) {
 			}
 		}
 
+		// AICAMPUS PATCH: Abdunklung des Bereichs außerhalb der Folie, solange dort
+		// gezeichnet/radiert werden soll (s. updateOutsideShade); liegt unter Palette + Canvas.
+		var shade = document.createElement( 'div' );
+		shade.className = 'aicampus-outside-shade';
+		container.insertBefore( shade, container.firstChild );
+		drawingCanvas[ id ].shade = shade;
+
 		var canvas = document.createElement( 'canvas' );
 		canvas.setAttribute( 'data-chalkboard', id );
 		sizeCanvas( canvas ); // AICAMPUS PATCH: HiDPI-Sizing (s. sizeCanvas)
@@ -1523,6 +1530,7 @@ const initChalkboard = function ( Reveal ) {
 	}
 
 	function stopErasing() {
+		updateOutsideShade( null );
 		if ( erasing ) {
 			// AICAMPUS PATCH: stroke-Ende markieren, damit undo() die
 			// komplette Radierer-Sitzung auf einmal entfernen kann.
@@ -1532,6 +1540,25 @@ const initChalkboard = function ( Reveal ) {
 			}
 		}
 		erasing = false;
+	}
+
+	// AICAMPUS PATCH: Zeiger (Seitenkoordinaten) außerhalb der Folie → Außenbereich
+	// sanft abdunkeln (Hinweis: dort wird nicht gezeichnet); null → ausblenden.
+	function updateOutsideShade( x, y ) {
+		for ( var id = 0; id < 2; id++ ) {
+			var dc = drawingCanvas[ id ];
+			if ( !dc || !dc.shade ) continue;
+			var on = false;
+			if ( x != null && id === mode ) {
+				var w = storage[ id ].width * dc.scale, h = storage[ id ].height * dc.scale;
+				dc.shade.style.left = dc.xOffset + 'px';
+				dc.shade.style.top = dc.yOffset + 'px';
+				dc.shade.style.width = w + 'px';
+				dc.shade.style.height = h + 'px';
+				on = x < dc.xOffset || x > dc.xOffset + w || y < dc.yOffset || y > dc.yOffset + h;
+			}
+			dc.shade.classList.toggle( 'on', on );
+		}
 	}
 
 	function startDrawing( x, y ) {
@@ -1604,6 +1631,7 @@ const initChalkboard = function ( Reveal ) {
 	}
 
 	function stopDrawing() {
+		updateOutsideShade( null );
 		if ( drawing ) {
 			// AICAMPUS PATCH: stroke-Ende markieren, damit undo() den
 			// kompletten Stroke auf einmal entfernen kann.
@@ -1756,6 +1784,7 @@ const initChalkboard = function ( Reveal ) {
 				var touch = evt.touches[ 0 ];
 				mouseX = touch.pageX;
 				mouseY = touch.pageY;
+				updateOutsideShade( mouseX, mouseY );
 				drawTouchId = touch.identifier;
         if ( color[ mode ]  < 0 ) {
           startErasing( ( mouseX - xOffset ) / scale, ( mouseY - yOffset ) / scale);
@@ -1791,6 +1820,7 @@ const initChalkboard = function ( Reveal ) {
 				}
 				mouseX = touch.pageX;
 				mouseY = touch.pageY;
+				updateOutsideShade( mouseX, mouseY );
 
 				if ( drawing ) {
 					// AICAMPUS PATCH: lastX==null (z. B. Slide-Wechsel
@@ -1865,6 +1895,7 @@ const initChalkboard = function ( Reveal ) {
 
 				mouseX = evt.pageX;
 				mouseY = evt.pageY;
+				updateOutsideShade( mouseX, mouseY );
 
 				if ( color[ mode ]  < 0 || evt.button == 2 || evt.button == 1 ) {
           if ( color[ mode ]  >= 0 ) {
@@ -1908,6 +1939,7 @@ const initChalkboard = function ( Reveal ) {
 
 				mouseX = evt.pageX;
 				mouseY = evt.pageY;
+				updateOutsideShade( mouseX, mouseY );
 
 				if ( drawing ) {
 					// AICAMPUS PATCH: lastX==null -> kein Segment von (0,0)

@@ -109,3 +109,14 @@ div.boardhandle a {
 		display: none!important; 
 	}
 }
+
+/* AICAMPUS PATCH: Außerhalb der Folie wird nicht gezeichnet → dort kurz abdunkeln
+   (Rahmen = Box-Shadow um die Folienfläche; sanftes Ein-/Ausblenden). */
+div.aicampus-outside-shade {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  box-shadow: 0 0 0 200vmax rgba(0, 0, 0, 0.2);
+}
+div.aicampus-outside-shade.on { opacity: 1; }
