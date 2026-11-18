@@ -447,6 +447,7 @@ def build_export_zip(session: Session, course: Course, selection: dict) -> tuple
                     zf.write(p, p.relative_to(root).as_posix())
 
     filename = f"aicampus_export_{_slugify(course.name)}_{datetime.now():%Y%m%d}.zip"
+    buf.seek(0)  # Zeiger nach Zip-Write am Ende — sonst streamt die Response leer
     return buf, filename
 
 

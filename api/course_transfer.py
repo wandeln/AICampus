@@ -56,6 +56,7 @@ async def export_preview(
 
 @router.post("/courses/{course_id}/transfer/export")
 async def export_zip(
+    course_id: int,
     request: Request,
     session: Session = Depends(get_session),
     user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
@@ -121,6 +122,7 @@ async def import_upload(
 
 @router.post("/courses/{course_id}/transfer/import")
 async def import_run(
+    course_id: int,
     request: Request,
     session: Session = Depends(get_session),
     user_and_course: tuple[User, int] = Depends(require_course_access(CourseRole.PROF)),
