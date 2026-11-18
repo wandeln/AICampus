@@ -24,6 +24,44 @@
     whiteboard: { color: "rgba(127,127,255,0.1)", distance: 40, width: 2 } };
   const LASER_STALE_MS = 2000;
 
+  // ── Rendering (Kopie der Plugin-Funktionen) ──────────────────────
+  /** white: Whiteboard (Filzstift) statt Blackboard (Kreide) im Modus 1; G = {sc, xo, yo} (Config-Raum → Pixel) */
+  function drawEvent(ctx, mode, e, G, white) {
+    const X = (x) => G.xo + x * G.sc, Y = (y) => G.yo + y * G.sc;
+    if (e.type === "draw") {
+      ctx.lineCap = "round";
+      if (mode === 0 || white) {
+        ctx.lineWidth = MARKER_W * G.sc / PEN_REF;
+        ctx.strokeStyle = MARKERS[e.color] || MARKERS[0];
+        ctx.beginPath(); ctx.moveTo(X(e.x1), Y(e.y1)); ctx.lineTo(X(e.x2), Y(e.y2)); ctx.stroke();
+      } else {
+        chalk(ctx, X(e.x1), Y(e.y1), X(e.x2), Y(e.y2), e.color, G.sc / PEN_REF);
+      }
+    } else if (e.type === "erase") {
+      const x = X(e.x), y = Y(e.y), R = ERASER_R * G.sc / PEN_REF;
+      ctx.save();
+      ctx.beginPath(); ctx.arc(x, y, R, 0, 2 * Math.PI, false); ctx.clip();
+      ctx.clearRect(x - R - 1, y - R - 1, R * 2 + 2, R * 2 + 2);
+      ctx.restore();
+    }
+  }
+  function chalk(ctx, fx, fy, tx, ty, idx, k) {
+    const W = CHALK_W * k;
+    ctx.lineWidth = W;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = CHALKS[idx] || CHALKS[0];
+    ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(tx, ty); ctx.stroke();
+    const len = Math.round(Math.hypot(tx - fx, ty - fy) / (5 / W));
+    const xu = (tx - fx) / len, yu = (ty - fy) / len;
+    for (let i = 0; i < len; i++) {
+      if (1.0 > Math.random() * 0.9) {
+        const xr = fx + i * xu + (Math.random() - 0.5) * W * 1.2;
+        const yr = fy + i * yu + (Math.random() - 0.5) * W * 1.2;
+        ctx.clearRect(xr, yr, Math.random() * 2 + 2, Math.random() + 1);
+      }
+    }
+  }
+
   // Auge: dieselben Icons wie der Sichtbarkeits-Schalter (Kapitel/Folien/Aufgaben, script.html)
   const EYE = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
   const EYE_OFF = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
@@ -158,43 +196,6 @@
       for (let y = fy; y < h; y += d) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
     }
 
-    // ── Rendering (Kopie der Plugin-Funktionen) ──────────────────────
-    function drawEvent(ctx, mode, e, G) {
-      const X = (x) => G.xo + x * G.sc, Y = (y) => G.yo + y * G.sc;
-      if (e.type === "draw") {
-        ctx.lineCap = "round";
-        if (mode === 0 || WHITE) {
-          ctx.lineWidth = MARKER_W * G.sc / PEN_REF;
-          ctx.strokeStyle = MARKERS[e.color] || MARKERS[0];
-          ctx.beginPath(); ctx.moveTo(X(e.x1), Y(e.y1)); ctx.lineTo(X(e.x2), Y(e.y2)); ctx.stroke();
-        } else {
-          chalk(ctx, X(e.x1), Y(e.y1), X(e.x2), Y(e.y2), e.color, G.sc / PEN_REF);
-        }
-      } else if (e.type === "erase") {
-        const x = X(e.x), y = Y(e.y), R = ERASER_R * G.sc / PEN_REF;
-        ctx.save();
-        ctx.beginPath(); ctx.arc(x, y, R, 0, 2 * Math.PI, false); ctx.clip();
-        ctx.clearRect(x - R - 1, y - R - 1, R * 2 + 2, R * 2 + 2);
-        ctx.restore();
-      }
-    }
-    function chalk(ctx, fx, fy, tx, ty, idx, k) {
-      const W = CHALK_W * k;
-      ctx.lineWidth = W;
-      ctx.lineCap = "round";
-      ctx.strokeStyle = CHALKS[idx] || CHALKS[0];
-      ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(tx, ty); ctx.stroke();
-      const len = Math.round(Math.hypot(tx - fx, ty - fy) / (5 / W));
-      const xu = (tx - fx) / len, yu = (ty - fy) / len;
-      for (let i = 0; i < len; i++) {
-        if (1.0 > Math.random() * 0.9) {
-          const xr = fx + i * xu + (Math.random() - 0.5) * W * 1.2;
-          const yr = fy + i * yu + (Math.random() - 0.5) * W * 1.2;
-          ctx.clearRect(xr, yr, Math.random() * 2 + 2, Math.random() + 1);
-        }
-      }
-    }
-
     // ── Aktuelle Position ────────────────────────────────────────────
     function pos() {
       const i = reveal.getIndices();
@@ -226,13 +227,13 @@
       stage._wb.style.display = ws_.show ? "" : "none";
       if (!on) return;
       const r0 = row(p.uid, 0, p.f);
-      if (r0) for (const e of r0.events) { if (e.type === "clear") nctx.clearRect(0, 0, G.w, G.h); else drawEvent(nctx, 0, e, G); }
+      if (r0) for (const e of r0.events) { if (e.type === "clear") nctx.clearRect(0, 0, G.w, G.h); else drawEvent(nctx, 0, e, G, WHITE); }
       if (ws_.show) {
         board = ws_.board;
         wbNum.textContent = String(board + 1);
         const r1 = row(L.WB, 1, board);
         if (r1) for (const e of r1.events) {
-          if (e.type === "clear") wctx.clearRect(0, 0, G.w, G.h); else drawEvent(wctx, 1, e, G);
+          if (e.type === "clear") wctx.clearRect(0, 0, G.w, G.h); else drawEvent(wctx, 1, e, G, WHITE);
         }
       }
     }
@@ -484,7 +485,7 @@
           const G = geo();
           for (const e of m.events) {
             if (m.mode === 1 && (e.board || 0) !== board) continue;
-            drawEvent(m.mode === 0 ? nctx : wctx, m.mode, e, G);
+            drawEvent(m.mode === 0 ? nctx : wctx, m.mode, e, G, WHITE);
           }
           refreshUi();
           return;
@@ -507,5 +508,5 @@
     return { render, refreshUi };
   }
 
-  window.aicampusLiveViewer = { mount };
+  window.aicampusLiveViewer = { mount, drawEvent, GRIDS };
 })();

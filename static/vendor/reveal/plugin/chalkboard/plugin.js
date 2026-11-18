@@ -1499,6 +1499,8 @@ const initChalkboard = function ( Reveal ) {
 	}
 
 	function erasePoint( x, y ) {
+		var cfg = Reveal.getConfig();
+		if ( x < 0 || y < 0 || x > cfg.width || y > cfg.height ) return; // AICAMPUS PATCH: nur innerhalb der Folie
 		var ctx = drawingCanvas[ mode ].context;
 		var scale = drawingCanvas[ mode ].scale;
 		var xOffset = drawingCanvas[ mode ].xOffset;
@@ -1544,7 +1546,35 @@ const initChalkboard = function ( Reveal ) {
 		lastY = y * scale + yOffset;
 	}
 
+	// AICAMPUS PATCH: Zeichnen nur innerhalb der Folie (Config-Raum 0…width × 0…height):
+	// Strecke an den Folienrand clippen (Liang–Barsky); null = komplett außerhalb.
+	// Verhindert Striche im Letterbox-Bereich (fehlen sonst im PDF-Export).
+	function clipToSlide( x1, y1, x2, y2 ) {
+		var cfg = Reveal.getConfig();
+		var dx = x2 - x1, dy = y2 - y1, t0 = 0, t1 = 1;
+		var p = [ -dx, dx, -dy, dy ];
+		var q = [ x1, cfg.width - x1, y1, cfg.height - y1 ];
+		for ( var i = 0; i < 4; i++ ) {
+			if ( p[ i ] === 0 ) {
+				if ( q[ i ] < 0 ) return null;
+			} else {
+				var r = q[ i ] / p[ i ];
+				if ( p[ i ] < 0 ) {
+					if ( r > t1 ) return null;
+					if ( r > t0 ) t0 = r;
+				} else {
+					if ( r < t0 ) return null;
+					if ( r < t1 ) t1 = r;
+				}
+			}
+		}
+		return [ x1 + t0 * dx, y1 + t0 * dy, x1 + t1 * dx, y1 + t1 * dy ];
+	}
+
 	function drawSegment( fromX, fromY, toX, toY, colorIdx ) {
+		var clipped = clipToSlide( fromX, fromY, toX, toY );
+		if ( !clipped ) return;
+		fromX = clipped[ 0 ]; fromY = clipped[ 1 ]; toX = clipped[ 2 ]; toY = clipped[ 3 ];
 		var ctx = drawingCanvas[ mode ].context;
 		var scale = drawingCanvas[ mode ].scale;
 		var xOffset = drawingCanvas[ mode ].xOffset;

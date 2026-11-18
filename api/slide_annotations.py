@@ -56,9 +56,10 @@ def _access(session: Session, user: User, course_id: int, deck_id: int) -> tuple
 def get_annotations(course_id: int, deck_id: int, session: Session = Depends(get_session),
                     user: User = Depends(get_current_user)):
     deck, is_tutor = _access(session, user, course_id, deck_id)
-    if not is_tutor:
-        raise HTTPException(403, "Nur für Tutoren.")
-    return {"shared": svc.is_shared(session, deck_id), "rows": svc.load_all(session, deck)}
+    shared = svc.is_shared(session, deck_id)
+    if not is_tutor and not shared:     # Studierende (PDF-Export): nur freigegebene Notizen
+        raise HTTPException(403, "Notizen sind nicht freigegeben.")
+    return {"shared": shared, "rows": svc.load_all(session, deck)}
 
 
 @router.get("/api/courses/{course_id}/slides/{deck_id}/annotations/slide")

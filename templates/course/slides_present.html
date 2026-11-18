@@ -87,7 +87,7 @@ body.aicampus-laser * {
   <a id="edit-deck-link" href="/courses/{{ course.id }}/slides/{{ deck.id }}" title="Slide-Deck bearbeiten">✏️ Edit</a>
   {% endif %}
   <button id="fullscreen-btn" title="Vollbild (oder F)">⛶</button>
-  <a href="/courses/{{ course.id }}/slides/{{ deck.id }}/present?print-pdf" target="_blank">⬇️ PDF</a>
+  <a id="pdf-link" href="/courses/{{ course.id }}/slides/{{ deck.id }}/present?print-pdf" target="_blank">⬇️ PDF</a>
 </div>
 <div class="present-shell" id="present-shell">
   {# Lade-Meldung: sichtbar, bis das Deck gefitet ist (Present: Startfolie
@@ -169,6 +169,7 @@ body.aicampus-laser * {
    Laser, Folgen) — docs/LLM-plans/slide-annotations-live-share.md #}
 <script src="{{ asset('js/slide-live.js') }}"></script>
 <script src="{{ asset('js/slide-live-viewer.js') }}"></script>
+<script src="{{ asset('js/slide-notes-print.js') }}"></script>
 <script src="{{ asset('vendor/reveal/reveal.js') }}"></script>
 {# Highlight-Plugin (Code-Highlighting + data-line-numbers/Per-Line-Reveal;
    nutzt das global geladene highlight.js aus base.html) #}
@@ -998,6 +999,9 @@ async function aicampusDoMount() {
   // erfolgt 2 Animation-Frame nach dem Class-Set; der MutationObserver
   // feuert als Microtask davor — Timing s. wireKatexFragmentResort).
   if (/print-pdf/.test(window.location.search)) {
+    // Folienbreite schon für Reveal's Höhenmessung (setupPDF) fest — sonst hängt
+    // sie vom Fenster ab (Handy: schmal → mehr Umbrüche → "zu hohe" Folien).
+    document.documentElement.style.setProperty("--pdf-slide-w", SLIDE_W + "px");
     const doPrintFit = () => fitSlides(slidesEl, SLIDE_W, SLIDE_H);
     if (document.documentElement.classList.contains("print-pdf")) {
       doPrintFit();
@@ -1260,11 +1264,14 @@ async function aicampusDoMount() {
     const margin = reveal.getConfig().margin ?? 0.04;
     const pageW = Math.floor(SLIDE_W * (1 + margin));
     const pageH = Math.floor(SLIDE_H * (1 + margin));
+    // Seitenhöhe wie Reveal (pdfPageHeightOffset, default -1): 1 px kürzer als die
+    // @page-Höhe, sonst erzeugen Rundungsfehler beim Drucken Leerseiten.
+    const pageOffset = reveal.getConfig().pdfPageHeightOffset ?? -1;
     const fixPdfLayout = () => {
       document.querySelectorAll(".pdf-page").forEach((p) => {
         const n = Math.max(1, Math.round((parseFloat(p.style.height) || pageH) / pageH));
         if (n > 1) return; // Mehr-Seiten-Folie: Reveal-Layout behalten
-        p.style.height = pageH + "px";
+        p.style.height = (pageH + pageOffset) + "px";
         const s = p.querySelector(":scope > section");
         if (!s) return;
         s.style.height = SLIDE_H + "px";
@@ -1295,7 +1302,7 @@ async function aicampusDoMount() {
     const doPrint = () => {
       if (printStarted) return;
       printStarted = true;
-      waitAppletHeights().then(() => {
+      waitAppletHeights().then(async () => {
         if (printed) return;
         printed = true;
         fixPdfLayout();
@@ -1306,6 +1313,15 @@ async function aicampusDoMount() {
         fitSlides(slidesEl, SLIDE_W, SLIDE_H);
         // Deck erst HIER sichtbar machen (davor verdeckt, Lade-Meldung) →
         // der erste PDF-Frame ist das fertige, gefitete Layout.
+        // Notizen (Stift + Whiteboard-Seiten hinten) nur auf Wunsch (?withnotes=1)
+        if (/[?&]withnotes=1/.test(window.location.search)) {
+          try {
+            await aicampusNotesPrint.apply({
+              courseId, deckId: DECK_ID, slidesEl, slideW: SLIDE_W, slideH: SLIDE_H,
+              board: BOARD_THEME, boardBg: LIVE_BOARD_BG, pageH: pageH + pageOffset,
+            });
+          } catch (e) { console.warn("[pdf] Notizen nicht gedruckt", e); }
+        }
         document.getElementById("reveal-root").style.visibility = "";
         document.getElementById("present-loading")?.remove();
         window.print();
@@ -1334,6 +1350,13 @@ async function aicampusMountDeck() {
   }
 }
 
+// ─── PDF-Export: Notizen optional mitdrucken ───────────────────────────────
+// Druck-Tab: lokale Plugin-Daten verwerfen (das Chalkboard-Plugin würde sonst
+// veraltete Whiteboards aus der sessionStorage selbst anhängen) — Notizen
+// kommen ausschließlich vom Server (slide-notes-print.js, ?withnotes=1).
+if (/print-pdf/.test(window.location.search)) {
+  try { sessionStorage.removeItem("aicampus-chalkboard-" + courseId + "-" + DECK_ID); } catch (e) { /* egal */ }
+}
 aicampusMountDeck();
 
 // ─── Live-Update (MCP): Deck extern bearbeitet → Remount auf der Folie ───

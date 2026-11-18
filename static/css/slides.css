@@ -1341,6 +1341,14 @@ html.print-pdf .reveal .slides > section {
   height: auto !important;
 }
 
+/* Feste Folienbreite schon bei Reveal's Höhenmessung (schmale Fenster, z. B. Handy). */
+html.print-pdf .reveal .slides section:not(.stack) { width: var(--pdf-slide-w, 960px); }
+
+/* Letzte Seite ohne Umbruch danach → keine Leerseite am Ende des PDFs. */
+html.print-pdf .reveal .slides .pdf-page:last-child {
+  page-break-after: auto;
+}
+
 /* layout: center im PDF: wie on-screen vertikal + horizontal zentriert.
    display:flex !important schlägt html.print-pdf .reveal .slides section
    (display:block !important) — beide !important, hier höhere Spezifität. */
