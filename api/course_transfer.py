@@ -65,7 +65,13 @@ async def export_zip(
     selection = _selection(body)
     if not any(selection.values()):
         raise HTTPException(400, "Bitte mindestens einen Inhalt auswählen.")
-    buf, filename = cts.build_export_zip(session, course, selection)
+    try:
+        buf, filename = cts.build_export_zip(session, course, selection)
+    except cts.TransferError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.exception("AICampus-Export fehlgeschlagen (Kurs %s)", course_id)
+        raise HTTPException(500, f"Export fehlgeschlagen: {e}")
     return StreamingResponse(
         buf,
         media_type="application/zip",

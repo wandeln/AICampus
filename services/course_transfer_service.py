@@ -303,7 +303,8 @@ def build_export_zip(session: Session, course: Course, selection: dict) -> tuple
     cid = course.id
     buf = io.BytesIO()
 
-    with tempfile.TemporaryDirectory(prefix="aicampus_export_") as tmp:
+    # Temp-Verzeichnis auf dem Data-Volume (/tmp im Container kann zu klein sein)
+    with tempfile.TemporaryDirectory(prefix="aicampus_export_", dir=TRANSFER_DIR) as tmp:
         root = Path(tmp)
 
         _dump_json(root / "manifest.json", {

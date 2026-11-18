@@ -3690,7 +3690,7 @@
           const s = selSet('media');
           s.clear();
           for (const it of (data.sections.media || [])) if (mediaUsedInSelected(it)) s.add(String(it.id));
-          for (const it of root.querySelectorAll('details[data-sec="media"] .at-item')) it.checked = s.has(String(it.id));
+          for (const cb of root.querySelectorAll('details[data-sec="media"] .at-item')) cb.checked = s.has(String(cb.dataset.id));
           syncSelall('media');
           refreshMeta();
           return;
