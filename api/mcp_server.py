@@ -13,7 +13,7 @@ Datenschutz (bewusste Tool-Whitelist, keine generischen Read-Tools):
 - Rolle STUDENT: nur `is_visible=True`-Content; Aufgaben ohne
   Musterlösung und ohne MC-Richtigkeitsflags (mc_service.student_view)
 - Write-Tools (create_chapter / create_slide_deck / create_task /
-  edit_content / edit_applet / create_applet / edit_task / Versions-Tools):
+  reorder_content / edit_content / edit_applet / create_applet / edit_task / Versions-Tools):
   nur Tutor/Prof +
   Write-Schalter des Tokens (PAT: allow_write, OAuth: Consent-Entscheidung
   bzw. Grant-Update in den Settings — gilt auch für Admins). Versionierung:
@@ -315,7 +315,8 @@ _MCP_INSTRUCTIONS = (
         "bearbeiten: create_chapter, create_slide_deck (neue Inhalte sind per"
         " Default NICHT für Studenten sichtbar — is_visible=True zum "
         "Freischalten), edit_content (stellenweise Edits ODER kompletter "
-        "Content-Ersatz, plus Titel/Kurzfassung), edit_applet (inkl. "
+        "Content-Ersatz, plus Titel/Kurzfassung), reorder_content "
+        "(Kapitel/Decks/Aufgaben/Quellen umsortieren), edit_applet (inkl. "
         "Formatwechsel html↔svg, Titel/Beschreibung), create_applet "
         "(HTML-/SVG-Applets) und create_image "
         "(Bilder und Videos (mp4/WebM) per Data-URL oder öffentlicher URL; "
@@ -2340,6 +2341,58 @@ async def create_slide_deck(
                    else "Noch NICHT für Studenten sichtbar (Entwurf) — nach Fertigstellung in der Kurs-Web-UI freischalten.")
             ),
         })
+
+
+@mcp_tool
+async def reorder_content(
+    course_id: int,
+    type: str,
+    order: list[int],
+    ctx: Context,
+) -> str:
+    """Sortiert Skript-Kapitel (type="script_section"), Slide-Decks
+    ("slide_deck"), Übungsaufgaben ("task") oder Quellen ("reference")
+    eines Kurses neu (Write).
+
+    order = IDs in der gewünschten neuen Reihenfolge (IDs: course_overview /
+    list_references). Die Liste muss ALLE Elemente dieses Typs im Kurs genau
+    einmal enthalten (Papierkorb-Elemente zählen nicht). ACHTUNG Quellen: die
+    Zitations-Nummern = Position in der Reihenfolge, ein Umsortieren ändert
+    also die Nummern aller Quellen. Es werden keine Versionen angelegt (nur
+    die Reihenfolge ändert sich, kein Inhalt). Offene Seiten aktualisieren sich still."""
+    models = {
+        "script_section": (ScriptSection, "Kapitel"),
+        "slide_deck": (CourseMaterial, "Slide-Decks"),
+        "task": (Task, "Aufgaben"),
+        "reference": (CourseReference, "Quellen"),
+    }
+    if type not in models:
+        raise McpToolError(f"type muss einer von {', '.join(models)} sein.")
+    with Session(engine) as session:
+        _auth(ctx, session, course_id, write=True, tool_name="reorder_content")
+        model, label = models[type]
+        stmt = select(model).where(model.course_id == course_id)  # type: ignore[attr-defined]
+        if type == "slide_deck":
+            stmt = stmt.where(CourseMaterial.material_type == MaterialType.SLIDES)
+        items = {i.id: i for i in session.exec(stmt).all()}
+        if len(order) != len(set(order)):
+            raise McpToolError("order enthält doppelte IDs.")
+        unknown = [i for i in order if i not in items]
+        missing = [i for i in items if i not in order]
+        if unknown or missing:
+            raise McpToolError(
+                f"order muss genau alle {label} des Kurses enthalten. "
+                f"Unbekannte IDs: {unknown or '–'}; fehlende IDs: {missing or '–'}."
+            )
+        for idx, item_id in enumerate(order):
+            items[item_id].display_order = idx
+            session.add(items[item_id])
+        session.commit()
+        if order:
+            # Quiet-Live-Update: offene Seiten holen sich die neue Reihenfolge
+            # (origin_type="reorder"); bei Quellen ändern sich zudem die Nummern.
+            notify.push_content_updated(session, course_id, type, order[0], origin_type="reorder")
+        return _json({"type": type, "order": order, "note": f"{label}-Reihenfolge aktualisiert."})
 
 
 def _validate_deadline(deadline: Optional[str]) -> None:

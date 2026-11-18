@@ -457,8 +457,25 @@
       return;
     }
     if (data.entity_type !== "slide_deck") return;
+    if (data.origin_type === "reorder") { slLiveReorderDecks(); return; }
     slLiveDeckUpdate(data.entity_id);
   });
+  // Decks per MCP umsortiert → Kacheln still umhängen (Reihenfolge vom Server),
+  // Refmap neu laden und Kacheln neu mounten (S-Nummern hängen an der Reihenfolge).
+  async function slLiveReorderDecks() {
+    const grid = document.getElementById("deck-grid");
+    const res = await fetch(`/api/courses/${courseId}/materials`, { credentials: "same-origin" });
+    if (!grid || !res.ok) return;
+    const anchor = grid.querySelector(".deck-create-btn");
+    const tiles = (await res.json())
+      .map((d) => grid.querySelector(`:scope > [data-deck-id="${d.id}"]`))
+      .filter(Boolean);
+    const cur = [...grid.querySelectorAll(":scope > [data-deck-id]")];
+    if (cur.every((t, i) => t === tiles[i])) return; // Reihenfolge unverändert
+    tiles.forEach((t) => grid.insertBefore(t, anchor));
+    await refreshCourseRefMap();
+    for (const deckId of deckStates.keys()) slRemountDeck(deckId, false);
+  }
 
   // ─── Deck-Verwaltung ────────────────────────────────────────────
 

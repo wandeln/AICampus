@@ -1581,6 +1581,22 @@
     sqLiveFlash(card);
   }
 
+  // Kapitel per MCP umsortiert → Karten still umhängen (Reihenfolge vom Server),
+  // Kapitelnummern/TOC/Refmap aktualisieren. Karten behalten ihren Zustand.
+  async function sqLiveReorderSections() {
+    const container = document.getElementById('script-reading');
+    if (container.querySelector('[data-new]')) return; // Neukapitel in Arbeit
+    const res = await fetch(`/api/courses/${courseId}/script-sections`, { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const sections = await res.json();
+    const cur = [...container.querySelectorAll('.script-chapter-card[data-section-id]')].map((c) => c.getAttribute('data-section-id'));
+    const want = sections.map((x) => String(x.id)).filter((id) => cur.includes(id));
+    if (cur.join() === want.join()) return;
+    want.forEach((id) => container.appendChild(container.querySelector(`.script-chapter-card[data-section-id="${id}"]`)));
+    await refreshCourseRefMap();
+    sqBuildToc();
+  }
+
   // Quelle oder Aufgabe angelegt/geändert/gelöscht (UI, anderer Tab oder MCP):
   // gecachte Refmap neu laden und alle sichtbaren Previews neu rendern,
   // damit @cite:/@task: sofort auflöst (kein Reload).
@@ -1629,6 +1645,7 @@
       return;
     }
     if (data.entity_type !== 'script_section') return;
+    if (data.origin_type === 'reorder') { await sqLiveReorderSections(); return; }
     const force = data.origin_type === 'applet';
     if (await sqLiveEditSection(data.entity_id, force)) return;
     await sqLiveCreateSection(data.entity_id);
