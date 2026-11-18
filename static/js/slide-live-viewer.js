@@ -20,7 +20,8 @@
     "rgba(220,133,41,1)", "rgba(220,0,220,1)", "rgba(255,220,0,1)"];
   const MARKER_W = 3, CHALK_W = 7, ERASER_R = 20;
   const PEN_REF = 1.5;   // Skala, bei der die Breiten den Pixelwerten entsprechen (= plugin.js penK)
-  const GRID = { color: "rgba(50,50,10,0.5)", distance: 80, width: 2 };
+  const GRIDS = { chalkboard: { color: "rgba(50,50,10,0.5)", distance: 80, width: 2 },
+    whiteboard: { color: "rgba(127,127,255,0.1)", distance: 40, width: 2 } };
   const LASER_STALE_MS = 2000;
 
   // Auge: dieselben Icons wie der Sichtbarkeits-Schalter (Kapitel/Folien/Aufgaben, script.html)
@@ -35,6 +36,8 @@
    */
   function mount(opts) {
     const { reveal, root, tutor } = opts;
+    const WHITE = opts.board === "whiteboard";   // Whiteboard: Filzstift statt Kreide
+    const GRID = GRIDS[WHITE ? "whiteboard" : "chalkboard"];
     // Remount: alte DOM-Teile + Listener des vorigen Mounts entfernen
     root.querySelectorAll(".slive-root, .slive-ui, .slive-laser-box").forEach((el) => el.remove());
     (window._sliveOffs || []).forEach((f) => f());
@@ -146,7 +149,7 @@
       const X = (x) => G.xo + x * G.sc, Y = (y) => G.yo + y * G.sc;
       if (e.type === "draw") {
         ctx.lineCap = "round";
-        if (mode === 0) {
+        if (mode === 0 || WHITE) {
           ctx.lineWidth = MARKER_W * G.sc / PEN_REF;
           ctx.strokeStyle = MARKERS[e.color] || MARKERS[0];
           ctx.beginPath(); ctx.moveTo(X(e.x1), Y(e.y1)); ctx.lineTo(X(e.x2), Y(e.y2)); ctx.stroke();

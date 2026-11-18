@@ -71,6 +71,8 @@ ASPECT_LABELS: dict[str, str] = {
     "golden": "Goldener Schnitt",
 }
 DEFAULT_ASPECT = "16:9"
+BOARD_THEMES = ("whiteboard", "chalkboard")
+DEFAULT_BOARD = "whiteboard"
 
 # Logo: Ecke der Folie (Key) + Skalierung (1.0 = Default-Größe 2.6em).
 LOGO_POSITIONS = ("top-left", "top-right", "bottom-left", "bottom-right")
@@ -650,6 +652,7 @@ def resolve_theme(raw: Optional[dict]) -> dict:
         "logo_scale": _clamp_logo_scale_lenient(raw.get("logo_scale", 1.0)),
         "aspect_ratio": aspect,
         "aspect_value": ASPECT_RATIOS[aspect],
+        "board": raw.get("board") if raw.get("board") in BOARD_THEMES else DEFAULT_BOARD,
     }
 
 
@@ -669,6 +672,7 @@ def validate_theme(raw) -> dict:
         "logo_position": DEFAULT_LOGO_POSITION,
         "logo_scale": 1.0,
         "aspect_ratio": DEFAULT_ASPECT,
+        "board": DEFAULT_BOARD,
     }
 
     if "template" in raw and raw["template"] is not None:
@@ -727,5 +731,11 @@ def validate_theme(raw) -> dict:
                 f"Unbekanntes Seitenverhältnis '{a}' (erlaubt: {', '.join(ASPECT_RATIOS)})."
             )
         theme["aspect_ratio"] = a
+
+    if "board" in raw and raw["board"] is not None:
+        b = str(raw["board"])
+        if b not in BOARD_THEMES:
+            raise SlideError(f"Unbekannte Tafel '{b}' (erlaubt: {', '.join(BOARD_THEMES)}).")
+        theme["board"] = b
 
     return theme

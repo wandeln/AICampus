@@ -1196,6 +1196,7 @@ body.present-mode .present-shell .reveal {
    cursor: pointer;
    -webkit-tap-highlight-color: transparent;
 }
+.palette[data-mode="1"] .cb-actions button[data-cb-action="board"],
 .palette .cb-actions button:hover {
    color: #fff;
 }

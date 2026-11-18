@@ -192,7 +192,8 @@ body.aicampus-laser * {
   const HAS_NOTES = {{ "true" if is_tutor else "false" }}; // Notes-Plugin nur für Tutoren/Profs
   const USER_ID = {{ current_user.id }};
   const LIVE_OFF = /[?&]nolive\b/.test(location.search); // Diagnose: Live-Notizen komplett aus (?nolive)
-  const LIVE_BOARD_BG = {{ asset('vendor/reveal/plugin/chalkboard/img/blackboard.png') | tojson }};
+  const BOARD_THEME = {{ slides_theme.board | tojson }}; // "whiteboard" | "chalkboard"
+  const LIVE_BOARD_BG = {{ asset('vendor/reveal/plugin/chalkboard/img/' ~ ('whiteboard' if slides_theme.board == 'whiteboard' else 'blackboard') ~ '.png') | tojson }};
 </script>
 <script>
 // Vollbild auf Dokumentebene umschalten (Browser-Fullscreen API).
@@ -339,9 +340,12 @@ document.querySelector("#reveal-root .slides-fullscreen-btn")?.addEventListener(
 //   LASER – Laser-Punkt + Spur + Color-Picker, kein Zeichnen
 // Übergänge (C und L werden komplett von hier gesteuert):
 //   L (Taste oder Laser-Feld):  OFF→LASER, PEN→LASER, LASER→OFF
-//   C (Taste):                  OFF→PEN, PEN→OFF; LASER→PEN (letzte Farbe,
-//                               sonst erste); Whiteboard (W) geöffnet → W
-//                               schließt
+//   Vier Zustände: C (Zeichnen auf Folien), W (Whiteboard), SC / SW (normale
+//   Folien; davor war C bzw. W aktiv; Start = SC).
+//   C-Taste:      W,SC,SW → C;  C → SC   (LASER auf Folie → C)
+//   W-Taste:      C,SC,SW → W;  W → SW
+//   Stift-Button: C → SC, SC → C, W → SW, SW → W (= C- bzw. W-Taste je nach
+//                 Zustand)
 //   Farbfeld/Radier:            LASER→PEN (mit der gewählten Farbe); PEN: Plugin
 //   X/Y (Farbwechsel):          LASER→PEN (der Farbwechsel greift weiterhin)
 // Der Color-Picker ist in PEN und LASER sichtbar; das Laser-Feld wird wie die
@@ -372,7 +376,7 @@ const aicampusLaser = HAS_NOTES ? (function () {
   let prevActive = [];      // zuvor markiertes Farbfeld/Radier
   let penBtnWasLaser = false; // Stift-Button war zuletzt LASER-Aus (s. handlePenButton)
   let trailRaf = 0;
-  let notesPickerWasOn = false; // Folien-Picker-Zustand vor W (zurück bei W aus)
+  let lastKind = "C"; // normale Folien: davor C (SC) oder W (SW) aktiv
 
   // ── Persistente DOM-Teile + Document-Listener (einmalig) ─────────────────
   const trail = document.createElement("canvas");
@@ -624,47 +628,42 @@ const aicampusLaser = HAS_NOTES ? (function () {
       setActive(true);
     }
   }
-  // C: OFF→PEN, PEN→OFF, LASER→PEN (zuletzt gewählte Farbe wird
-  // wiederverwendet, nur wenn nie eine gewählt war: erste Farbe —
-  // schwarz bzw. auf der Tafel weiß). Auf der Tafel lässt sich der
-  // Picker NICHT ausschalten (Maus-Modus macht dort keinen Sinn) – C ist
-  // dort ein No-Op. Das Board selbst rührt C nicht an (das macht W).
+  // Zustand C / W / S (S = normale Folien, lastKind unterscheidet SC / SW).
+  const wbOpen = () => curBoard() === 1;
+  const markFirstColor = () => {
+    const marked = canvases[curBoard()]?.querySelector(".palette li.cb-active");
+    if (!marked || marked.hasAttribute("data-laser")) RevealChalkboard.colorIndex(0);
+  };
+  // Whiteboard schließen → normale Folien (Picker aus), merkt "davor W"
+  const closeBoard = () => {
+    RevealChalkboard.toggleChalkboard();
+    hidePicker();
+    lastKind = "W";
+  };
+  // C-Taste: W,S → C;  C → SC.  (Laser auf der Folie → Stift, wie bisher.)
   function handleC() {
     penBtnWasLaser = false; // Pen/Laser per Taste geändert → Button-Merker ungültig
-    if (mode() === "LASER") {
-      setActive(false);
-      // setActive(false) hat die zuletzt aktive Farbmarkierung zurückgesetzt
-      // (prevActive) → nur falls nichts markiert ist, die erste Farbe.
-      const pal = canvases[curBoard()]?.querySelector(".palette");
-      const marked = pal?.querySelector("li.cb-active");
-      if (!marked || marked.hasAttribute("data-laser")) {
-        RevealChalkboard.colorIndex(0);
-      }
-    } else if (mode() === "PEN" && curBoard() === 0) {
-      hidePicker();
-    } else if (mode() === "OFF") {
+    if (wbOpen()) {
+      if (active) setActive(false);
+      RevealChalkboard.toggleChalkboard();
       showPicker();
-      // Beim ersten Öffnen markiert das Plugin noch keine Farbe –
-      // dann die erste Farbe aktivieren (vorherige Auswahl bleibt erhalten).
-      const pal = canvases[curBoard()]?.querySelector(".palette");
-      const marked = pal?.querySelector("li.cb-active");
-      if (!marked || marked.hasAttribute("data-laser")) {
-        RevealChalkboard.colorIndex(0);
-      }
+      markFirstColor();
+    } else if (active) {
+      setActive(false);
+      markFirstColor();
+    } else if (cOn()) {
+      hidePicker();
+      lastKind = "C";
+    } else {
+      showPicker();
+      markFirstColor(); // beim ersten Öffnen markiert das Plugin noch keine Farbe
     }
   }
-  // W: Whiteboard einfach an/aus – von jedem Zustand aus. Beim
-  // Einschalten (Picker bisher zu) zeigt es die Tafel-Palette, das Plugin
-  // markiert dort die weiße Kreide. Beim Ausschalten kommt man in denselben
-  // Zustand zurück, den der Folien-Picker vorher hatte.
+  // W-Taste: C,S → W;  W → SW.
   function handleW() {
-    const wb = canvases[1];
-    if (!wb) return;
-    if (wb.style.visibility === "visible") {
-      RevealChalkboard.toggleChalkboard();
-      notesPickerWasOn ? showPicker() : hidePicker();
-    } else {
-      notesPickerWasOn = cOn();
+    if (!canvases[1]) return;
+    if (wbOpen()) closeBoard();
+    else {
       RevealChalkboard.toggleChalkboard();
       showPicker();
     }
@@ -734,11 +733,14 @@ const aicampusLaser = HAS_NOTES ? (function () {
         const acts = document.createElement("div");
         acts.className = "cb-actions";
         const run = (a) => {
-          if (a === "undo") RevealChalkboard.undo();
+          if (a === "board") (curBoard() === 1 ? handleC : handleW)(); // nur C ↔ W
+          else if (a === "undo") RevealChalkboard.undo();
           else if (a === "redo") RevealChalkboard.redo();
           else RevealChalkboard.clear();
         };
         [
+          ["board", "Zwischen Zeichnen auf Folien (C) und Whiteboard (W) wechseln",
+            '<svg viewBox="0 0 16 16" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="9" rx="1"></rect><path d="M8 11.5v2.5M5 14h6"></path></svg>'],
           ["undo", "Zug zurücknehmen (Strg+Z)",
             '<svg viewBox="0 0 16 16" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 3.5 2.5 6.5l3 3"></path><path d="M2.5 6.5H9a3.5 3.5 0 0 1 0 7H5"></path></svg>'],
           ["redo", "Zug wiederholen (Strg+Y)",
@@ -786,7 +788,6 @@ const aicampusLaser = HAS_NOTES ? (function () {
     // verborgenem Picker, Whiteboard zu): Tafel, Picker und Laser neu anwenden.
     if (wbWasOn) {
       RevealChalkboard.toggleChalkboard();
-      notesPickerWasOn = true;
     }
     if (pickerWasOn) showPicker();
     if (active) {
@@ -796,23 +797,20 @@ const aicampusLaser = HAS_NOTES ? (function () {
     }
   }
 
-  // Stift-BUTTON (unten links):
-  //   LASER → LASER aus + Leiste aus (= exakt L), merkt "war Laser"
-  //   OFF   → "war Laser"? LASER wieder an (+ Leiste) : C-Übergang (→PEN)
-  //   PEN   → C-Übergang (→OFF)
-  // Die Übergänge laufen über die bestehenden handleL/handleC (Pointer-
-  // Events, readOnly, Markierungen bleiben konsistent). Der Merker überlebt
-  // Button-Zyklen (LASER↔OFF bleibt der Button-Laser-Toggle) und wird
-  // nur bei C-/L-Nutzung gelöscht (beide Funktionen setzen ihn false).
+  // Stift-BUTTON (unten links): C → SC, SC → C, W → SW, SW → W, d.h. die
+  // C- bzw. W-Taste je nach aktuellem Zustand. Laser: LASER → aus (+ Leiste
+  // aus, wie L), merkt "war Laser"; danach (normale Folien) schaltet der
+  // nächste Klick den Laser wieder an.
   function handlePenButton() {
-    const m = mode();
-    if (m === "LASER") {
+    if (active) {
       handleL();
       penBtnWasLaser = true; // NACH handleL: dessen Reset überleben
-    } else if (m === "OFF" && penBtnWasLaser) {
+    } else if (!wbOpen() && !cOn() && penBtnWasLaser) {
       penBtnWasLaser = false;
       showPicker();
       setActive(true);
+    } else if (wbOpen() || (!cOn() && lastKind === "W")) {
+      handleW();
     } else {
       handleC();
     }
@@ -1091,7 +1089,9 @@ async function aicampusDoMount() {
       // Schleier (rgba(127,127,127,.1)), der die Folie sichtbar abdunkelt.
       // background[1] (Textur) bleibt die Theme-Textur — die dient nur dem
       // Chalkboard-Modus (W) und dem Radiergummi-Pattern.
-      background: [ "rgba(0,0,0,0)", "{{ asset('vendor/reveal/plugin/chalkboard/img/blackboard.png') }}" ],
+      // theme: Tafel-Art aus dem Design (Whiteboard = Filzstifte, Blackboard = Kreide).
+      theme: BOARD_THEME,
+      background: [ "rgba(0,0,0,0)", LIVE_BOARD_BG ],
       keyBindings: {
         // keyCode 87 = Großbuchstaben-ASCII von "W": Moderne Browser (Chrome
         // & Co.) melden bei keydown 65-90, nicht den legacy-Kleinbuchstaben-Code (119).
@@ -1149,7 +1149,7 @@ async function aicampusDoMount() {
     aicampusLiveViewer.mount({
       reveal, root: document.getElementById("reveal-root"), tutor: HAS_NOTES,
       deckId: DECK_ID, courseId, slideW: SLIDE_W, slideH: SLIDE_H,
-      assetBoard: LIVE_BOARD_BG, selfUserId: USER_ID,
+      assetBoard: LIVE_BOARD_BG, board: BOARD_THEME, selfUserId: USER_ID,
     });
     if (HAS_NOTES) aicampusLiveTutorBind();
   }

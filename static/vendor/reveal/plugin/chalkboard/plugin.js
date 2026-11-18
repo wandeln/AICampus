@@ -502,7 +502,8 @@ const initChalkboard = function ( Reveal ) {
 			container.style.visibility = 'hidden';
 
 			if ( colorButtons ) {
-				var palette = createPalette( chalks, colorButtons );
+				// AICAMPUS PATCH: Palette folgt dem Theme (Whiteboard: Filzstifte statt Kreiden)
+				var palette = createPalette( pens[ id ], colorButtons );
         palette.dataset.mode = id;
 				container.appendChild( palette );
 			}

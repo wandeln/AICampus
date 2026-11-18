@@ -606,6 +606,7 @@
     logo_scale: theme.logo_scale,
     aspect_ratio: theme.aspect_ratio,
     aspect_value: theme.aspect_value,
+    board: theme.board,
   };
   let previewReveal = null;
   let previewAspect = null;
@@ -638,6 +639,8 @@
     }
     const aspect = document.getElementById("tm-aspect");
     if (aspect) aspect.value = themeState.aspect_ratio;
+    const board = document.getElementById("tm-board");
+    if (board) board.value = themeState.board;
     const footer = document.getElementById("tm-footer");
     if (footer) footer.checked = !!themeState.footer;
     const logo = document.getElementById("tm-logo");
@@ -752,8 +755,17 @@
     await applyPreview();
   };
 
-  window.closeThemeModal = function () {
+  // Auto-Save: jede Änderung im Dialog wird (entprellt) gespeichert; die Seite
+  // (Kacheln etc.) lädt beim Schließen neu, wenn etwas gespeichert wurde.
+  let saveTimer = 0, saved = false;
+  window.closeThemeModal = async function () {
+    if (saveTimer) await saveTheme();
     document.getElementById("theme-modal").classList.add("hidden");
+    if (saved) window.location.reload();
+  };
+
+  window.setBoard = function (value) {
+    themeState.board = value;
   };
 
   window.pickTemplate = async function (name) {
@@ -826,7 +838,9 @@
     await applyPreview();
   };
 
-  window.saveTheme = async function () {
+  async function saveTheme() {
+    clearTimeout(saveTimer);
+    saveTimer = 0;
     const payload = {
       template: themeState.template,
       colors: themeState.colors,
@@ -838,6 +852,7 @@
       logo_position: themeState.logo_position,
       logo_scale: themeState.logo_scale,
       aspect_ratio: themeState.aspect_ratio,
+      board: themeState.board,
     };
     try {
       const res = await fetch(`/api/courses/${courseId}/slides-theme`, {
@@ -851,12 +866,19 @@
         showToast(data.detail || "Fehler beim Speichern.", "error");
         return;
       }
-      closeThemeModal();
-      window.location.reload();
+      saved = true;
     } catch (err) {
       showToast("Fehler: " + err.message, "error");
     }
-  };
+  }
+
+  // Änderungen im Dialog (Handler laufen vorher und setzen themeState) → speichern
+  // (Dialog-HTML steht erst nach diesem Script → Delegation am document)
+  const queueSave = () => { clearTimeout(saveTimer); saveTimer = setTimeout(saveTheme, 500); };
+  const inModal = (e) => e.target.closest?.("#theme-modal");
+  document.addEventListener("input", (e) => { if (inModal(e)) queueSave(); });
+  document.addEventListener("change", (e) => { if (inModal(e)) queueSave(); });
+  document.addEventListener("click", (e) => { if (e.target.closest?.("#theme-modal [data-tmpl]")) queueSave(); });
 
   // Logo-Auswahl (nur PROF/Admin: Medien-API ist PROF-only —
   // ungebremst wäre es für Tutor/Student ein 403)
@@ -883,8 +905,10 @@
 {% if is_tutor or is_admin %}
 
 <!-- ═══ Design-Modal (Folien-Theme pro Kurs) ═══ -->
-<div id="theme-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto p-6">
+<div id="theme-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+     onclick="if (event.target === this) closeThemeModal()">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl mx-4 overflow-hidden py-4">
+   <div class="max-h-[calc(90vh-2rem)] overflow-y-auto px-6 py-2">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-xl font-bold text-gray-800">🎨 Folien-Design</h2>
       <button onclick="closeThemeModal()" class="text-gray-400 hover:text-gray-600 text-lg">✕</button>
@@ -945,6 +969,15 @@
           <p class="text-xs text-gray-400 mt-1">Gilt für Präsentation, Vorschau und PDF.</p>
         </div>
 
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Tafel (Taste W)</label>
+          <select id="tm-board" onchange="setBoard(this.value)"
+                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <option value="whiteboard">Whiteboard</option>
+            <option value="chalkboard">Blackboard (Kreide)</option>
+          </select>
+        </div>
+
         <label class="flex items-center gap-2 text-sm text-gray-700">
           <input type="checkbox" id="tm-footer" {% if slides_theme.footer %}checked{% endif %}
                  onchange="setFooter(this.checked)" class="rounded">
@@ -986,8 +1019,8 @@
         {% endif %}
       </div>
 
-      <!-- Live-Vorschau -->
-      <div>
+      <!-- Live-Vorschau (breite Ansicht: oben angeheftet) -->
+      <div class="md:sticky md:top-0 md:self-start">
         <label class="block text-sm font-medium text-gray-700 mb-2">Vorschau (Beispiel-Folie)</label>
         <div id="theme-preview" class="slides-preview-shell border border-gray-200">
           <div class="reveal" id="theme-preview-reveal">
@@ -996,17 +1029,12 @@
         </div>
         <p class="text-xs text-gray-400 mt-2">
           Die Vorschau zeigt eine Beispiel-Folie. Kacheln und Präsentationen
-          verwenden dieses Design sofort nach dem Speichern.
+          verwenden dieses Design; Änderungen werden automatisch gespeichert.
         </p>
       </div>
     </div>
 
-    <div class="flex justify-end gap-3 mt-6">
-      <button onclick="closeThemeModal()"
-              class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition">Abbrechen</button>
-      <button onclick="saveTheme()"
-              class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition font-semibold">Speichern</button>
-    </div>
+   </div>
   </div>
 </div>
 
