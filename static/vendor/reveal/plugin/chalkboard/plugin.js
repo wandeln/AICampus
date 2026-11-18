@@ -1035,6 +1035,14 @@ const initChalkboard = function ( Reveal ) {
 	}
 
 
+	// AICAMPUS PATCH: die Palette der Tafel hat ein eigenes (inline gesetztes)
+	// visibility → sie erbt das Verbergen des Containers nicht und blieb
+	// (unsichtbar, opacity 0) bedienbar. Daher beim Öffnen/Schließen mitsetzen.
+	function setBoardPalette( v ) {
+		var pal = drawingCanvas[ 1 ].container && drawingCanvas[ 1 ].container.querySelector( '.palette' );
+		if ( pal ) pal.style.visibility = v;
+	}
+
 	/**
 	 * Show an overlay for the chalkboard.
 	 */
@@ -1042,6 +1050,7 @@ const initChalkboard = function ( Reveal ) {
 //console.log("showChalkboard");
 		drawingCanvas[ 1 ].container.style.opacity = 1;
 		drawingCanvas[ 1 ].container.style.visibility = 'visible';
+		setBoardPalette( 'visible' );
 		mode = 1;
 	}
 
@@ -1052,6 +1061,7 @@ const initChalkboard = function ( Reveal ) {
 	function closeChalkboard() {
 		drawingCanvas[ 1 ].container.style.opacity = 0;
 		drawingCanvas[ 1 ].container.style.visibility = 'hidden';
+		setBoardPalette( 'hidden' );
 		lastX = null;
 		lastY = null;
 		mode = 0;
