@@ -271,6 +271,7 @@ def export_preview(session: Session, course: Course) -> dict:
         )
 
     counts = media_service.reference_counts(session, cid)
+    refmap = media_service.reference_map_by_entity(session, cid)
     for m in session.exec(
         select(CourseMedia)
         .where(CourseMedia.course_id == cid)
@@ -281,6 +282,7 @@ def export_preview(session: Session, course: Course) -> dict:
         sections["media"].append({
             "id": m.id, "title": m.title, "type": m.media_type,
             "size": m.file_size, "usage_count": total, "checked": total > 0,
+            "used_by": refmap.get(fname, {}),
         })
 
     for r in session.exec(
@@ -515,7 +517,7 @@ def stage_zip_upload(course_id: int, zip_path: Path) -> dict:
     if not isinstance(version, int) or version < 1:
         raise TransferError("manifest.json enthält keine gültige Version.")
 
-    preview = _import_preview(extracted)
+    preview = _import_preview(extracted, manifest.get("source_course_id") if isinstance(manifest.get("source_course_id"), int) else None)
     if not any(preview["sections"].values()):
         raise TransferError("Zip enthält keine importierbaren Inhalte.")
     return {
@@ -529,11 +531,15 @@ def stage_zip_upload(course_id: int, zip_path: Path) -> dict:
     }
 
 
-def _import_preview(extracted: Path) -> dict:
+def _import_preview(extracted: Path, src_course_id: Optional[int]) -> dict:
     """Seiten der Preview aus den extrahierten JSONs bauen (IDs = Listenindizes)."""
     sections: dict[str, list[dict]] = {k: [] for k in SECTION_ORDER}
 
-    for i, item in enumerate(_as_list(_load_json_if(extracted / "script" / "sections.json", None))):
+    script_raw = _as_list(_load_json_if(extracted / "script" / "sections.json", None))
+    decks_raw = _as_list(_load_json_if(extracted / "slides" / "decks.json", None))
+    tasks_raw = _as_list(_load_json_if(extracted / "tasks" / "tasks.json", None))
+
+    for i, item in enumerate(script_raw):
         if not isinstance(item, dict):
             continue
         sections["script"].append({
@@ -541,7 +547,7 @@ def _import_preview(extracted: Path) -> dict:
             "visible": bool(item.get("is_visible", True)), "checked": True,
         })
 
-    for i, item in enumerate(_as_list(_load_json_if(extracted / "slides" / "decks.json", None))):
+    for i, item in enumerate(decks_raw):
         if not isinstance(item, dict):
             continue
         sections["slides"].append({
@@ -553,13 +559,34 @@ def _import_preview(extracted: Path) -> dict:
             {"id": "__theme__", "title": "Foliendesign (Theme)", "checked": True}
         )
 
-    for i, item in enumerate(_as_list(_load_json_if(extracted / "tasks" / "tasks.json", None))):
+    for i, item in enumerate(tasks_raw):
         if not isinstance(item, dict):
             continue
         sections["tasks"].append({
             "id": i, "title": str(item.get("title") or f"Aufgabe {i + 1}"),
             "type": str(item.get("task_type") or "?"), "checked": True,
         })
+
+    # Welche Medien referenzieren welche Inhalte im ZIP (Listenindizes)?
+    ref_re = re.compile(
+        rf"/media/{src_course_id}/([A-Za-z0-9._\-]+)" if src_course_id
+        else r"/media/[^/]+/([A-Za-z0-9._\-]+)"
+    )
+    used: dict[str, dict[str, set[int]]] = {}
+
+    def mark(text: Any, kind: str, idx: int) -> None:
+        for fname in ref_re.findall(str(text or "")):
+            used.setdefault(fname, {}).setdefault(kind, set()).add(idx)
+
+    for i, it in enumerate(tasks_raw):
+        if isinstance(it, dict):
+            mark(it.get("description"), "task", i)
+    for i, it in enumerate(decks_raw):
+        if isinstance(it, dict):
+            mark(it.get("content"), "slide_deck", i)
+    for i, it in enumerate(script_raw):
+        if isinstance(it, dict):
+            mark(it.get("content"), "script_section", i)
 
     media_entries = _as_list(_load_json_if(extracted / "media" / "media.json", None))
     files_dir = extracted / "media" / "files"
@@ -574,6 +601,7 @@ def _import_preview(extracted: Path) -> dict:
             "usage_count": item.get("usage_count") or 0,
             "file": fname,
             "file_present": bool(fname and (files_dir / fname).is_file()),
+            "used_by": {k: sorted(v) for k, v in used.get(fname, {}).items()},
             "checked": True,
         })
 

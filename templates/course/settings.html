@@ -3523,6 +3523,8 @@
       media:      { icon: '🖼️', label: 'Medien' },
       references: { icon: '📚', label: 'Quellen' },
     };
+    // media used_by-Typ → Sektions-Key (für „Nur verwendete auswählen")
+    const MEDIA_KEYMAP = { task: 'tasks', slide_deck: 'slides', script_section: 'script' };
 
     function esc(s) {
       const d = document.createElement('div');
@@ -3567,6 +3569,45 @@
         return SECTION_ORDER.reduce((n, k) => n + selected[k].size, 0);
       }
 
+      // Zähler/Buttons ohne kompletten Re-Render aktualisieren (behält Scroll-Position)
+      function refreshMeta() {
+        if (!data) return;
+        for (const key of SECTION_ORDER) {
+          const det = root.querySelector('details[data-sec="' + key + '"]');
+          if (!det) continue;
+          const cnt = det.querySelector('.at-count');
+          if (cnt) cnt.textContent = '(' + selSet(key).size + '/' + (data.sections[key] || []).length + ')';
+        }
+        const tot = root.querySelector('.at-total');
+        if (tot) {
+          const mediaBytes = (data.sections.media || [])
+            .filter(it => selSet('media').has(String(it.id)))
+            .reduce((sum, it) => sum + (it.size || 0), 0);
+          tot.textContent = totalSelected() + ' Inhalte ausgewählt' +
+            (mediaBytes ? ' · Medien: ' + fmtBytes(mediaBytes) : '');
+        }
+        const btn = root.querySelector('.at-action');
+        if (btn) {
+          btn.disabled = busy || !totalSelected();
+          const nc = btn.querySelector('.at-ncount');
+          if (nc) nc.textContent = totalSelected();
+        }
+      }
+      function syncSelall(key) {
+        const det = root.querySelector('details[data-sec="' + key + '"]');
+        const sa = det && det.querySelector('.at-selall');
+        if (!sa) return;
+        const n = selSet(key).size, m = (data.sections[key] || []).length;
+        sa.checked = m > 0 && n === m;
+        sa.indeterminate = n > 0 && n < m;
+      }
+      // Medium wird in mind. einem aktuell ausgewählten Inhalt referenziert
+      function mediaUsedInSelected(it) {
+        const ub = it.used_by || {};
+        return Object.keys(MEDIA_KEYMAP).some(ty =>
+          (ub[ty] || []).some(id => selSet(MEDIA_KEYMAP[ty]).has(String(id))));
+      }
+
       function itemRow(key, it) {
         const id = String(it.id);
         const checked = selected[key].has(id) ? 'checked' : '';
@@ -3596,7 +3637,7 @@
         const allChecked = items.length > 0 && items.every(it => s.has(String(it.id)));
         let extra = '';
         if (key === 'media' && items.length) {
-          extra = '<button type="button" class="at-usedonly text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 transition">Nur verwendete auswählen</button>';
+          extra = '<button type="button" class="at-usedonly text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 transition" title="Nur Medien auswählen, die in den aktuell ausgewählten Kapiteln, Foliensätzen oder Aufgaben referenziert werden">Nur verwendete auswählen</button>';
         }
         const rows = items.length
           ? items.map(it => itemRow(key, it)).join('')
@@ -3605,7 +3646,7 @@
           '<summary class="flex items-center gap-2 px-3 py-2 cursor-pointer select-none bg-gray-50 rounded-t-lg">' +
           '<span class="text-sm">' + meta.icon + '</span>' +
           '<span class="text-sm font-semibold text-gray-700 flex-1">' + meta.label +
-            ' <span class="text-gray-400 font-normal">(' + s.size + '/' + items.length + ')</span></span>' +
+            ' <span class="text-gray-400 font-normal at-count">(' + s.size + '/' + items.length + ')</span></span>' +
           extra +
           '<label class="flex items-center gap-1 text-xs text-gray-500 cursor-pointer">' +
             '<input type="checkbox" class="at-selall" data-sec="' + key + '" ' + (allChecked ? 'checked' : '') + '> alle</label>' +
@@ -3623,7 +3664,7 @@
         let action = '';
         if (mode === 'export') {
           action = '<div class="flex items-center justify-between pt-3 border-t border-gray-200">' +
-            '<span class="text-xs text-gray-500">' + n + ' Inhalte ausgewählt' +
+            '<span class="text-xs text-gray-500 at-total">' + n + ' Inhalte ausgewählt' +
             (mediaBytes ? ' · Medien: ' + fmtBytes(mediaBytes) : '') + '</span>' +
             '<button type="button" class="at-action bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition font-semibold" ' + (busy || !n ? 'disabled' : '') + '>' +
             (busy ? 'Erzeugt…' : '📤 ZIP exportieren') + '</button></div>';
@@ -3631,7 +3672,7 @@
           action = '<div class="flex items-center justify-between pt-3 border-t border-gray-200">' +
             '<button type="button" class="at-newzip text-xs px-2.5 py-1 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 transition">ZIP erneut wählen</button>' +
             '<button type="button" class="at-action bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700 transition font-semibold" ' + (busy || !n ? 'disabled' : '') + '>' +
-            (busy ? 'Importiert…' : '📥 In Kurs importieren (' + n + ')') + '</button></div>';
+            (busy ? 'Importiert…' : '📥 In Kurs importieren (<span class="at-ncount">' + n + '</span>)') + '</button></div>';
         }
         let metaLine = '';
         if (mode === 'import' && manifest) {
@@ -3648,8 +3689,10 @@
           e.preventDefault();
           const s = selSet('media');
           s.clear();
-          for (const it of (data.sections.media || [])) if ((it.usage_count || 0) > 0) s.add(String(it.id));
-          render();
+          for (const it of (data.sections.media || [])) if (mediaUsedInSelected(it)) s.add(String(it.id));
+          for (const it of root.querySelectorAll('details[data-sec="media"] .at-item')) it.checked = s.has(String(it.id));
+          syncSelall('media');
+          refreshMeta();
           return;
         }
         if (e.target.closest('.at-action')) {
@@ -3663,12 +3706,15 @@
         if (el.classList.contains('at-item')) {
           const s = selSet(el.dataset.sec);
           if (el.checked) s.add(el.dataset.id); else s.delete(el.dataset.id);
-          render();
+          syncSelall(el.dataset.sec);
+          refreshMeta();
         } else if (el.classList.contains('at-selall')) {
-          const s = selSet(el.dataset.sec);
-          if (el.checked) for (const it of (data.sections[el.dataset.sec] || [])) s.add(String(it.id));
-          else s.clear();
-          render();
+          const key = el.dataset.sec;
+          const s = selSet(key);
+          s.clear();
+          if (el.checked) for (const it of (data.sections[key] || [])) s.add(String(it.id));
+          for (const it of root.querySelectorAll('details[data-sec="' + key + '"] .at-item')) it.checked = el.checked;
+          refreshMeta();
         } else if (el.classList.contains('at-file') && el.files && el.files[0]) {
           uploadZip(el.files[0]);
         }

@@ -631,6 +631,39 @@ def referencing_entities(session: Session, course_id: int, filename: str) -> lis
     return out
 
 
+def reference_map_by_entity(session: Session, course_id: int) -> dict[str, dict[str, list[int]]]:
+    """Welcher Inhalt referenziert welche Medium-Datei (Entity-IDs pro Filename).
+
+    Returns: {filename: {"task": [ids], "slide_deck": [ids],
+    "script_section": [ids], ...}} — für den AICampus-Export:
+    „Nur verwendete auswählen" relativ zu den ausgewählten Inhalten.
+    """
+    pattern = _reference_pattern(course_id)
+    out: dict[str, dict[str, set[int]]] = {}
+
+    def add(fname: str, kind: str, entity_id: int) -> None:
+        out.setdefault(fname, {}).setdefault(kind, set()).add(entity_id)
+
+    for t in session.exec(select(Task).where(Task.course_id == course_id)).all():
+        if t.description:
+            for fname in pattern.findall(t.description):
+                add(fname, "task", t.id)
+    for mat in session.exec(
+        select(CourseMaterial).where(CourseMaterial.course_id == course_id)
+    ).all():
+        if mat.content:
+            kind = "slide_deck" if mat.material_type == MaterialType.SLIDES else "script_material"
+            for fname in pattern.findall(mat.content):
+                add(fname, kind, mat.id)
+    for s in session.exec(
+        select(ScriptSection).where(ScriptSection.course_id == course_id)
+    ).all():
+        if s.content:
+            for fname in pattern.findall(s.content):
+                add(fname, "script_section", s.id)
+    return {fname: {k: sorted(v) for k, v in kinds.items()} for fname, kinds in out.items()}
+
+
 def sync_media_usages(session: Session, course_id: int) -> None:
     """Rebaut die MediaUsage-Einträge eines Kurses aus dem Markdown-Inhalt.
 
