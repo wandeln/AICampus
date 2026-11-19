@@ -104,13 +104,13 @@ body.aicampus-laser * {
         C-Übergang (OFF↔PEN) über das Laser/Stift-Framework (s.
         aicampusLaser — das Plugin's eigene C ist nach Live-Remounts
         defekt). #}
-     {% if is_tutor %}
-     <button type="button" class="slides-pen-btn" title="Stift (Taste C) umschalten" aria-label="Stiftmodus umschalten">
+     {# Tutoren: Stift/Whiteboard-Zustände. Studierende: Notizen des Dozenten an/aus (Viewer
+        zeigt den Button nur bei freigegebenen Notizen). #}
+     <button type="button" class="slides-pen-btn"{% if is_tutor %} title="Stift (Taste C) umschalten"{% else %} style="display:none"{% endif %} aria-label="{% if is_tutor %}Stiftmodus umschalten{% else %}Notizen des Dozenten ein-/ausblenden{% endif %}">
        <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
          <path d="M11.33 2a1.89 1.89 0 1 1 2.67 2.67L5 13.67 1.33 14.67l1-3.67L11.33 2z"></path>
        </svg>
      </button>
-     {% endif %}
       <button type="button" class="slides-overview-btn" title="Folien-Übersicht (Overview, Taste O) umschalten" aria-label="Folien-Übersicht umschalten">
         <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">
           <rect x="1" y="1" width="6" height="6" rx="1.2"></rect>
@@ -150,6 +150,7 @@ body.aicampus-laser * {
     <button type="button" data-key="67"><kbd>C</kbd><span>Stift (Folie)</span></button>
     <button type="button" data-key="87"><kbd>W</kbd><span>Whiteboard</span></button>
     <button type="button" data-key="76"><kbd>L</kbd><span>Laser-Pointer</span></button>
+    <button type="button" data-key="86"><kbd>V</kbd><span id="shortcut-live-label">Live verfolgbar: aus</span></button>
     <button type="button" data-action="undo"><kbd>Strg</kbd><kbd>Z</kbd><span>Zug zurücknehmen</span></button>
     <button type="button" data-action="redo"><kbd>Strg</kbd><kbd>Y</kbd><span>Zug wiederholen</span></button>
     {% endif %}
@@ -188,6 +189,7 @@ body.aicampus-laser * {
   // Global für den Markdown-Renderer (Xrefs @sec:/@task: → Skript-Ref-Map)
   const courseId = {{ course.id }};
   const DECK_ID = {{ deck.id }};
+  const DECK_VISIBLE = {{ "true" if deck.is_visible else "false" }}; // für Studierende sichtbar? (Live-Popup nur dann)
   const FOOTER_TEXT = {{ slides_footer_text | tojson }};
   const FOOTER_ENABLED = {{ "true" if slides_theme.footer else "false" }};
   const SLIDE_THEME = {{ slides_theme | tojson }}; // aufgelöstes Theme (Seitenverhältnis …)
@@ -889,7 +891,66 @@ function aicampusLiveTutorBind() {
   badge.style.display = "none";
   document.body.appendChild(badge);
   L.on("status", (st) => { badge.style.display = st === "offline" && L.active ? "" : "none"; });
+
+  // Live verfolgbar (der Dozent entscheidet; Zustand gilt pro Verbindung): Taste V
+  const liveLabel = document.getElementById("shortcut-live-label");
+  L.on("live", (on) => { if (liveLabel) liveLabel.textContent = "Live verfolgbar: " + (on ? "an" : "aus"); });
+  document.addEventListener("keydown", (e) => {
+    if (e.keyCode !== 86 || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;   // V (Strg+V = Einfügen)
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(input|select|textarea)$/i.test(t.tagName || ""))) return;
+    L.setLive(!L.live);
+    aicampusToast(L.live ? "Live verfolgbar: an – Studierende können dir folgen" : "Live verfolgbar: aus");
+  });
 }
+
+// Kurzer Hinweis unten in der Präsentation: leicht transparent, blendet sanft ein und aus
+function aicampusToast(msg) {
+  const t = document.createElement("div");
+  t.className = "slive-toast";
+  t.textContent = msg;
+  t.style.cssText = "opacity:0;background:rgba(17,24,39,.7);transition:opacity .25s ease;pointer-events:none";
+  document.getElementById("reveal-root").appendChild(t);
+  requestAnimationFrame(() => requestAnimationFrame(() => { t.style.opacity = "1"; }));
+  setTimeout(() => { t.style.opacity = "0"; }, 1500);
+  setTimeout(() => t.remove(), 1800);
+}
+
+// Beim Start der Präsentation (Dozenten): live verfolgbar machen? Schließen / Klick daneben / Esc = Nein.
+function aicampusAskLive() {
+  const box = document.createElement("div");
+  box.style.cssText = "position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;font-family:sans-serif";
+  const card = document.createElement("div");
+  card.style.cssText = "background:#fff;color:#111;border-radius:12px;padding:20px 24px;max-width:440px;box-shadow:0 10px 40px rgba(0,0,0,.4)";
+  card.innerHTML = '<div style="font-weight:600;font-size:17px;margin-bottom:8px">Live verfolgbar machen?</div>'
+    + '<div style="font-size:14px;color:#444;margin-bottom:16px">Studierende können dir dann live folgen '
+    + '(Folie, Laserpointer, bei freigegebenen Notizen auch Stift und Whiteboard). '
+    + 'Mit der Taste <b>V</b> kannst du das jederzeit ändern.</div>';
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;gap:8px;justify-content:flex-end";
+  const close = (on) => {
+    document.removeEventListener("keydown", onEsc, true);
+    box.remove();
+    if (on) aicampusLive.setLive(true);
+  };
+  const onEsc = (e) => { if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); close(false); } };
+  const btn = (txt, primary, on) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = txt;
+    b.style.cssText = "padding:6px 14px;border-radius:8px;font-size:14px;cursor:pointer;border:1px solid #ccc;background:"
+      + (primary ? "#2563eb;color:#fff;border-color:#2563eb" : "#fff;color:#111");
+    b.addEventListener("click", () => close(on));
+    return b;
+  };
+  row.append(btn("Nein", false, false), btn("Ja, live verfolgbar", true, true));
+  card.appendChild(row);
+  box.appendChild(card);
+  box.addEventListener("click", (ev) => { if (ev.target === box) close(false); });
+  document.addEventListener("keydown", onEsc, true);
+  document.body.appendChild(box);
+}
+let aicampusLiveAsked = false;
 
 let aicampusLiveInited = false;
 let aicampusSlideDims = { w: 960, h: 540 }; // Folien-Config-Raum (Laser-/Stiftgröße)
@@ -1073,6 +1134,10 @@ async function aicampusDoMount() {
     // (User-defined Bindings haben Vorrang vor Reveal's System-Bindings.)
     keyboard: {
       70: togglePageFullscreen,
+      // V ist bei Reveal zusätzlich ein Alias für Pause/Break (B) → entfernen:
+      // V gehört dem Live-Verfolgen (Dozenten, s. aicampusLiveTutorBind). Ein
+      // benutzerdefinierter Eintrag hat Vorrang vor dem Reveal-Default.
+      86: () => {},
       // Space/Enter in der Overview: das markierte Slide öffnen und DORT
       // bleiben. Natives Space würde deactivate() und danach NOCH next()
       // aufrufen → ein Slide zu weit. Außerhalb der Overview exakt das
@@ -1168,6 +1233,11 @@ async function aicampusDoMount() {
       assetBoard: LIVE_BOARD_BG, board: BOARD_THEME, selfUserId: USER_ID,
     });
     if (HAS_NOTES) aicampusLiveTutorBind();
+    // Dozent startet die Präsentation (nicht bei Remounts/Speaker-View): Live-Verfolgen erlauben?
+    if (HAS_NOTES && !isLive && !aicampusLiveAsked && DECK_VISIBLE && !/receiver/i.test(window.location.search)) {
+      aicampusLiveAsked = true;
+      aicampusAskLive();
+    }
   }
   // Laser-Pointer (nur Tutoren): Taste L + Color-Picker-Feld am frischen
   // Chalkboard-Container verdrahten (s. aicampusLaser oben).

@@ -32,6 +32,7 @@
 <script src="{{ asset('vendor/reveal/reveal.js') }}"></script>
 <script src="{{ asset('js/slides.js') }}"></script>
 <script src="{{ asset('js/slide-notes-print.js') }}"></script>
+<script src="{{ asset('js/deck-access-menu.js') }}"></script>
 {% if is_tutor or is_admin %}
 <!-- SortableJS (MIT) — Drag-and-Drop Deck-Reihenfolge (nur Tutor/PROF) -->
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js"></script>
@@ -105,16 +106,9 @@
         <a href="/courses/{{ course.id }}/slides/{{ d.id }}"
            class="text-xs border border-gray-300 rounded-lg px-2.5 py-1.5 text-gray-600 hover:bg-gray-50 transition"
            title="Bearbeiten">✏️</a>
-        <button onclick="toggleDeckVisibility({{ d.id }}, {{ 'true' if d.is_visible else 'false' }})"
-                class="text-xs border border-gray-300 rounded-lg px-2.5 py-1.5 transition inline-flex items-center justify-center p-1.5 rounded"
-                title="{% if d.is_visible %}Verstecken{% else %}Einblenden{% endif %}"
-                style="color: {% if d.is_visible %}#9ca3af{% else %}#d1d5db{% endif %};">
-          {% if d.is_visible %}
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-          {% else %}
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
-          {% endif %}
-        </button>
+        {# Zugriffsstufe (versteckt / sichtbar / sichtbar mit Notizen): static/js/deck-access-menu.js #}
+        <button type="button" data-deck-access data-course="{{ course.id }}" data-deck="{{ d.id }}" data-level="{{ d.access }}"
+                class="text-xs border border-gray-300 rounded-lg px-2.5 py-1.5 transition inline-flex items-center justify-center hover:bg-gray-50"></button>
         {% endif %}
         {% if is_prof or is_admin %}
         <button onclick="deleteDeck({{ d.id }})"
@@ -500,25 +494,6 @@
       // ?new=1: „Fertig“ ohne Änderung verwirft das Deck wieder
       // (slides_edit.html) — es bleibt kein leeres Deck in der Liste.
       window.location.href = `/courses/${courseId}/slides/${data.material.id}?new=1`;
-    } catch (err) {
-      showToast("Fehler: " + err.message, "error");
-    }
-  };
-
-  window.toggleDeckVisibility = async function (deckId, visible) {
-    try {
-      const res = await fetch(`/api/courses/${courseId}/materials/${deckId}`, {
-        method: "PUT",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ is_visible: !visible }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        showToast(data.detail || "Fehler.", "error");
-        return;
-      }
-      window.location.reload();
     } catch (err) {
       showToast("Fehler: " + err.message, "error");
     }

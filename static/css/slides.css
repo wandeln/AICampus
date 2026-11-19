@@ -269,6 +269,18 @@
    outline: 2px solid #2563eb;
    outline-offset: 1px;
  }
+/* Studierende: Stift-Button = Notizen an/aus; aus → blass + diagonal durchgestrichen */
+ .reveal .slides-pen-btn.slive-off { opacity: 0.3; }
+ .reveal .slides-pen-btn.slive-off:hover { opacity: 0.6; }
+ /* Strich unterbricht den Stift nur oberhalb (kleine, dezente Lücke wie beim durchgestrichenen Auge) */
+ .reveal .slides-pen-btn.slive-off svg {
+   -webkit-mask-image: linear-gradient(45deg, #000 50%, transparent 50%, transparent calc(50% + 2.5px), #000 calc(50% + 2.5px));
+   mask-image: linear-gradient(45deg, #000 50%, transparent 50%, transparent calc(50% + 2.5px), #000 calc(50% + 2.5px));
+ }
+ .reveal .slides-pen-btn.slive-off::after {
+   content: ""; position: absolute; left: 50%; top: 50%; width: 26px; height: 2px; margin: -1px 0 0 -13px;
+   border-radius: 1px; background: currentColor; transform: rotate(45deg);
+ }
  html.print-pdf .reveal :is(.slides-overview-btn, .slides-pen-btn, .slides-fullscreen-btn, .slides-speaker-btn) {
    display: none;
  }
@@ -1468,10 +1480,12 @@ html.print-pdf body.present-mode .present-shell .reveal {
   border: 0; border-radius: 50%; background: transparent; color: #000; cursor: pointer; opacity: 0.55;
   transition: opacity 0.2s ease, background-color 0.2s ease;
 }
+.reveal .slive-board-btn { position: absolute; left: 12px; bottom: 112px; z-index: 40; }   /* 62 (Stift-Button) + 44 + 6 */
 .reveal .slive-btn:focus, .reveal .slive-btn:focus-visible { outline: none; }
 .reveal .slive-btn:hover { opacity: 1; background: rgba(0, 0, 0, 0.06); }
 .reveal .slive-btn.slive-off { opacity: 0.35; }
-.reveal .slive-btn.slive-on { opacity: 1; background: rgba(37, 99, 235, 0.15); color: #2563eb; }
+.reveal .slive-board-btn.slive-off { opacity: 0.3; }
+.reveal .slive-board-btn.slive-off:hover { opacity: 0.6; }
 .reveal .slive-select {
   width: max-content; max-width: none; field-sizing: content; font-size: 12px; padding: 2px 4px; border: 0; border-radius: 6px; cursor: pointer;
   background: transparent; color: #000; opacity: 0.35; transition: opacity 0.2s ease, background-color 0.2s ease;
@@ -1482,4 +1496,4 @@ html.print-pdf body.present-mode .present-shell .reveal {
   position: absolute; left: 50%; bottom: 70px; transform: translateX(-50%); z-index: 60;
   background: rgba(17, 24, 39, 0.92); color: #fff; padding: 6px 14px; border-radius: 999px; font-size: 13px;
 }
-html.print-pdf .reveal :is(.slive-root, .slive-ui, .slive-laser-box, .slive-toast) { display: none; }
+html.print-pdf .reveal :is(.slive-root, .slive-ui, .slive-laser-box, .slive-toast, .slive-board-btn) { display: none; }

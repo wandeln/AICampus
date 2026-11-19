@@ -6,8 +6,10 @@ SSE-Queues in notifications.py; NIE mit mehreren Workern betreiben).
 Jede Verbindung hat eine eigene Sendequeue + Writer-Task, damit ein langsamer
 Client weder andere blockiert noch die Reihenfolge der Nachrichten ändert.
 
-Studierende erhalten Inhalte (ops/laser/presence) erst, wenn das Deck
-freigegeben ist (``room.shared``); bis dahin nur ``share``/``hello``.
+Studierende erhalten Notizen (ops) und Laser erst, wenn das Deck mit Notizen
+freigegeben ist (``room.shared``). Presence (Folgen) bekommen alle — aber nur
+von Dozenten, die „live“ sind (``Conn.live``, vom Dozenten per Popup/Taste V
+gesetzt, flüchtig).
 
 Siehe docs/LLM-plans/slide-annotations-live-share.md.
 """
@@ -39,6 +41,7 @@ class Conn:
         self.tutor = tutor
         self.q: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_MAX)
         self.pres: Optional[dict] = None     # {slide, f, mode, board, active, ts}
+        self.live = False                    # Dozent ist für Folgen/Laser freigegeben
         self.dead = False
         self.writer: Optional[asyncio.Task] = None
         self._win = {}                       # Rate-Limit: kind → (Fensterstart, Anzahl)
@@ -126,11 +129,11 @@ def broadcast(room: Room, msg: dict, exclude: Optional[Conn] = None, force: bool
 # ─── Presence ───────────────────────────────────────────────────────
 
 def presence_list(room: Room) -> list[dict]:
-    """Aktive Tutoren (sichtbarer Tab) mit aktueller Position; je User der
-    jüngste Eintrag (mehrere Tabs desselben Users → ein Dropdown-Eintrag)."""
+    """Aktive, live-freigegebene Tutoren (sichtbarer Tab) mit aktueller Position; je User
+    der jüngste Eintrag (mehrere Tabs desselben Users → ein Dropdown-Eintrag)."""
     best: dict[int, Conn] = {}
     for c in room.conns:
-        if not c.tutor or not c.pres or not c.pres.get("active"):
+        if not c.tutor or not c.live or not c.pres or not c.pres.get("active"):
             continue
         cur = best.get(c.user_id)
         if cur is None or c.pres["ts"] > cur.pres["ts"]:
@@ -144,8 +147,8 @@ def presence_list(room: Room) -> list[dict]:
     return out
 
 
-def push_presence(room: Room, force: bool = False) -> None:
-    broadcast(room, {"type": "presence", "tutors": presence_list(room)}, force=force)
+def push_presence(room: Room) -> None:
+    broadcast(room, {"type": "presence", "tutors": presence_list(room)}, force=True)
 
 
 # ─── Join / Leave ───────────────────────────────────────────────────
@@ -154,8 +157,7 @@ def join(room: Room, c: Conn) -> None:
     room.conns.add(c)
     c.writer = asyncio.create_task(writer(c))
     enqueue(c, {"type": "hello", "shared": room.shared, "tutor": c.tutor, "uid": c.user_id, "cid": c.id})
-    if room.visible_to(c):
-        enqueue(c, {"type": "presence", "tutors": presence_list(room)})
+    enqueue(c, {"type": "presence", "tutors": presence_list(room)})
 
 
 def leave(room: Room, c: Conn) -> None:
@@ -163,7 +165,7 @@ def leave(room: Room, c: Conn) -> None:
     c.dead = True
     if c.writer:
         c.writer.cancel()
-    if c.tutor:
+    if c.tutor and c.live:
         push_presence(room)
     if not room.conns:
         _rooms.pop(room.deck_id, None)

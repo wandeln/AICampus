@@ -2,10 +2,12 @@
 // Live-Notizen: Viewer (Studierende) + Laser-Overlay + „Presenter folgen“.
 //
 // - Student: zeichnet freigegebene Notizen (Stift = Mode 0, Whiteboard = Mode 1)
-//   live auf eigene Canvases; Toggle (Auge) blendet alles aus/ein.
+//   live auf eigene Canvases; der Stift-Button links unten (Taste C) blendet sie aus/ein.
 // - Tutor (opts.tutor): KEINE Canvases (die zeichnet das Chalkboard-Plugin),
 //   nur Laser anderer Tutoren + Folgen-Dropdown.
-// - Folgen: Dropdown mit einem Eintrag je Tutor, der gerade im Deck ist.
+// - Folgen: Dropdown mit einem Eintrag je Dozent, der live verfolgbar ist (Taste V beim Dozenten).
+//   Ohne Notizen (nicht freigegeben / vom Studi ausgeblendet) folgt man nur der Folie,
+//   ohne Whiteboard und Laser.
 //
 // Rendering = Kopie der Plugin-Funktionen (static/vendor/reveal/plugin/chalkboard/
 // plugin.js: drawWithBoardmarker/drawWithChalk/eraseWithSponge) — in Sync halten!
@@ -62,9 +64,6 @@
     }
   }
 
-  // Auge: dieselben Icons wie der Sichtbarkeits-Schalter (Kapitel/Folien/Aufgaben, script.html)
-  const EYE = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
-  const EYE_OFF = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
   const BOARD = '<svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="9" rx="1"></rect><path d="M1.5 13.5h13"></path></svg>';
 
   /**
@@ -77,7 +76,7 @@
     const WHITE = opts.board === "whiteboard";   // Whiteboard: Filzstift statt Kreide
     const GRID = GRIDS[WHITE ? "whiteboard" : "chalkboard"];
     // Remount: alte DOM-Teile + Listener des vorigen Mounts entfernen
-    root.querySelectorAll(".slive-root, .slive-ui, .slive-laser-box").forEach((el) => el.remove());
+    root.querySelectorAll(".slive-root, .slive-ui, .slive-laser-box, .slive-board-btn").forEach((el) => el.remove());
     (window._sliveOffs || []).forEach((f) => f());
     const offs = (window._sliveOffs = []);
     const on = (t, fn) => offs.push(L.on(t, fn));
@@ -87,6 +86,8 @@
     const cache = new Map();        // uid → Map("mode|f" → {rev, events[]})
     let board = 0;                  // aktuelles Whiteboard-Board (folgt dem Tutor)
     let wbManual = false;           // Student hat „Whiteboard“ selbst geöffnet
+    const notesOn = () => visible && L.shared;   // Student: Notizen freigegeben + selbst eingeschaltet
+    const penBtn = tutor ? null : root.querySelector(".slides-pen-btn");
     let followUid = null;           // User-ID des gefolgten Tutors
     let navLock = 0;                // programmatische Navigation läuft (kein Auto-Unfollow)
     let stage = null, notes = null, wb = null, wbNum = null, grid = null, laserBox = null;
@@ -97,36 +98,23 @@
     ui.className = "slive-ui" + (tutor ? " slive-tutor" : "");
     root.appendChild(ui);
 
-    const toggleBtn = document.createElement("button");
-    toggleBtn.type = "button";
     const boardBtn = document.createElement("button");
     boardBtn.type = "button";
-    boardBtn.className = "slive-btn";
-    boardBtn.title = "Whiteboard dieser Folie anzeigen";
+    boardBtn.className = "slive-btn slive-board-btn";   // Studierende: links unten, über dem Stift-Button
+    boardBtn.title = "Whiteboard anzeigen";
     boardBtn.innerHTML = BOARD;
     const select = document.createElement("select");
     select.className = "slive-select";
     select.title = "Einem Dozenten folgen";
 
-    toggleBtn.className = "slive-btn";
-    if (tutor) {
-      // Tutor: Auge = Notizen für Studierende freigeben / beenden
-      toggleBtn.addEventListener("click", () => L.setShared(!L.shared));
-      ui.appendChild(toggleBtn);
-    } else {
-      toggleBtn.addEventListener("click", () => {
-        visible = !visible;
-        localStorage.setItem(LS_KEY, visible ? "1" : "0");
-        refreshUi();
-        render();
-        if (visible) ensureLoaded();
-      });
+    if (!tutor) {
       boardBtn.addEventListener("click", () => {
         if (wbState().show) { wbManual = false; followUid = null; }  // zurück zu den Slides, Folgen beenden
         else wbManual = true;
         refreshUi(); render();
       });
-      ui.append(toggleBtn, boardBtn);
+      boardBtn.addEventListener("click", () => boardBtn.blur());
+      root.appendChild(boardBtn);
     }
     ui.appendChild(select);
     // Fokus nach Klick abgeben: kein Fokusrahmen, und Leertaste/Enter/Pfeile gehen nicht an den Button
@@ -219,7 +207,7 @@
     function render() {
       if (tutor) return;
       const G = geo(), p = pos();
-      const on = visible && L.shared && !!p.uid;
+      const on = notesOn() && !!p.uid;
       notes.style.display = on ? "" : "none";
       nctx.clearRect(0, 0, G.w, G.h);
       wctx.clearRect(0, 0, G.w, G.h);
@@ -253,19 +241,42 @@
     }
     const onKey = (e) => {
       if ((e.keyCode !== 38 && e.keyCode !== 40) || e.altKey || e.ctrlKey || e.metaKey
-        || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target?.tagName || "") || !visible || !L.shared || !wbState().show) return;
+        || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target?.tagName || "") || !notesOn() || !wbState().show) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       stepBoard(e.keyCode === 40 ? 1 : -1);
     };
+    // Notizen an/aus (Stift-Button links unten bzw. Taste C) — nur Studierende, nur bei Freigabe
+    function toggleNotes() {
+      if (!L.shared) return;
+      visible = !visible;
+      localStorage.setItem(LS_KEY, visible ? "1" : "0");
+      refreshUi();
+      render();
+      if (visible) ensureLoaded();
+    }
+    const onC = (e) => {
+      if (e.keyCode !== 67 || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey
+        || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target?.tagName || "") || e.target?.isContentEditable) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      toggleNotes();
+    };
     if (!tutor) {
       document.addEventListener("keydown", onKey, true);
-      offs.push(() => document.removeEventListener("keydown", onKey, true));
+      document.addEventListener("keydown", onC, true);
+      const onPen = (e) => { e.stopPropagation(); e.currentTarget.blur(); toggleNotes(); };
+      penBtn?.addEventListener("click", onPen);
+      offs.push(() => {
+        document.removeEventListener("keydown", onKey, true);
+        document.removeEventListener("keydown", onC, true);
+        penBtn?.removeEventListener("click", onPen);
+      });
     }
 
     // ── Laden ────────────────────────────────────────────────────────
     async function ensureLoaded() {
-      if (tutor || !visible || !L.shared) return;
+      if (tutor || !notesOn()) return;
       const p = pos();
       if (!p.uid) return;
       await Promise.all([p.uid, L.WB].map(loadUid));   // Folie + globales Whiteboard
@@ -291,22 +302,19 @@
 
     // ── UI-Zustand ───────────────────────────────────────────────────
     function refreshUi() {
-      if (tutor) {
-        toggleBtn.innerHTML = L.shared ? EYE : EYE_OFF;
-        toggleBtn.title = L.shared ? "Notizen sind für Studierende freigegeben (klicken zum Beenden)" : "Notizen für Studierende freigeben";
-        toggleBtn.classList.toggle("slive-off", !L.shared);
-      } else {
-        toggleBtn.style.display = L.shared ? "" : "none";
-        toggleBtn.innerHTML = visible ? EYE : EYE_OFF;
-        toggleBtn.title = visible ? "Notizen des Dozenten ausblenden" : "Notizen des Dozenten einblenden";
-        toggleBtn.classList.toggle("slive-off", !visible);
-        const wbOn = visible && L.shared && wbState().show;
-        boardBtn.style.display = visible && L.shared && (wbHasInk() || wbOn) ? "" : "none";
-        boardBtn.classList.toggle("slive-on", wbOn);
+      if (!tutor) {
+        const wbOn = notesOn() && wbState().show;
+        boardBtn.style.display = notesOn() && (wbHasInk() || wbOn) ? "" : "none";
+        boardBtn.classList.toggle("slive-off", !wbOn);   // aktiv = normal, inaktiv = blass (wie der Stift-Button)
+        if (penBtn) {   // Stift-Button links unten: Notizen an/aus (nur bei freigegebenen Notizen sichtbar)
+          penBtn.style.display = L.shared ? "" : "none";
+          penBtn.classList.toggle("slive-off", !visible);
+          penBtn.title = visible ? "Notizen des Dozenten ausblenden (Taste C)" : "Notizen des Dozenten einblenden (Taste C)";
+        }
       }
-      // Folgen-Dropdown: eine Zeile je Tutor (außer mir); Studierende nur wenn freigegeben
+      // Folgen-Dropdown: eine Zeile je live verfolgbarem Dozenten (außer mir)
       const others = L.presence.filter((e) => e.uid !== opts.selfUserId);
-      const show = (tutor || L.shared) && (others.length > 0 || followUid != null);
+      const show = others.length > 0 || followUid != null;
       select.style.display = show ? "" : "none";
       select.innerHTML = "";
       const none = new Option("Niemandem folgen", "");
@@ -323,7 +331,7 @@
     function goToFollowed() {
       if (followUid == null) return;
       const e = L.presence.find((x) => x.uid === followUid);
-      if (!e) { followUid = null; toast("Dozent hat das Deck verlassen – Folgen beendet."); refreshUi(); return; }
+      if (!e) { followUid = null; toast("Der Dozent ist nicht mehr live verfolgbar – Folgen beendet."); refreshUi(); return; }
       const hv = L.hvFor(e.slide);
       if (!hv) return;
       const cur = reveal.getIndices();
@@ -409,9 +417,9 @@
         if (s.queue.length) any = true;
         const stale = !s.queue.length && performance.now() - s.t > LASER_STALE_MS;
         if (stale || !s.on) { s.el.style.display = "none"; if (stale && !s.pts.length) { s.el.remove(); lasers.delete(cid); } }
-        else if (s.slide === p.uid && (tutor || visible) && L.shared) { s.el.style.display = "block"; any = true; }
+        else if (s.slide === p.uid && (tutor || notesOn())) { s.el.style.display = "block"; any = true; }
         else s.el.style.display = "none";
-        if (s.pts.length && s.slide === p.uid && (tutor || visible)) {
+        if (s.pts.length && s.slide === p.uid && (tutor || notesOn())) {
           let a = 0.55;
           if (!s.pressed) { a = 0.55 * Math.exp(-(t - s.endT) / 1000 / 0.25); if (a < 0.01) { s.pts = []; continue; } }
           g.strokeStyle = `rgba(255,59,59,${a})`; g.lineWidth = lw; g.lineCap = "round"; g.lineJoin = "round";
@@ -481,7 +489,7 @@
         r.events.push(...m.events);
         const p = pos();
         const here = m.mode === 1 ? m.slide === L.WB : (p.uid === m.slide && p.f === m.f);
-        if (!gone && here && visible && L.shared && (m.mode === 0 || wbState().show)) {
+        if (!gone && here && notesOn() && (m.mode === 0 || wbState().show)) {
           const G = geo();
           for (const e of m.events) {
             if (m.mode === 1 && (e.board || 0) !== board) continue;

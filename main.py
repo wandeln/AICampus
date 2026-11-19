@@ -43,6 +43,7 @@ from database.models import (
     Course,
     CourseInvite,
     CourseMaterial,
+    SlideAnnotationShare,
     CourseMedia,
     CourseRole,
     CourseSlidesTheme,
@@ -72,6 +73,7 @@ from services.mc_service import (
     tutor_view as _mc_tutor_view,
 )
 from services import image_spec_service
+from services import slide_index_service
 from services import upload_service
 from services.task_filter import multi_keyword_matches, parse_type_filter
 from services import trash_service
@@ -1665,12 +1667,15 @@ async def slides_page(
     ).all()
     if not is_tutor:
         decks = [d for d in decks if d.is_visible]
+    shared_ids = {r.deck_id for r in session.exec(select(SlideAnnotationShare).where(SlideAnnotationShare.shared == True)).all()}  # noqa: E712
 
     ctx["decks"] = [
         {
             "id": d.id,
             "title": d.title,
             "is_visible": d.is_visible,
+            # Zugriffsstufe: hidden | visible | notes (sichtbar mit Notizen)
+            "access": "hidden" if not d.is_visible else ("notes" if d.id in shared_ids else "visible"),
             "slide_count": slide_count(d.content),
             # ISO-UTC (…Z): Template gibt es per [data-ts] aus, JS rechnet
             # client-seitig in lokale Zeit um. (Datetime hier wäre für das
@@ -1712,6 +1717,7 @@ async def slides_deck_page(
         "title": deck.title,
         "material_type": deck.material_type.value,
         "is_visible": deck.is_visible,
+        "access": "hidden" if not deck.is_visible else ("notes" if slide_index_service.is_shared(session, deck.id) else "visible"),
     }
     ctx["material_kind"] = MaterialType.SLIDES.value
     ctx["material_label"] = "Folien"

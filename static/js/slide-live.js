@@ -9,13 +9,14 @@
 // in Reveal-Reihenfolge); slides.js setzt `data-slide-uid` an jedes <section>.
 // L.setDeck() baut daraus die Map uid ↔ (h,v). Das Wire-Protokoll kennt nur uids.
 //
-// Events (L.on): open, close, status, share, presence, laser, remote-op, gap
+// Events (L.on): open, close, status, share, live, presence, laser, remote-op, gap
 // ─────────────────────────────────────────────────────────────────────
 (function () {
   const L = (window.aicampusLive = {
     active: false,   // Tutor: Server-Sync aktiv (Plugin meldet Events) — Plugin prüft das
     tutor: false,
     shared: false,
+    live: false,     // Tutor: für Studierende/andere Dozenten live verfolgbar (Popup beim Start / Taste V)
     userKey: "0",
     presence: [],
     status: "ok",    // ok | offline
@@ -118,6 +119,7 @@
       retry = 0;
       setStatus("ok");
       for (const u of unacked) rawSend(u.msg); // unbestätigte Ops erneut (Server dedupliziert)
+      if (L.tutor && L.live) rawSend({ type: "live", on: true });   // Live-Status gilt pro Verbindung
       emit("open");
     };
     mine.onmessage = (e) => {
@@ -263,7 +265,7 @@
   });
   window.addEventListener("pagehide", flushPending);
 
-  // ── Presence / Laser / Freigabe (Tutor) ────────────────────────────
+  // ── Presence / Laser / Live (Tutor) ────────────────────────────
   let lastView = "";
   L.sendView = (v) => {
     if (!L.tutor) return;
@@ -309,7 +311,11 @@
     else if (!laserTimer) laserTimer = setTimeout(flushLaser, LASER_BATCH_MS);
   };
 
-  L.setShared = (shared) => rawSend({ type: "share", shared: !!shared });
+  L.setLive = (on) => {
+    L.live = !!on;
+    rawSend({ type: "live", on: L.live });
+    emit("live", L.live);
+  };
 
   // ── Tutor: Server-Stand → Plugin-Storage (sessionStorage) seeden ────
   // Das Plugin lädt `config.storage` synchron beim Init; wir schreiben den

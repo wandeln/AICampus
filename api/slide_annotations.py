@@ -5,7 +5,7 @@ Live-Notizen für Slide-Decks (Stift, Whiteboard, Laser).
 - GET /api/courses/{c}/slides/{d}/annotations        alle Notizen (Tutor; Init)
 - GET /api/courses/{c}/slides/{d}/annotations/slide  eine Folie (Tutor; Student nur wenn freigegeben)
 - GET /api/courses/{c}/slides/{d}/annotations/state  {shared}
-- PUT /api/courses/{c}/slides/{d}/annotations/share  Freigabe (Tutor)
+- PUT /api/courses/{c}/slides/{d}/access             Zugriffsstufe hidden|visible|notes (Tutor)
 
 Persistenz/Abgleich: services/slide_index_service.py, Raum: services/slide_live.py.
 Siehe docs/LLM-plans/slide-annotations-live-share.md.
@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlmodel import Session, select
@@ -80,16 +81,24 @@ def get_annotation_state(course_id: int, deck_id: int, session: Session = Depend
     return {"shared": svc.is_shared(session, deck_id)}
 
 
-@router.put("/api/courses/{course_id}/slides/{deck_id}/annotations/share")
-async def put_share(course_id: int, deck_id: int, body: dict, session: Session = Depends(get_session),
-                    user: User = Depends(get_current_user)):
-    _deck, is_tutor = _access(session, user, course_id, deck_id)
+@router.put("/api/courses/{course_id}/slides/{deck_id}/access")
+async def put_access(course_id: int, deck_id: int, body: dict, session: Session = Depends(get_session),
+                     user: User = Depends(get_current_user)):
+    """Zugriffsstufe des Decks: hidden (versteckt) | visible (sichtbar ohne Notizen) | notes (mit Notizen)."""
+    deck, is_tutor = _access(session, user, course_id, deck_id)
     if not is_tutor:
         raise HTTPException(403, "Nur für Tutoren.")
-    shared = bool(body.get("shared"))
+    level = body.get("level")
+    if level not in ("hidden", "visible", "notes"):
+        raise HTTPException(400, "Ungültige Stufe.")
+    deck.is_visible = level != "hidden"
+    deck.updated_at = datetime.now(timezone.utc)
+    session.add(deck)
+    session.commit()
+    shared = level == "notes"
     svc.set_shared(session, deck_id, shared, user.id)
     _apply_share(deck_id, shared)
-    return {"shared": shared}
+    return {"level": level}
 
 
 def _apply_share(deck_id: int, shared: bool) -> None:
@@ -98,8 +107,6 @@ def _apply_share(deck_id: int, shared: bool) -> None:
         return
     room.shared = shared
     live.broadcast(room, {"type": "share", "shared": shared}, force=True)
-    if shared:
-        live.push_presence(room)
 
 
 # ─── WebSocket ──────────────────────────────────────────────────────
@@ -107,11 +114,6 @@ def _apply_share(deck_id: int, shared: bool) -> None:
 def _apply_sync(deck_id: int, op: dict):
     with Session(engine) as s:
         return svc.apply_op(s, deck_id, op)
-
-
-def _set_shared_sync(deck_id: int, shared: bool, uid: int) -> None:
-    with Session(engine) as s:
-        svc.set_shared(s, deck_id, shared, uid)
 
 
 def _num(v) -> bool:
@@ -189,7 +191,7 @@ async def _handle(room: live.Room, conn: live.Conn, msg: dict) -> None:
             live.broadcast(room, {"type": "op", **result}, exclude=conn)
 
     elif t == "laser":
-        if not conn.allow("laser", 60):
+        if not conn.live or not conn.allow("laser", 60):
             return
         slide = msg.get("slide")
         if not (isinstance(slide, str) and svc.UID_RE.match(slide)):
@@ -215,10 +217,12 @@ async def _handle(room: live.Room, conn: live.Conn, msg: dict) -> None:
             return
         conn.pres = {"slide": slide, "f": f, "mode": mode, "board": board,
                      "active": bool(msg.get("active", True)), "ts": time.time()}
-        live.push_presence(room)
+        if conn.live:
+            live.push_presence(room)
 
-    elif t == "share":
-        shared = bool(msg.get("shared"))
-        async with room.lock:
-            await asyncio.to_thread(_set_shared_sync, room.deck_id, shared, conn.user_id)
-            _apply_share(room.deck_id, shared)
+    elif t == "live":
+        if not conn.allow("live", 5):
+            return
+        # Dozent macht sich für Studierende (und andere Dozenten) live verfolgbar / nicht mehr
+        conn.live = bool(msg.get("on"))
+        live.push_presence(room)
