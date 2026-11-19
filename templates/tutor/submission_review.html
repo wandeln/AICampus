@@ -1220,9 +1220,18 @@
       var bubble = document.createElement('div');
       bubble.className = 'bg-gray-50 rounded-lg p-3 border border-gray-200';
       var qDiv = document.createElement('div');
-      qDiv.className = 'text-sm text-gray-600 mb-1.5 font-medium';
-      qDiv.textContent = '\u2753 ' + h.question;
+      qDiv.className = 'text-sm text-gray-600 mb-1.5 font-medium flex items-start gap-1.5';
+      var qIcon = document.createElement('span');
+      qIcon.textContent = '\u2753';
+      qDiv.appendChild(qIcon);
+      var qMd = document.createElement('div');
+      qMd.className = 'hint-question flex-1 min-w-0';
+      qDiv.appendChild(qMd);
       bubble.appendChild(qDiv);
+      renderMarkdown(h.question, qMd, { breaks: true }).catch(function(e) {
+        console.warn('Failed to render hint question markdown:', e);
+        qMd.textContent = h.question;
+      });
       var responseDiv = document.createElement('div');
       responseDiv.className = 'text-sm text-gray-800 markdown-preview-area';
       renderMarkdown(h.llm_response, responseDiv).catch(function(e) {
