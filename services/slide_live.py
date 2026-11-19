@@ -62,6 +62,7 @@ class Room:
         self.conns: set[Conn] = set()
         self.lock = asyncio.Lock()           # serialisiert Ops pro Deck (Reihenfolge + rev)
         self.seqs: dict[str, int] = {}       # cs → letzte verarbeitete seq (Dedup bei Reconnect)
+        self.redo: dict = {}                 # gemeinsamer Redo-Puffer je Zeile (flüchtig)
 
     def visible_to(self, c: Conn, force: bool = False) -> bool:
         return force or c.tutor or self.shared

@@ -111,9 +111,17 @@ def _apply_share(deck_id: int, shared: bool) -> None:
 
 # ─── WebSocket ──────────────────────────────────────────────────────
 
-def _apply_sync(deck_id: int, op: dict):
+def _apply_sync(deck_id: int, op: dict, redo: dict, actor: int):
     with Session(engine) as s:
-        return svc.apply_op(s, deck_id, op)
+        result = svc.apply_op(s, deck_id, op, redo)
+        if result and op.get("kind") in ("undo", "redo"):
+            # Auslöser + Autor der Gruppe (sid-Präfix = User-ID) → Hinweis „von X rückgängig“
+            sid = result["sids"][0] if "sids" in result else result["events"][0].get("sid", "")
+            author = int(sid.split("-")[0]) if sid.split("-")[0].isdigit() else None
+            result["by"] = actor
+            if author is not None and author != actor and (u := s.get(User, author)):
+                result["author"] = u.name
+        return result
 
 
 def _num(v) -> bool:
@@ -180,12 +188,17 @@ async def _handle(room: live.Room, conn: live.Conn, msg: dict) -> None:
             if seq <= room.seqs.get(cs, 0):           # Wiederholung nach Reconnect
                 live.enqueue(conn, {"type": "ack", "seq": seq, "dup": True})
                 return
-            result = await asyncio.to_thread(_apply_sync, room.deck_id, msg)
+            result = await asyncio.to_thread(_apply_sync, room.deck_id, msg, room.redo, conn.user_id)
             room.seqs[cs] = seq
             if len(room.seqs) > 500:
                 room.seqs.pop(next(iter(room.seqs)))
             if result is None:
                 live.enqueue(conn, {"type": "ack", "seq": seq, "err": True})
+                return
+            if msg.get("kind") in ("undo", "redo"):
+                # gemeinsame History: Ergebnis geht an ALLE (auch den Auslöser), der Ack trägt keine rev
+                live.enqueue(conn, {"type": "ack", "seq": seq})
+                live.broadcast(room, {"type": "op", **result})
                 return
             live.enqueue(conn, {"type": "ack", "seq": seq, "rev": result.get("rev")})
             live.broadcast(room, {"type": "op", **result}, exclude=conn)

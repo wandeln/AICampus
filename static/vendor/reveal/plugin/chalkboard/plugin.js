@@ -707,9 +707,6 @@ const initChalkboard = function ( Reveal ) {
 	function newSid() {
 		return window.aicampusLive.userKey + '-' + Date.now().toString( 36 ) + ( ++sidCounter ).toString( 36 );
 	}
-	function mySid( sid ) {
-		return typeof sid === 'string' && sid.indexOf( window.aicampusLive.userKey + '-' ) === 0;
-	}
 
 	/**
 	 * Get data as json string.
@@ -1653,7 +1650,7 @@ const initChalkboard = function ( Reveal ) {
 	// entfernt. readOnly (Laser-Modus) blockiert NUR die Zeichen-Eingaben;
 	// Undo bearbeitet nur die Event-Historie + Replay → auch im Laser-Modus.
 	function undo() {
-		if ( liveActive() ) return undoLive();
+		if ( liveActive() ) return liveHistory( 'undo' );
 		var slideData = getSlideData( undefined, mode );
 		var events = slideData.events;
 		if ( !events.length ) return;
@@ -1701,24 +1698,11 @@ const initChalkboard = function ( Reveal ) {
 		return slideIndices.h + "-" + slideIndices.v + "-" + slideIndices.f + "-" + mode;
 	}
 
-	// AICAMPUS PATCH (Live-Notizen): Undo/Redo je Autor. Entfernt die letzte
-	// Gruppe (sid) des EIGENEN Users — Striche anderer Tutoren bleiben, auch
-	// wenn sie dazwischen liegen. Mit dem Server ausgetauscht als remove (per
-	// sid) bzw. append (Redo hängt die Gruppe hinten wieder an).
-	function undoLive() {
-		var slideData = getSlideData( undefined, mode );
-		var events = slideData.events;
-		var i = events.length - 1;
-		// Whiteboard: nur Events der aktuellen Seite (Undo bleibt auf der Seite)
-		while ( i >= 0 && !( mySid( events[ i ].sid ) && ( mode != 1 || ( events[ i ].board || 0 ) === board ) ) ) i--;
-		if ( i < 0 ) return;
-		var sid = events[ i ].sid;
-		var removed = events.filter( function ( e ) { return e.sid === sid; } );
-		slideData.events = events.filter( function ( e ) { return e.sid !== sid; } );
-		var stack = redoStack[ redoKey() ] || ( redoStack[ redoKey() ] = [] );
-		stack.push( removed );
-		window.aicampusLive.onRemove( mode, mode == 1 ? { h: 0, v: 0, f: removed[ 0 ].board || 0 } : slideIndices, [ sid ] );
-		replayCurrent();
+	// AICAMPUS PATCH (Live-Notizen): gemeinsame History je Folie / Whiteboard-Seite
+	// für alle Dozenten. Undo/Redo führt der SERVER (eine Reihenfolge für alle);
+	// das Ergebnis kommt als remove-/append-Op zurück (applyRemote).
+	function liveHistory( kind ) {
+		window.aicampusLive.onHistory( kind, mode, mode == 1 ? { h: 0, v: 0, f: board } : slideIndices );
 	}
 
 	function replayCurrent() {
@@ -1736,20 +1720,11 @@ const initChalkboard = function ( Reveal ) {
 	}
 
 	function redo() {
+		if ( liveActive() ) return liveHistory( 'redo' );
 		var stack = redoStack[ redoKey() ];
 		if ( !stack || !stack.length ) return;
 		var removed = stack.pop();
 		var slideData = getSlideData( undefined, mode );
-		if ( liveActive() ) {
-			// hinten anhängen (Zeit hochzählen), dem Server als append melden
-			var t = slideData.events.length ? slideData.events[ slideData.events.length - 1 ].time : 0;
-			removed.forEach( function ( e ) { e.time = Math.max( t + 1, e.time ); t = e.time; } );
-			slideData.events.push.apply( slideData.events, removed );
-			slideData.duration = Math.max( slideData.duration, t + 1 );
-			removed.forEach( function ( e ) { window.aicampusLive.onEvent( mode, slideIndices, e ); } );
-			replayCurrent();
-			return;
-		}
 		slideData.events.push.apply( slideData.events, removed );
 		slideData.duration = Math.max.apply( null, slideData.events.map( function ( e ) { return e.time; } ) ) + 1;
 		stopPlayback();

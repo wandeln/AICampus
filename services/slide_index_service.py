@@ -264,16 +264,35 @@ def clean_event(e) -> Optional[dict]:
     return out
 
 
-def apply_op(session: Session, deck_id: int, op: dict) -> Optional[dict]:
+def _last_group(events: list) -> Optional[str]:
+    """sid der zuletzt ABGESCHLOSSENEN Gruppe (strokeend/clear) — ein gerade laufender
+    Strich eines anderen Dozenten wird so nicht mitten im Zeichnen entfernt."""
+    for e in reversed(events):
+        if e.get("type") in ("strokeend", "clear") and e.get("sid"):
+            return e["sid"]
+    return events[-1].get("sid") if events else None
+
+
+def _what(group: list) -> str:
+    """Art einer Gruppe für den Hinweis „… von X rückgängig“: Zeichnung | Radierung | Löschen."""
+    types = {e.get("type") for e in group}
+    return "Zeichnung" if "draw" in types else "Radierung" if "erase" in types else "Löschen"
+
+
+def apply_op(session: Session, deck_id: int, op: dict, redo: dict) -> Optional[dict]:
     """Wendet einen Client-Op an und persistiert ihn.
 
-    kind: append (events) | remove (sids) | reset_all.
-    Rückgabe: bereinigter Op inkl. ``rev`` (bei reset_all ohne rev) oder None bei
-    ungültigem Op. Aufrufer serialisiert pro Deck (asyncio.Lock)."""
+    kind: append (events) | undo | redo | reset_all. Undo/Redo bilden EINE gemeinsame
+    History je Zeile (Folie/Fragment/Whiteboard-Seite) für alle Dozenten; ``redo`` ist
+    der flüchtige Redo-Puffer des Raums ({(uid, mode, f): [Gruppen]}), jedes append leert ihn.
+    Rückgabe: bereinigter Op inkl. ``rev`` (bei reset_all ohne rev; undo → kind "remove",
+    redo → kind "append") oder None bei ungültigem Op / nichts zu tun.
+    Aufrufer serialisiert pro Deck (asyncio.Lock)."""
     kind = op.get("kind")
     if kind == "reset_all":
         session.exec(delete(SlideAnnotation).where(SlideAnnotation.deck_id == deck_id))
         session.commit()
+        redo.clear()
         return {"kind": "reset_all"}
 
     uid, mode, f = op.get("slide"), op.get("mode"), op.get("f", -1)
@@ -283,6 +302,7 @@ def apply_op(session: Session, deck_id: int, op: dict) -> Optional[dict]:
     row = session.exec(select(SlideAnnotation).where(
         SlideAnnotation.deck_id == deck_id, SlideAnnotation.mode == mode,
         SlideAnnotation.slide_uid == uid, SlideAnnotation.f == f)).first()
+    key = (uid, mode, f)
 
     if kind == "append":
         raw = op.get("events")
@@ -296,14 +316,25 @@ def apply_op(session: Session, deck_id: int, op: dict) -> Optional[dict]:
         if len(row.events) + len(events) > MAX_EVENTS_PER_ROW:
             return None
         row.events = list(row.events) + events
-        out_extra = {"events": events}
-    elif kind == "remove":
-        sids = op.get("sids")
-        if row is None or not isinstance(sids, list) or not sids or len(sids) > 200:
+        redo.pop(key, None)                       # neue Striche → Redo verfällt
+        out_kind, out_extra = "append", {"events": events}
+    elif kind == "undo":
+        sid = _last_group(row.events) if row else None
+        if sid is None:
             return None
-        sidset = {s for s in sids if isinstance(s, str)}
-        row.events = [e for e in row.events if e.get("sid") not in sidset]
-        out_extra = {"sids": sorted(sidset)}
+        gone = [e for e in row.events if e.get("sid") == sid]
+        row.events = [e for e in row.events if e.get("sid") != sid]
+        stack = redo.setdefault(key, [])
+        stack.append(gone)
+        del stack[:-100]
+        out_kind, out_extra = "remove", {"sids": [sid], "what": _what(gone)}
+    elif kind == "redo":
+        stack = redo.get(key)
+        if row is None or not stack:
+            return None
+        gone = stack.pop()
+        row.events = list(row.events) + gone
+        out_kind, out_extra = "append", {"events": gone, "what": _what(gone)}
     else:
         return None
 
@@ -311,4 +342,4 @@ def apply_op(session: Session, deck_id: int, op: dict) -> Optional[dict]:
     row.updated_at = datetime.now()
     session.add(row)
     session.commit()
-    return {"kind": kind, "slide": uid, "mode": mode, "f": f, "rev": row.rev, **out_extra}
+    return {"kind": out_kind, "slide": uid, "mode": mode, "f": f, "rev": row.rev, **out_extra}

@@ -238,12 +238,14 @@
     p.events.push(ev);
     if (!pendTimer) pendTimer = setTimeout(flushPending, 120);
   };
-  L.onRemove = (mode, idx, sids) => {   // mode 1: idx.f = Seitennummer
+  // Gemeinsame History (Undo/Redo je Folie/Whiteboard-Seite): der Server führt sie aus
+  // und schickt das Ergebnis als remove-/append-Op an ALLE Dozenten (auch an den Auslöser).
+  L.onHistory = (kind, mode, idx) => {   // kind: "undo" | "redo"; mode 1: idx.f = Seitennummer
     const uid = mode === 1 ? WB : L.uidFor(idx.h, idx.v);
     if (!uid) return;
     flushPending();
     const f = mode === 1 ? (idx.f || 0) : (idx.f == null ? -1 : idx.f);
-    sendOp({ kind: "remove", slide: uid, mode, f, sids }, rowKey(uid, mode, f));
+    sendOp({ kind, slide: uid, mode, f }, null);
   };
   L.onResetAll = () => {
     flushPending();
