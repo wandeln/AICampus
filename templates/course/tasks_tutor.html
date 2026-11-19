@@ -25,20 +25,28 @@
 
   <!-- Filter -->
   <div class="card mb-6">
-    <div class="flex items-center gap-4 flex-wrap">
-      <div class="flex-1 min-w-[200px]">
-        <label class="block text-sm font-medium text-gray-700 mb-1"
-               title="Aufgaben nach Titel filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht, wenn er irgendwo im Titel vorkommt (z.B. 'Blatt rek' → 'Blatt 4: Rekursion'; '1' → 'Teil 12').">Suche</label>
-        <input type="text" id="filter-input" placeholder="z.B. Blatt rek..."
-               class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
-      </div>
-      <div class="flex items-end">
-        <button id="clear-filter-btn" class="text-gray-500 hover:text-gray-700 text-sm px-3 py-2" style="margin-top:20px">
+    <div class="flex items-stretch gap-2">
+      <input type="text" id="filter-input" placeholder="Suche"
+             title="Aufgaben nach Titel filtern. Mehrere Begriffe (leerzeichen-getrennt) werden mit UND verknüpft; ein Begriff matcht, wenn er irgendwo im Titel vorkommt (z.B. 'Blatt rek' → 'Blatt 4: Rekursion'; '1' → 'Teil 12')."
+             class="flex-1 min-w-0 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
+      <button id="filter-toggle-btn" type="button" aria-expanded="false" aria-controls="filter-panel"
+              title="Filter ein-/ausblenden"
+              class="shrink-0 flex items-center px-2.5 rounded-lg border border-gray-300 text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5">
+          <rect x="3" y="5" width="18" height="2.5" rx="1.25"/>
+          <rect x="6" y="10.75" width="12" height="2.5" rx="1.25"/>
+          <rect x="9" y="16.5" width="6" height="2.5" rx="1.25"/>
+        </svg>
+      </button>
+    </div>
+    <div id="filter-panel" class="hidden mt-3">
+      <div id="filter-chips" class="space-y-2"></div>
+      <div class="flex justify-end mt-2">
+        <button id="clear-filter-btn" type="button" class="text-gray-400 hover:text-gray-600 text-xs px-1 py-0.5">
           ✕ Filter löschen
         </button>
       </div>
     </div>
-    <div id="filter-chips" class="mt-3 space-y-2"></div>
     <p id="filter-active-hint" class="hidden text-xs text-gray-500 mt-3">ℹ️ Mit aktivem Filter ist die Drag-and-Drop-Reihenfolge-Anpassung deaktiviert — Filter löschen zum Umordnen.</p>
   </div>
 
@@ -222,6 +230,7 @@
       document.getElementById('filter-input').value = '';
       chipApi.clear(); // löst applyTaskFilter aus
     });
+    initFilterToggle(document.getElementById('filter-toggle-btn'), document.getElementById('filter-panel'));
   });
 
   // ─── Drag-and-Drop Reihenfolge (Filter deaktiviert sie per option('disabled')) ───

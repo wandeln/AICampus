@@ -15,6 +15,15 @@ function multiKeywordMatches(text, filterText) {
   return terms.every(term => t.includes(term));
 }
 
+// ─── Filter-Panel ein-/ausblenden ────────────────────────────
+// Toggle-Button blendet das Panel (hidden-Klasse) ein und aus.
+function initFilterToggle(btn, panel) {
+  btn.addEventListener('click', () => {
+    const open = panel.classList.toggle('hidden') === false;
+    btn.setAttribute('aria-expanded', String(open));
+  });
+}
+
 // ─── Filter-Chips (Facetten) ─────────────────────────────────
 // groups: [{ id, label, multi, values: [{ value, label }] }]
 // Innerhalb einer Gruppe OR, zwischen Gruppen AND.
