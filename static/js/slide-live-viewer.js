@@ -109,8 +109,11 @@
 
     if (!tutor) {
       boardBtn.addEventListener("click", () => {
-        if (wbState().show) { wbManual = false; followUid = null; }  // zurück zu den Slides, Folgen beenden
-        else wbManual = true;
+        // Folgen beenden: sonst bestimmt der gefolgte Dozent weiter allein, ob das Whiteboard offen ist
+        // (Klick wirkte dann nicht, bis ein Folienwechsel das Folgen beendete)
+        const show = wbState().show;
+        followUid = null;
+        wbManual = !show;   // offen → zurück zu den Slides, sonst Whiteboard selbst öffnen
         refreshUi(); render();
       });
       boardBtn.addEventListener("click", () => boardBtn.blur());
