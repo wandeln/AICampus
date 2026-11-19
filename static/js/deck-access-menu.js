@@ -10,7 +10,7 @@
   const EYE = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>';
   const EYE_OFF = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a16.54 16.54 0 0 1 4.1-5.79"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.55 18.55 0 0 1-2.06 3.28"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line>';
   // Auge (links oben, verkleinert) + kleiner Stift (rechts unten)
-  const EYE_PEN = '<g transform="translate(-1 -1) scale(.85)">' + EYE + '</g><g transform="translate(11 11) scale(.5)" stroke-width="3.4"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></g>';
+  const EYE_PEN = '<g transform="translate(1.5 .5) scale(.8)">' + EYE + '</g><g transform="translate(11 11) scale(.5)" stroke-width="3.4"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></g>';
 
   const LEVELS = [
     { key: "hidden", icon: SVG(EYE_OFF), color: "#d1d5db", title: "Versteckt", desc: "Nur Tutor/Prof sehen das Deck." },
