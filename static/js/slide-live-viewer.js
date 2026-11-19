@@ -328,6 +328,28 @@
     }
 
     // ── Folgen ───────────────────────────────────────────────────────
+    // Dozent: Whiteboard (an/aus + Seite) des gefolgten Dozenten übernehmen
+    let wbLock = 0;                 // programmatischer Wechsel läuft (kein Auto-Unfollow)
+    function followBoard(e) {
+      const C = window.RevealChalkboard;
+      if (!tutor || !C) return;
+      wbLock++;
+      try {
+        const want = e.mode === 1;
+        if (want !== (C.getMode() === 1)) C.toggleChalkboard();
+        if (want && C.getBoard() !== (e.board || 0)) C.switchBoard(e.board || 0);
+      } finally { wbLock--; }
+    }
+    // eigenes Öffnen/Schließen/Seitenwechsel des Whiteboards beendet das Folgen (wie manuelles Navigieren)
+    document.addEventListener("broadcast", (ev) => {
+      const c = ev.content;
+      if (tutor && followUid != null && !wbLock && c && c.sender === "chalkboard-plugin"
+        && (c.type === "showChalkboard" || c.type === "closeChalkboard" || c.type === "selectboard")) {
+        followUid = null;
+        refreshUi();
+      }
+    });
+
     function goToFollowed() {
       if (followUid == null) return;
       const e = L.presence.find((x) => x.uid === followUid);
@@ -335,10 +357,12 @@
       const hv = L.hvFor(e.slide);
       if (!hv) return;
       const cur = reveal.getIndices();
-      if (cur.h === hv.h && (cur.v || 0) === hv.v && (cur.f == null ? -1 : cur.f) === (e.f == null ? -1 : e.f)) return;
-      navLock++;
-      reveal.slide(hv.h, hv.v, e.f >= 0 ? e.f : undefined);
-      setTimeout(() => { navLock--; }, 200);
+      if (!(cur.h === hv.h && (cur.v || 0) === hv.v && (cur.f == null ? -1 : cur.f) === (e.f == null ? -1 : e.f))) {
+        navLock++;
+        reveal.slide(hv.h, hv.v, e.f >= 0 ? e.f : undefined);
+        setTimeout(() => { navLock--; }, 200);
+      }
+      followBoard(e);
     }
     select.addEventListener("change", () => {
       followUid = select.value === "" ? null : Number(select.value);

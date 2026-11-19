@@ -1464,6 +1464,9 @@ html.print-pdf body.present-mode .present-shell .reveal {
 .reveal .slive-wb { position: absolute; inset: 0; z-index: 26; background-repeat: repeat; }
 .reveal .slive-wb .boardhandle { pointer-events: auto; }
 .reveal .slive-laser-box { position: absolute; inset: 0; pointer-events: none; z-index: 41; overflow: hidden; }
+/* Overview: Notizen-/Whiteboard-Ebenen (Dozent: Chalkboard-Plugin, Student: Viewer) liegen
+   seitenfüllend über allen Folien-Kacheln → in der Overview ausblenden. */
+.reveal.overview :is(#notescanvas, #chalkboard, .slive-root, .slive-laser-box) { display: none !important; }
 .reveal .slive-trail { position: absolute; left: 0; top: 0; }
 .reveal .slive-laser {
   position: absolute; left: 0; top: 0; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;

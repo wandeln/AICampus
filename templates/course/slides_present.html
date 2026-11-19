@@ -828,7 +828,13 @@ const aicampusLaser = HAS_NOTES ? (function () {
     }
   }
 
-  return { bind, handleC, handlePenButton };
+  // Zeichen-/Whiteboard-/Laser-Modus beenden (wie Klicks auf den Stift-Button bis „aus“,
+  // z. B. beim Öffnen der Overview)
+  function leaveDrawing() {
+    for (let i = 0; i < 3 && mode() !== "OFF"; i++) handlePenButton();
+  }
+
+  return { bind, handleC, handlePenButton, leaveDrawing };
 })() : null;
 
 // Deck (neu) mounten: Inhalt laden → Sections → neue Reveal-Instanz.
@@ -859,6 +865,10 @@ function aicampusLiveTutorBind() {
   L.on("remote-op", (m) => {
     if (m.kind === "reset_all") { if (window.RevealChalkboard) RevealChalkboard.applyRemote({ kind: "reset_all" }); return; }
     toPlugin(m);
+    // gemeinsame History: Hinweis, wenn MEIN Undo/Redo etwas eines anderen Dozenten betraf
+    if (m.author && String(m.by) === L.userKey) {
+      aicampusToast(`${m.kind === "remove" ? "undo" : "redo"}: ${m.what} von ${m.author}`);
+    }
   });
   // Zeilen vom Server übernehmen, deren rev vom lokalen Stand abweicht
   const resync = async (uid) => {
@@ -1315,7 +1325,7 @@ async function aicampusDoMount() {
     toolbar.classList.toggle("visible", visible);
     if (shortcuts) shortcuts.classList.toggle("visible", visible);
   };
-  reveal.on("overviewshown", () => setOverviewUI(true));
+  reveal.on("overviewshown", () => { setOverviewUI(true); aicampusLaser?.leaveDrawing(); });
   reveal.on("overviewhidden", () => setOverviewUI(false));
 
   // PDF-Export: Reveal legt mit ?print-pdf das Druck-Layout an und feuert
