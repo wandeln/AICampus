@@ -714,8 +714,8 @@
   }
 
   try {
-    const forumEs = new EventSource('/api/notifications/stream');
-    forumEs.onmessage = (e) => {
+    const forumEs = window.aicampusStream();   // geteilter EventSource (base.html)
+    if (forumEs) forumEs.addEventListener('message', (e) => {
       try {
         const data = JSON.parse(e.data);
         if (data.event === 'forum_message' && data.course_id === courseId && data.channel_id === activeChannelId) {
@@ -726,7 +726,7 @@
           refreshForumBadges();
         }
       } catch { /* fremdes/ungültiges Event ignorieren */ }
-    };
+    });
   } catch { /* EventSource unsupported → reines Polling */ }
 
   // ─── Kanäle: anlegen / umbenennen / löschen ──────────────────

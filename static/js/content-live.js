@@ -6,7 +6,7 @@
 // (/api/notifications/stream, s. base.html): Das Event dient nur als
 // TRIGGER (course_id + entity_type + entity_id, OHNE Inhalt) — der
 // Client holt sich den Inhalt über die normale API, d. h. Rechte
-// bleiben enforced. Wie beim Forum: pro Page eine eigene EventSource.
+// bleiben enforced. Pro Page ein geteilter EventSource (aicampusStream, base.html).
 //
 // Usage (pro Content-Page):
 //   aicampusWatchContent(courseId, (data) => {
@@ -50,8 +50,9 @@
   window.aicampusWatchContent = function (courseId, onEvent) {
     handlers.push({ courseId, onEvent });
     try {
-      const es = new EventSource("/api/notifications/stream");
-      es.onmessage = (e) => {
+      const es = window.aicampusStream();   // geteilter EventSource (base.html); in Iframes null
+      if (!es) return;
+      es.addEventListener("message", (e) => {
         let data;
         try {
           data = JSON.parse(e.data);
@@ -68,7 +69,7 @@
           (window.aicampusMediaBusts = window.aicampusMediaBusts || {})[data.origin_media] = Date.now();
         }
         schedule(data, onEvent);
-      };
+      });
     } catch { /* EventSource unsupported → kein Live-Update */ }
   };
 })();

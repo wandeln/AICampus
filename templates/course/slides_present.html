@@ -195,7 +195,9 @@ body.aicampus-laser * {
   const SLIDE_THEME = {{ slides_theme | tojson }}; // aufgelöstes Theme (Seitenverhältnis …)
   const HAS_NOTES = {{ "true" if is_tutor else "false" }}; // Notes-Plugin nur für Tutoren/Profs
   const USER_ID = {{ current_user.id }};
-  const LIVE_OFF = /[?&]nolive\b/.test(location.search); // Diagnose: Live-Notizen komplett aus (?nolive)
+  // Live-Notizen aus: Diagnose (?nolive) und Speaker-View-Vorschauen (?receiver) — letztere dürfen weder
+  // eine eigene Verbindung aufbauen noch die Position (Presence) des Dozenten überschreiben.
+  const LIVE_OFF = /[?&](nolive|receiver)\b/.test(location.search);
   const BOARD_THEME = {{ slides_theme.board | tojson }}; // "whiteboard" | "chalkboard"
   const LIVE_BOARD_BG = {{ asset('vendor/reveal/plugin/chalkboard/img/' ~ ('whiteboard' if slides_theme.board == 'whiteboard' else 'blackboard') ~ '.png') | tojson }};
 </script>

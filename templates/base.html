@@ -28,6 +28,19 @@
   <meta name="twitter:card" content="summary">
 
   <!-- HTMX (BSD-3) — lokal gespiegelt -->
+  <script>
+    // Ein einziger EventSource (/api/notifications/stream) pro Seite — geteilt von Glocke,
+    // Forum und content-live.js. Hintergrund: HTTP/1.1 erlaubt nur 6 Verbindungen je Host;
+    // jede offene SSE-Verbindung belegt einen Platz, bei zu vielen hängen alle anderen
+    // Requests (z. B. Speaker-View: die Vorschau-Iframes laden nie). In Iframes gar keiner.
+    window.aicampusStream = function () {
+      if (window.self !== window.top) return null;
+      if (window._aicampusEs === undefined) {
+        try { window._aicampusEs = new EventSource("/api/notifications/stream"); } catch { window._aicampusEs = null; }
+      }
+      return window._aicampusEs;
+    };
+  </script>
   <script src="{{ asset('vendor/htmx.min.js') }}"></script>
 
   <!-- Tailwind CSS (MIT) Play CDN v3.4.17 — lokal gespiegelt (Production-Warnung entfernt) -->
@@ -559,13 +572,13 @@
       // Fallback (z. B. stirbt der Stream beim Container-Reload): alle
       // 30 s bei aktiver SSE-Verbindung, sonst alle 15 s. EventSource
       // verbindet sich bei Fehlern selbst wieder (kein onerror nötig);
-      // readyState steuert nur das Polling-Intervall. Je Tab eine eigene
-      // Verbindung — serverseitig eine Queue pro Verbindung (Set).
+      // readyState steuert nur das Polling-Intervall. Je Seite EINE Verbindung
+      // (aicampusStream, s. oben) — serverseitig eine Queue pro Verbindung (Set).
       let notifEs = null;
       if (document.getElementById("notif-btn")) {
         try {
-          notifEs = new EventSource("/api/notifications/stream");
-          notifEs.onmessage = (e) => {
+          notifEs = aicampusStream();
+          if (notifEs) notifEs.addEventListener("message", (e) => {
             if (document.hidden) return;
             fetchNotifications();
             // DM-Panel (dm-panel.js) bekommt dieselben Events: dm_message
@@ -574,7 +587,7 @@
               const p = JSON.parse(e.data);
               if (p && p.event && window.dmOnSseEvent) window.dmOnSseEvent(p);
             } catch { /* Notification-Payload ohne event — kein Hook nötig */ }
-          };
+          });
         } catch { /* EventSource unsupported → reines Polling */ }
       }
       (function scheduleNotifPoll() {
