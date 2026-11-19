@@ -1030,12 +1030,14 @@ async def get_my_submissions(
     }
 
 
-def _filter_status(tasks: list[Task], session: Session, user_id: int, status: str) -> list[Task]:
-    """Aufgaben nach Bearbeitungsstatus filtern.
+def _filter_status(tasks: list[Task], session: Session, user_id: int, status_filter: str) -> list[Task]:
+    """Aufgaben nach Bearbeitungsstatus filtern (komma-getrennte Werte, UND-verknüpft).
 
     'open': noch bearbeitbar (Restversuche vorhanden UND Deadline nicht abgelaufen).
     'processed': mindestens eine eigene Einreichung vorhanden.
+    'unprocessed': keine eigene Einreichung vorhanden.
     """
+    statuses = {s for s in status_filter.split(",") if s}
     result = []
     for t in tasks:
         used = session.exec(
@@ -1043,14 +1045,15 @@ def _filter_status(tasks: list[Task], session: Session, user_id: int, status: st
             .where(Submission.task_id == t.id)
             .where(Submission.student_id == user_id)
         ).all()
-        if status == "processed":
-            if used:
-                result.append(t)
+        if "processed" in statuses and not used:
             continue
-        if deadline_expired(t.deadline):
+        if "unprocessed" in statuses and used:
             continue
-        if t.max_attempts is not None and len(used) >= t.max_attempts:
-            continue
+        if "open" in statuses:
+            if deadline_expired(t.deadline):
+                continue
+            if t.max_attempts is not None and len(used) >= t.max_attempts:
+                continue
         result.append(t)
     return result
 
@@ -1094,7 +1097,7 @@ async def get_my_points(
     type_values = parse_type_filter(type_filter)
     if type_values:
         tasks = [t for t in tasks if t.task_type.value in type_values]
-    if status_filter in ("open", "processed"):
+    if status_filter:
         tasks = _filter_status(tasks, session, user.id, status_filter)
 
     # Batched: alle Einreichungen (gefilterte Aufgaben x alle Kurs-Studenten)
@@ -1703,7 +1706,7 @@ async def generate_student_report(
     type_values = parse_type_filter(type_filter)
     if type_values:
         tasks = [t for t in tasks if t.task_type.value in type_values]
-    if status_filter in ("open", "processed"):
+    if status_filter:
         tasks = _filter_status(tasks, session, user.id, status_filter)
 
     if not tasks:

@@ -103,12 +103,16 @@
   <script src="{{ asset('js/task-filter.js') }}"></script>
   <script>
     // ─── Filter Helpers ─────────────────────────────────────────
-    // Facetten-Chips: Status (Single-Select) + Typ (Multi-Select).
-    // Innerhalb einer Facette OR, zwischen Facetten UND (serverseitig).
+    // Facetten-Chips: Status (Bearbeitet / Nicht bearbeitet, Single-Select)
+    // und "Noch bearbeitbar" (eigene Facette, UND-verknüpft) teilen sich eine
+    // Zeile. Typ (Multi-Select). Innerhalb einer Facette OR, zwischen Facetten UND.
     const chipApi = initFilterChips(document.getElementById('filter-chips'), [
-      { id: 'status', label: 'Status', multi: false, values: [
-        { value: 'open', label: 'Noch bearbeitbar' },
+      { id: 'processed', row: 'status', label: 'Status', multi: false, values: [
         { value: 'processed', label: 'Bearbeitet' },
+        { value: 'unprocessed', label: 'Nicht bearbeitet' },
+      ]},
+      { id: 'open', row: 'status', multi: false, values: [
+        { value: 'open', label: 'Noch bearbeitbar' },
       ]},
       { id: 'type', label: 'Typ', multi: true, values: [
         { value: 'text', label: 'Text' },
@@ -124,7 +128,7 @@
       return {
         text: document.getElementById('filter-input').value,
         type: chips.type.join(','),
-        status: chips.status[0] || '',
+        status: [...chips.open, ...chips.processed].join(','), // UND-verknüpft (serverseitig)
       };
     }
 
@@ -242,12 +246,16 @@
     const input = document.getElementById('filter-input');
     if (isChallengeActive(ch)) {
       input.value = '';
-      chipApi.set('type', []);
+      chipApi.setMany({ type: [] });
     } else {
+      // Status-Filter wird beim Aktivieren einer Challenge zurückgesetzt
       input.value = ch.filter_text || '';
-      chipApi.set('type', ch.type_filter ? ch.type_filter.split(',').filter(Boolean) : []);
+      chipApi.setMany({
+        open: [], processed: [],
+        type: ch.type_filter ? ch.type_filter.split(',').filter(Boolean) : [],
+      });
     }
-    // chipApi.set() → sync() → applyFilterChips() → loadData()
+    // chipApi.setMany() → sync() → applyFilterChips() → loadData()
   }
 
   function renderChallenges(data) {

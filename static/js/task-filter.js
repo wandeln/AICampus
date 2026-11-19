@@ -21,15 +21,18 @@ function multiKeywordMatches(text, filterText) {
 //   multi: false → Single-Select-Toggle (Klick aktiviert, erneuter Klick
 //                  deaktiviert, Klick auf anderen Wert wechselt)
 //   multi: true  → Toggle pro Wert
+// row (optional): Gruppen mit gleicher row-ID teilen sich eine Zeile
+// (Label der ersten Gruppe der Zeile wird angezeigt).
 // initial (optional): { [groupId]: string[] } — vorab aktivierte Werte
 // (z. B. aus der URL).
-// Liefert { get, clear, hasActive }:
+// Liefert { get, set, setMany, clear, hasActive }:
 //   get()        → { [groupId]: string[] } (aktive Werte)
 //   clear()      → alle Chips deaktivieren (+ onChange)
 //   hasActive()  → true, wenn mindestens ein Chip aktiv
 function initFilterChips(container, groups, onChange, initial) {
   const state = {};
   const buttons = [];
+  const rows = {};
   container.innerHTML = '';
   for (const g of groups) {
     state[g.id] = new Set();
@@ -38,13 +41,19 @@ function initFilterChips(container, groups, onChange, initial) {
         if (initial[g.id].includes(v.value)) state[g.id].add(v.value);
       }
     }
-    const row = document.createElement('div');
-    row.className = 'filter-chip-row';
-    if (g.label) {
-      const lab = document.createElement('span');
-      lab.className = 'filter-chip-label';
-      lab.textContent = g.label;
-      row.appendChild(lab);
+    const rowKey = g.row || g.id;
+    let row = rows[rowKey];
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'filter-chip-row';
+      if (g.label) {
+        const lab = document.createElement('span');
+        lab.className = 'filter-chip-label';
+        lab.textContent = g.label;
+        row.appendChild(lab);
+      }
+      rows[rowKey] = row;
+      container.appendChild(row);
     }
     for (const v of g.values) {
       const b = document.createElement('button');
@@ -63,7 +72,6 @@ function initFilterChips(container, groups, onChange, initial) {
       row.appendChild(b);
       buttons.push(b);
     }
-    container.appendChild(row);
   }
 
   function paint() {
@@ -87,6 +95,16 @@ function initFilterChips(container, groups, onChange, initial) {
       if (!s) return;
       s.clear();
       for (const v of values) s.add(v);
+      sync();
+    },
+    // Mehrere Gruppen auf einmal setzen ({ [groupId]: string[] }) — ein onChange
+    setMany: (map) => {
+      for (const [groupId, values] of Object.entries(map)) {
+        const s = state[groupId];
+        if (!s) continue;
+        s.clear();
+        for (const v of values) s.add(v);
+      }
       sync();
     },
     clear: syncClear,
