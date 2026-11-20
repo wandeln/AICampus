@@ -1242,13 +1242,40 @@ body.present-mode .present-shortcuts.visible {
   display: block;
 }
 
-body.present-mode .present-shortcuts-title {
+/* Titelzeile = Ein-/Ausklapp-Button (Chevron rechts, wie „Challenges“ in der Aufgabenliste) */
+body.present-mode .present-shortcuts .present-shortcuts-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
   font-size: 0.68rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: #94a3b8;
   padding: 0.15rem 0.5rem 0.3rem;
+}
+
+body.present-mode .present-shortcuts .present-shortcuts-title:hover {
+  color: #e5e7eb;
+  background: none;
+}
+
+body.present-mode .present-shortcuts-chevron {
+  transition: transform 0.2s;
+  transform: rotate(180deg);   /* aufgeklappt: Chevron zeigt nach oben */
+}
+
+body.present-mode .present-shortcuts.collapsed .present-shortcuts-chevron {
+  transform: none;
+}
+
+body.present-mode .present-shortcuts.collapsed .present-shortcuts-list {
+  display: none;
+}
+
+body.present-mode .present-shortcuts.collapsed .present-shortcuts-title {
+  padding-bottom: 0.15rem;
 }
 
 body.present-mode .present-shortcuts button {
@@ -1467,6 +1494,9 @@ html.print-pdf body.present-mode .present-shell .reveal {
 /* Overview: Notizen-/Whiteboard-Ebenen (Dozent: Chalkboard-Plugin, Student: Viewer) liegen
    seitenfüllend über allen Folien-Kacheln → in der Overview ausblenden. */
 .reveal.overview :is(#notescanvas, #chalkboard, .slive-root, .slive-laser-box) { display: none !important; }
+/* Overview: Klick auf eine Kachel öffnet das Slide — Inhalte (Applets/Iframes, SVG, Links, Videos)
+   sind dort nicht bedienbar und fangen den Klick nicht ab. Die Sections selbst bleiben klickbar. */
+.reveal.overview .slides section *:not(section) { pointer-events: none !important; }
 .reveal .slive-trail { position: absolute; left: 0; top: 0; }
 .reveal .slive-laser {
   position: absolute; left: 0; top: 0; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;

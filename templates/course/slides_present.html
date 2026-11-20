@@ -140,25 +140,30 @@ body.aicampus-laser * {
   {# Shortcuts-Panel: erscheint in der Reveal-Overview (Esc) oben rechts
      unterhalb der dunklen Toolbar (Toggling + Aktionen: s. JS unten). #}
   <div class="present-shortcuts" id="present-shortcuts">
-    <div class="present-shortcuts-title">Shortcuts</div>
-    <button type="button" data-action="fullscreen"><kbd>F</kbd><span>Full-Screen Mode</span></button>
-    {% if is_tutor %}
-    <button type="button" data-key="83"><kbd>S</kbd><span>Speaker View</span></button>
-    {% endif %}
-    <button type="button" data-key="66"><kbd>B</kbd><span>Break</span></button>
-    {% if is_tutor %}
-    <button type="button" data-key="67"><kbd>C</kbd><span>Stift (Folie)</span></button>
-    <button type="button" data-key="87"><kbd>W</kbd><span>Whiteboard</span></button>
-    <button type="button" data-key="76"><kbd>L</kbd><span>Laser-Pointer</span></button>
-    <button type="button" data-key="86"><kbd>V</kbd><span id="shortcut-live-label">Live verfolgbar: aus</span></button>
-    <button type="button" data-action="undo"><kbd>Strg</kbd><kbd>Z</kbd><span>Zug zurücknehmen</span></button>
-    <button type="button" data-action="redo"><kbd>Strg</kbd><kbd>Y</kbd><span>Zug wiederholen</span></button>
-    {% endif %}
-    <button type="button" data-key="79"><kbd>O</kbd><span>Overview</span></button>
-    <button type="button" data-key="80"><kbd>←</kbd><kbd>P</kbd><span>Previous Slide</span></button>
-    <button type="button" data-key="78"><kbd>→</kbd><kbd>N</kbd><span>Next Slide</span></button>
-    <button type="button" data-key="36"><kbd>Home</kbd><span>First Slide</span></button>
-    <button type="button" data-key="35"><kbd>End</kbd><span>Last Slide</span></button>
+    <button type="button" class="present-shortcuts-title" id="present-shortcuts-toggle" aria-expanded="true" aria-controls="present-shortcuts-list" title="Shortcuts ein-/ausklappen">
+      <span>Shortcuts</span>
+      <svg class="present-shortcuts-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+    </button>
+    <div class="present-shortcuts-list" id="present-shortcuts-list">
+      <button type="button" data-action="fullscreen"><kbd>F</kbd><span>Full-Screen Mode</span></button>
+      {% if is_tutor %}
+      <button type="button" data-key="83"><kbd>S</kbd><span>Speaker View</span></button>
+      {% endif %}
+      <button type="button" data-key="66"><kbd>B</kbd><span>Break</span></button>
+      {% if is_tutor %}
+      <button type="button" data-key="67"><kbd>C</kbd><span>Stift (Folie)</span></button>
+      <button type="button" data-key="87"><kbd>W</kbd><span>Whiteboard</span></button>
+      <button type="button" data-key="76"><kbd>L</kbd><span>Laser-Pointer</span></button>
+      <button type="button" data-key="86"><kbd>V</kbd><span id="shortcut-live-label">Live verfolgbar: aus</span></button>
+      <button type="button" data-action="undo"><kbd>Strg</kbd><kbd>Z</kbd><span>Zug zurücknehmen</span></button>
+      <button type="button" data-action="redo"><kbd>Strg</kbd><kbd>Y</kbd><span>Zug wiederholen</span></button>
+      {% endif %}
+      <button type="button" data-key="79"><kbd>O</kbd><span>Overview</span></button>
+      <button type="button" data-key="80"><kbd>←</kbd><kbd>P</kbd><span>Previous Slide</span></button>
+      <button type="button" data-key="78"><kbd>→</kbd><kbd>N</kbd><span>Next Slide</span></button>
+      <button type="button" data-key="36"><kbd>Home</kbd><span>First Slide</span></button>
+      <button type="button" data-key="35"><kbd>End</kbd><span>Last Slide</span></button>
+    </div>
   </div>
 </div>
 {% endblock %}
@@ -1462,7 +1467,20 @@ aicampusWatchContent(courseId, async (data) => {
 (function () {
   const panel = document.getElementById("present-shortcuts");
   if (!panel) return;
-  panel.querySelectorAll("button").forEach((btn) => {
+  // Ein-/Ausklappen (Zustand bleibt im Browser erhalten)
+  const toggle = document.getElementById("present-shortcuts-toggle");
+  const setOpen = (open) => {
+    panel.classList.toggle("collapsed", !open);
+    toggle.setAttribute("aria-expanded", String(open));
+  };
+  setOpen(localStorage.getItem("aicampus-shortcuts-open") !== "0");
+  toggle.addEventListener("click", () => {
+    const open = panel.classList.contains("collapsed");
+    setOpen(open);
+    localStorage.setItem("aicampus-shortcuts-open", open ? "1" : "0");
+    toggle.blur();
+  });
+  panel.querySelectorAll(".present-shortcuts-list button").forEach((btn) => {
     btn.addEventListener("click", () => {
       if (btn.dataset.action === "fullscreen") {
         // F-Zeile: Seiten-Vollbild (wie der ⛶-Button), damit die dunkle
@@ -1493,6 +1511,86 @@ aicampusWatchContent(courseId, async (data) => {
       btn.blur();
     });
   });
+})();
+</script>
+{# Overview: durch das Deck scrollen (Mausrad/Touchpad) und per Touch-Drag ziehen —
+   statt „ein Slide pro Wisch“. Lesereihenfolge: Stapel von oben nach unten, danach der
+   nächste Stapel; gibt es in y-Richtung keinen Nachbarn, geht es in x-Richtung weiter. #}
+<script>
+(function () {
+  const ovr = () => (aicampusCurrentReveal && aicampusCurrentReveal.isOverview() ? aicampusCurrentReveal : null);
+  const onUi = (e) => e.target.closest && e.target.closest(".present-shortcuts, .present-toolbar");
+
+  // Ein Schritt: axis "x" (links/rechts) oder "y" (oben/unten), dir = ±1
+  function step(axis, dir) {
+    const r = ovr();
+    if (!r) return;
+    const rt = r.availableRoutes();
+    if (axis === "y" && (dir > 0 ? rt.down : rt.up)) return dir > 0 ? r.down() : r.up();
+    if (dir > 0 ? !rt.right : !rt.left) return;
+    if (axis === "x") return dir > 0 ? r.right() : r.left();
+    // y ohne Nachbar: erstes Slide des nächsten Stapels bzw. letztes des vorherigen
+    const i = r.getIndices().h + dir;
+    const col = r.getHorizontalSlides()[i];
+    r.slide(i, dir > 0 ? 0 : Math.max(0, col.querySelectorAll(":scope > section").length - 1));
+  }
+  const steps = (axis, n) => { for (let i = 0; i < Math.min(5, Math.abs(n)); i++) step(axis, Math.sign(n)); };
+
+  // ── Mausrad / Touchpad ─────────────────────────────────────────────
+  const WHEEL_STEP = 80;       // px Scrollweg je Slide (eine Mausrad-Raste ≈ 100)
+  let acc = { x: 0, y: 0 }, lastWheel = 0;
+  document.addEventListener("wheel", (e) => {
+    if (!ovr() || e.ctrlKey || onUi(e)) return;
+    e.preventDefault();
+    if (e.timeStamp - lastWheel > 250) acc = { x: 0, y: 0 };   // Pause → Rest verwerfen
+    lastWheel = e.timeStamp;
+    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    acc.x += e.deltaX * k;
+    acc.y += e.deltaY * k;
+    for (const ax of ["y", "x"]) {
+      const n = Math.trunc(acc[ax] / WHEEL_STEP);
+      if (n) { acc[ax] -= n * WHEEL_STEP; steps(ax, n); }
+    }
+  }, { passive: false });
+
+  // ── Touch-Drag ─────────────────────────────────────────────────────
+  // Abstand zweier Kacheln auf dem Bildschirm (Kachel + Rand) = Ziehweg je Slide
+  function pitch() {
+    const r = ovr(), { h, v } = r.getIndices();
+    const cur = r.getCurrentSlide().getBoundingClientRect();
+    let w = cur.width * 1.1, ht = cur.height * 1.1;
+    const hs = r.getHorizontalSlides(), nb = hs[h + 1] || hs[h - 1];
+    if (nb) w = Math.abs(nb.getBoundingClientRect().left - hs[h].getBoundingClientRect().left) || w;
+    const vs = [...hs[h].querySelectorAll(":scope > section")], nv = vs[v + 1] || vs[v - 1];
+    if (nv) ht = Math.abs(nv.getBoundingClientRect().top - vs[v].getBoundingClientRect().top) || ht;
+    return { w: Math.max(40, w), h: Math.max(40, ht) };
+  }
+  let t = null, noClick = false;
+  document.addEventListener("touchstart", (e) => {
+    t = null;
+    if (!ovr() || e.touches.length !== 1 || onUi(e)) return;
+    const p = e.touches[0];
+    t = { x: p.clientX, y: p.clientY, nx: 0, ny: 0, drag: false, pitch: pitch() };
+  }, { capture: true, passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!t || !ovr()) return;
+    const p = e.touches[0], dx = p.clientX - t.x, dy = p.clientY - t.y;
+    if (!t.drag && Math.hypot(dx, dy) < 12) return;
+    t.drag = true;
+    e.preventDefault();
+    e.stopImmediatePropagation();     // Reveal's Ein-Slide-Swipe unterdrücken
+    // Finger nach links/oben = vorwärts; Schritte gemäß Gesamt-Ziehweg seit Berührungsbeginn
+    const nx = Math.trunc(-dx / t.pitch.w), ny = Math.trunc(-dy / t.pitch.h);
+    if (ny !== t.ny) { steps("y", ny - t.ny); t.ny = ny; }
+    if (nx !== t.nx) { steps("x", nx - t.nx); t.nx = nx; }
+  }, { capture: true, passive: false });
+  const endTouch = () => {
+    if (t && t.drag) { noClick = true; setTimeout(() => { noClick = false; }, 400); }   // Drag ≠ Klick auf eine Kachel
+    t = null;
+  };
+  document.addEventListener("touchend", endTouch, true);
+  document.addEventListener("touchcancel", endTouch, true);
+  document.addEventListener("click", (e) => { if (noClick) { e.stopPropagation(); e.preventDefault(); } }, true);
 })();
 </script>
 {% endblock %}
